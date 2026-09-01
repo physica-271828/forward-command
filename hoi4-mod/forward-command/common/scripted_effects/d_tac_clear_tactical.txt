@@ -1,0 +1,37 @@
+# Shared tactical-mode cleanup: clear the picked-state markers, lift the
+# battle-state freeze (DESIGN §8.4), clear the mode flag, purge decision
+# cooldowns — every map decision is immediately re-armed. Callers:
+# tac_abort.1 (Force Exit / picker cancel), tac_quiet.1 (quiet-state
+# notify), d_tac_end_battle.
+#
+# Quirk: a picked state's per-target
+# TAKE record is engine-locked to the daily pulse — no scripted effect can
+# release it early. The guarded remove/activate pair below is a no-op on it
+# but MUST stay: empirically its presence flips the pulse decay of that
+# record from a dead-end re_enable_cooldown to a restore-to-available.
+d_tac_clear_tactical = {
+	# Side channel (see header): `set_variable = { x = id }` in a
+	# state scope stores the state's INTERNAL id (not the map id the take
+	# record is keyed on), so the var: target never matches a record — the
+	# effects are no-ops, kept for the side channel.
+	if = {
+		limit = { has_variable = tac_picked_state }
+		remove_targeted_decision = { target = var:tac_picked_state decision = tactical_command_entry }
+		activate_targeted_decision = { target = var:tac_picked_state decision = tactical_command_entry }
+	}
+	clear_variable = tac_picked_state
+	# Clear the picked-state marker everywhere (only ever set on a picked
+	# candidate state; full sweep is cheap).
+	every_state = {
+		set_variable = { tac_pick = 0 }
+	}
+	# Lift the battle-state freeze (DESIGN §8.4); a no-op when no state is
+	# frozen, so every caller gets it unconditionally.
+	d_tac_unfreeze_all = yes
+	clr_country_flag = tac_mode_active
+	# Purge the ordinary-decision cooldown records so the entry row and the
+	# Force Exit row are immediately re-clickable after a reset (vanilla
+	# INS/YUG/RAJ_GOE/NSB form).
+	remove_decision_on_cooldown = tactical_command_entry
+	remove_decision_on_cooldown = tactical_force_exit
+}

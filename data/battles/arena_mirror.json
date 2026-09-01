@@ -1,0 +1,41 @@
+{
+  "name": "arena_mirror",
+  "title": "Arena Mirror 1:1 (balance experiment)",
+  "notes": "Controlled balance experiment: identical mirrored infantry divisions on the flat 64x64 arena. 9 infantry + 1 towed artillery per side, identical 1939-calibration stats (demo values). Health standards: the attacker must NOT cruise at 1:1; gross damage output ratio within 0.5-2.0x; active stalemate is legal, null stalemate is not.",
+  "map": "synthetic",
+  "dirs": [],
+  "player_side": "attacker",
+  "enemy_tactic": "elastic_defense",
+  "attacker": {
+    "tag": "GER",
+    "division": "Arena Division North",
+    "units": [
+      { "name": "1.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "2.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "3.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "4.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "5.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "6.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "7.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "8.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "9.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "1.ART", "type": "artillery", "soft": 25.0, "hard": 2.0, "defense": 10.0, "breakthrough": 6.0, "armor": 0.0, "piercing": 5.0, "hardness": 0.0, "chassis": "towed" }
+    ]
+  },
+  "defender": {
+    "tag": "FRA",
+    "division": "Arena Division South",
+    "units": [
+      { "name": "1.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "2.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "3.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "4.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "5.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "6.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "7.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "8.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "9.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "1.ART", "type": "artillery", "soft": 25.0, "hard": 2.0, "defense": 10.0, "breakthrough": 6.0, "armor": 0.0, "piercing": 5.0, "hardness": 0.0, "chassis": "towed" }
+    ]
+  }
+}

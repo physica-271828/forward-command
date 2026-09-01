@@ -1,0 +1,122 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # upload release assets on tag runs
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain (stable, GNU)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+
+      - name: Probe GNU toolchain bits (llvm-windres / dlltool / gcc)
+        shell: pwsh
+        run: |
+          foreach ($t in @("llvm-windres", "dlltool", "x86_64-w64-mingw32-gcc", "gcc")) {
+            $c = Get-Command $t -ErrorAction SilentlyContinue
+            Write-Host ("{0,-26} {1}" -f $t, $(if ($c) { $c.Source } else { "MISSING" }))
+          }
+
+      # The gnu target needs dlltool.exe (import-lib generation), build.rs
+      # needs windres for the exe icon, and the final link needs the MinGW
+      # import libs (-lshlwapi & friends — normally provided by the
+      # machine-local .cargo/config.toml -L path). Install WinLibs (UCRT —
+      # MSVCRT-flavored MinGW libs crash the linked binaries at startup).
+      - name: Install WinLibs (UCRT) toolchain
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = gh api repos/brechtsanders/winlibs_mingw/releases/latest --jq '.assets[].browser_download_url' |
+            Where-Object { $_ -match 'winlibs-x86_64-posix-seh-gcc-.*-mingw-w64ucrt-[0-9.]+-r\d+\.zip$' } |
+            Select-Object -First 1
+          if (-not $url) { throw "no WinLibs UCRT zip asset found in the latest release" }
+          Write-Host "downloading $url"
+          curl.exe -L -s -o winlibs.zip $url
+          Expand-Archive winlibs.zip -DestinationPath C:\winlibs
+          $bin = "C:\winlibs\mingw64\bin"
+          $lib = "C:\winlibs\mingw64\x86_64-w64-mingw32\lib"
+          if (-not (Test-Path "$bin\dlltool.exe")) { throw "dlltool.exe missing under $bin" }
+          if (-not (Test-Path "$lib\libshlwapi.a")) { throw "libshlwapi.a missing under $lib" }
+          Add-Content $env:GITHUB_PATH $bin
+          # Env rustflags REPLACE .cargo/config.toml rustflags wholesale, so
+          # repeat the bcrypt/ntdll link args alongside the library path.
+          # The path MUST ride as a link-arg (-C link-arg=-L...) exactly like
+          # the dev-machine config — a bare rustc `-L` flag here makes the
+          # build-script executables crash at startup (STATUS_STACK_OVERFLOW).
+          Add-Content $env:GITHUB_ENV "CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS=-C link-arg=-lbcrypt -C link-arg=-lntdll -C link-arg=-L$lib"
+          Write-Host "bin: $bin"
+          Write-Host "lib: $lib"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --release --workspace
+        run: cargo build --release --workspace
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      - name: Assemble package (mirrors tools/package_release.ps1)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pkg = "dist\ForwardCommand"
+          if (Test-Path $pkg) { Remove-Item -Recurse -Force $pkg }
+          New-Item -ItemType Directory -Force -Path "$pkg\data\battles", "$pkg\assets\fonts" | Out-Null
+          Copy-Item "target\release\forward-command.exe" $pkg
+          foreach ($f in @("equipment_stats.json", "unit_templates.json", "doctrine_bonuses.json",
+                           "modifiers.json", "country_colors.json")) {
+            Copy-Item "data\$f" "$pkg\data"
+          }
+          Copy-Item "data\battles\*.json" "$pkg\data\battles"
+          Copy-Item "localisation" $pkg -Recurse
+          Copy-Item "hoi4-mod" $pkg -Recurse
+          Copy-Item "install-mod.ps1", "install-mod.bat" $pkg
+          Copy-Item "assets\fonts\NotoSansSC-Subset.otf", "assets\fonts\LICENSE-OFL.txt" "$pkg\assets\fonts"
+          Copy-Item "assets\icons\ATTRIBUTION.md" "$pkg\assets"
+          # Player-facing docs at the package root (the announcement points new
+          # players at the manual + disclaimer). Wildcard copy: no CJK literals.
+          Copy-Item "docs\*.md" $pkg
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $name = "ForwardCommand_$($env:GITHUB_REF_NAME).zip"
+          } else {
+            $name = "ForwardCommand_beta_$(Get-Date -Format 'yyyyMMdd').zip"
+          }
+          Compress-Archive -Path $pkg -DestinationPath "dist\$name" -Force
+          (Get-FileHash "dist\$name" -Algorithm SHA256).Hash.ToLower() + "  $name" |
+            Out-File -Encoding ascii "dist\SHA256SUMS.txt"
+          Write-Host "packed: dist\$name"
+          Get-Content "dist\SHA256SUMS.txt"
+
+      - name: Upload workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForwardCommand-package
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          retention-days: 14
+
+      - name: GitHub Release (tag runs)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          generate_release_notes: false

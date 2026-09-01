@@ -1,0 +1,1006 @@
+{
+  "phases": [
+    "close_combat",
+    "tactical_withdrawal",
+    "seize_bridge",
+    "hold_bridge",
+    "street_fighting"
+  ],
+  "tactics": {
+    "basic_attack": {
+      "attacker_damage": 0.05,
+      "defender_damage": 0.0,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "counterattack"
+      ],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false
+      },
+      "counters": []
+    },
+    "basic_defend": {
+      "attacker_damage": 0.0,
+      "defender_damage": 0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": false
+      },
+      "counters": []
+    },
+    "counterattack": {
+      "attacker_damage": 0.0,
+      "defender_damage": 0.25,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "skill_advantage >": 0,
+        "phase": false
+      },
+      "counters": [
+        "basic_attack",
+        "assault"
+      ]
+    },
+    "assault": {
+      "attacker_damage": 0.25,
+      "defender_damage": 0.0,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "counterattack"
+      ],
+      "phase_change": "close_combat",
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false,
+        "has_artillery_ratio >": 0.1
+      },
+      "counters": []
+    },
+    "cc_attack": {
+      "attacker_damage": 0.1,
+      "defender_damage": 0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "close_combat"
+      },
+      "counters": []
+    },
+    "cc_defend": {
+      "attacker_damage": 0.05,
+      "defender_damage": 0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "close_combat"
+      },
+      "counters": []
+    },
+    "cc_storm": {
+      "attacker_damage": 0.2,
+      "defender_damage": 0.2,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "close_combat"
+      },
+      "counters": []
+    },
+    "cc_local_strong_point": {
+      "attacker_damage": -0.2,
+      "defender_damage": 0.0,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "close_combat"
+      },
+      "counters": []
+    },
+    "cc_withdraw": {
+      "attacker_damage": -0.05,
+      "defender_damage": -0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "close_combat"
+      },
+      "counters": []
+    },
+    "encirclement": {
+      "attacker_damage": 0.25,
+      "defender_damage": 0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.5,
+      "countered_by": [
+        "tactical_withdrawal"
+      ],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false,
+        "frontage_full": true,
+        "has_reserves": true,
+        "OR": {
+          "skill_advantage >": 0,
+          "has_trait": "trickster"
+        }
+      },
+      "counters": []
+    },
+    "delay": {
+      "attacker_damage": -0.25,
+      "defender_damage": -0.15,
+      "speed_mod": -0.25,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "shock"
+      ],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": false
+      },
+      "counters": []
+    },
+    "shock": {
+      "attacker_damage": 0.0,
+      "defender_damage": -0.25,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "ambush"
+      ],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false
+      },
+      "counters": [
+        "delay",
+        "masterful_delay"
+      ]
+    },
+    "tactical_withdrawal": {
+      "attacker_damage": -0.25,
+      "defender_damage": -0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": "tactical_withdrawal",
+      "active": false,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": false,
+        "OR": {
+          "skill_advantage >": 0,
+          "has_trait": "trickster"
+        }
+      },
+      "counters": [
+        "encirclement"
+      ]
+    },
+    "tw_attack": {
+      "attacker_damage": -0.25,
+      "defender_damage": -0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "tactical_withdrawal"
+      },
+      "counters": []
+    },
+    "tw_defend": {
+      "attacker_damage": -0.3,
+      "defender_damage": -0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "tactical_withdrawal"
+      },
+      "counters": []
+    },
+    "tw_chase": {
+      "attacker_damage": -0.15,
+      "defender_damage": -0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "tactical_withdrawal"
+      },
+      "counters": []
+    },
+    "tw_evade": {
+      "attacker_damage": -0.4,
+      "defender_damage": -0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "tactical_withdrawal"
+      },
+      "counters": []
+    },
+    "tw_intercept": {
+      "attacker_damage": -0.05,
+      "defender_damage": -0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "tactical_withdrawal"
+      },
+      "counters": []
+    },
+    "breakthrough": {
+      "attacker_damage": 0.25,
+      "defender_damage": -0.15,
+      "speed_mod": 0.5,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "backhand_blow"
+      ],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false,
+        "OR": {
+          "hardness >": 0.5,
+          "skill_advantage >": 1
+        }
+      },
+      "counters": [
+        "ambush"
+      ]
+    },
+    "ambush": {
+      "attacker_damage": -0.25,
+      "defender_damage": 0.0,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "breakthrough"
+      ],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": false,
+        "OR": {
+          "skill_advantage >": 1,
+          "skill >": 2,
+          "has_trait": "trickster"
+        }
+      },
+      "counters": [
+        "shock"
+      ]
+    },
+    "blitz": {
+      "attacker_damage": 0.15,
+      "defender_damage": -0.15,
+      "speed_mod": 0.5,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "elastic_defense"
+      ],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "hardness >": 0.5,
+        "phase": false,
+        "OR": {
+          "skill >": 2,
+          "has_trait": "panzer_leader",
+          "skill_advantage >": 1
+        },
+        "OWNER": {
+          "NOT": {
+            "has_tactic": "tactic_masterful_blitz"
+          }
+        }
+      },
+      "counters": []
+    },
+    "elastic_defense": {
+      "attacker_damage": -0.15,
+      "defender_damage": 0.1,
+      "speed_mod": -0.25,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": false,
+        "OR": {
+          "has_trait": "defensive_doctrine",
+          "skill >": 2
+        }
+      },
+      "counters": [
+        "blitz",
+        "masterful_blitz"
+      ]
+    },
+    "backhand_blow": {
+      "attacker_damage": -0.2,
+      "defender_damage": 0.25,
+      "speed_mod": -0.3,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": false,
+        "OR": {
+          "skill >": 4,
+          "AND": {
+            "has_trait": "defensive_doctrine",
+            "skill >": 3
+          }
+        }
+      },
+      "counters": [
+        "breakthrough"
+      ]
+    },
+    "seize_bridge": {
+      "attacker_damage": 0.2,
+      "defender_damage": -0.05,
+      "speed_mod": 0.1,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": "seize_bridge",
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "has_combat_modifier": "river_crossing",
+        "phase": false,
+        "OR": {
+          "skill >": 3,
+          "AND": {
+            "has_trait": "offensive_doctrine",
+            "skill >": 2
+          }
+        }
+      },
+      "counters": []
+    },
+    "attacker_sb_hold": {
+      "attacker_damage": 0.2,
+      "defender_damage": 0.0,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "seize_bridge"
+      },
+      "counters": []
+    },
+    "attacker_sb_skillful_defence": {
+      "attacker_damage": 0.2,
+      "defender_damage": -0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "seize_bridge",
+        "skill >": 4
+      },
+      "counters": [
+        "defender_sb_retake_bridge"
+      ]
+    },
+    "defender_sb_assault": {
+      "attacker_damage": 0.0,
+      "defender_damage": -0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "seize_bridge"
+      },
+      "counters": []
+    },
+    "defender_sb_reckless_assault": {
+      "attacker_damage": 0.25,
+      "defender_damage": -0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "seize_bridge",
+        "skill <": 3
+      },
+      "counters": []
+    },
+    "defender_sb_retake_bridge": {
+      "attacker_damage": 0.1,
+      "defender_damage": -0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [
+        "attacker_sb_skillful_defence"
+      ],
+      "phase_change": "hold_bridge",
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "seize_bridge",
+        "OR": {
+          "skill >": 2,
+          "has_trait": "trickster"
+        }
+      },
+      "counters": []
+    },
+    "hold_bridge": {
+      "attacker_damage": 0.2,
+      "defender_damage": -0.05,
+      "speed_mod": 0.1,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": "hold_bridge",
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "has_combat_modifier": "river_crossing",
+        "is_attacker": false,
+        "phase": false,
+        "OR": {
+          "skill >": 2,
+          "has_trait": "defensive_doctrine"
+        }
+      },
+      "counters": []
+    },
+    "attacker_hb_attack": {
+      "attacker_damage": 0.1,
+      "defender_damage": 0.0,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "hold_bridge"
+      },
+      "counters": []
+    },
+    "attacker_hb_rush": {
+      "attacker_damage": 0.2,
+      "defender_damage": 0.0,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "hold_bridge",
+        "skill >": 4
+      },
+      "counters": []
+    },
+    "attacker_hb_storm": {
+      "attacker_damage": 0.2,
+      "defender_damage": 0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [
+        "defender_hb_skillful_defence"
+      ],
+      "phase_change": "seize_bridge",
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "hold_bridge"
+      },
+      "counters": []
+    },
+    "defender_hb_hold": {
+      "attacker_damage": 0.2,
+      "defender_damage": -0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "hold_bridge",
+        "skill <": 3
+      },
+      "counters": []
+    },
+    "defender_hb_skillful_defence": {
+      "attacker_damage": 0.1,
+      "defender_damage": 0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.25,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "hold_bridge",
+        "OR": {
+          "skill >": 2,
+          "has_trait": "trickster"
+        }
+      },
+      "counters": [
+        "attacker_hb_storm"
+      ]
+    },
+    "guerrilla_tactics": {
+      "attacker_damage": -0.7,
+      "defender_damage": -0.6,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.5,
+      "countered_by": [],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": false,
+        "OR": {
+          "skill >": 2,
+          "has_trait": "trickster"
+        }
+      },
+      "counters": []
+    },
+    "human_wave_tactics": {
+      "attacker_damage": 0.1,
+      "defender_damage": 0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.5,
+      "countered_by": [],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false,
+        "frontage_full": true,
+        "has_reserves": true
+      },
+      "counters": []
+    },
+    "banzai_charge": {
+      "attacker_damage": 0.25,
+      "defender_damage": 0.1,
+      "speed_mod": 0.1,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "overwhelming_fire"
+      ],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "tag": "JAP",
+        "is_attacker": true,
+        "phase": false,
+        "OWNER": {
+          "NOT": {
+            "has_tactic": "tactic_grand_banzai_charge"
+          }
+        }
+      },
+      "counters": []
+    },
+    "grand_banzai_charge": {
+      "attacker_damage": 0.3,
+      "defender_damage": 0.1,
+      "speed_mod": 0.1,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "overwhelming_fire"
+      ],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": true,
+      "trigger": {
+        "tag": "JAP",
+        "is_attacker": true,
+        "phase": false
+      },
+      "counters": []
+    },
+    "infantry_charge": {
+      "attacker_damage": 0.1,
+      "defender_damage": -0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false
+      },
+      "counters": []
+    },
+    "planned_attack": {
+      "attacker_damage": 0.15,
+      "defender_damage": 0.0,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false
+      },
+      "counters": []
+    },
+    "relentless_assault": {
+      "attacker_damage": 0.2,
+      "defender_damage": 0.05,
+      "speed_mod": 0.15,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false
+      },
+      "counters": []
+    },
+    "unexpected_thrust": {
+      "attacker_damage": 0.15,
+      "defender_damage": 0.0,
+      "speed_mod": 0.15,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false
+      },
+      "counters": []
+    },
+    "overwhelming_fire": {
+      "attacker_damage": -0.1,
+      "defender_damage": 0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": false
+      },
+      "counters": [
+        "banzai_charge",
+        "grand_banzai_charge"
+      ]
+    },
+    "barrage": {
+      "attacker_damage": 0.1,
+      "defender_damage": -0.2,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": false
+      },
+      "counters": []
+    },
+    "masterful_blitz": {
+      "attacker_damage": 0.2,
+      "defender_damage": -0.2,
+      "speed_mod": 0.5,
+      "combat_width_mod": 0.1,
+      "countered_by": [
+        "elastic_defense"
+      ],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "hardness >": 0.5,
+        "phase": false,
+        "OR": {
+          "skill >": 2,
+          "has_trait": "panzer_leader",
+          "skill_advantage >": 1
+        }
+      },
+      "counters": []
+    },
+    "masterful_delay": {
+      "attacker_damage": -0.3,
+      "defender_damage": -0.2,
+      "speed_mod": -0.3,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "shock"
+      ],
+      "phase_change": null,
+      "active": false,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": false,
+        "OR": {
+          "skill >": 2,
+          "has_trait": "ambusher",
+          "NOT": {
+            "has_trait": "unyielding_defender"
+          },
+          "skill_advantage >": 1
+        }
+      },
+      "counters": []
+    },
+    "urban_defense": {
+      "attacker_damage": -0.05,
+      "defender_damage": 0.05,
+      "speed_mod": -0.05,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": "street_fighting",
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "is_fighting_in_terrain": "urban",
+        "phase": false
+      },
+      "attacker_org_damage_mod": -0.1,
+      "counters": []
+    },
+    "sf_storm": {
+      "attacker_damage": 0.05,
+      "defender_damage": 0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.05,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "street_fighting"
+      },
+      "defender_org_damage_mod": -0.05,
+      "counters": []
+    },
+    "sf_barrage": {
+      "attacker_damage": 0.1,
+      "defender_damage": -0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.05,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "street_fighting",
+        "has_artillery_ratio >": 0.1
+      },
+      "defender_org_damage_mod": -0.1,
+      "counters": []
+    },
+    "sf_armor_supported_assault": {
+      "attacker_damage": 0.15,
+      "defender_damage": 0.0,
+      "speed_mod": 0.0,
+      "combat_width_mod": -0.1,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "street_fighting",
+        "custom_trigger_tooltip": {
+          "tooltip": "has_flame_tank_units",
+          "OR": {
+            "has_unit_type": "heavy_flame_tank"
+          }
+        }
+      },
+      "defender_org_damage_mod": -0.1,
+      "counters": []
+    },
+    "sf_mouse_holing": {
+      "attacker_damage": 0.0,
+      "defender_damage": -0.1,
+      "speed_mod": -0.05,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": true,
+      "trigger": {
+        "is_attacker": true,
+        "phase": "street_fighting",
+        "OR": {
+          "has_unit_type": "pioneer_support"
+        }
+      },
+      "defender_org_damage_mod": -0.1,
+      "counters": [
+        "sf_fortify"
+      ]
+    },
+    "sf_defense": {
+      "attacker_damage": -0.05,
+      "defender_damage": 0.1,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "street_fighting"
+      },
+      "attacker_org_damage_mod": -0.1,
+      "counters": []
+    },
+    "sf_fortify": {
+      "attacker_damage": -0.1,
+      "defender_damage": 0.05,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [
+        "sf_mouse_holing"
+      ],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "street_fighting"
+      },
+      "attacker_org_damage_mod": -0.15,
+      "counters": []
+    },
+    "sf_ambush": {
+      "attacker_damage": 0.0,
+      "defender_damage": 0.25,
+      "speed_mod": 0.0,
+      "combat_width_mod": 0.0,
+      "countered_by": [],
+      "phase_change": null,
+      "active": true,
+      "is_attacker": false,
+      "trigger": {
+        "is_attacker": false,
+        "phase": "street_fighting"
+      },
+      "attacker_org_damage_mod": -0.1,
+      "counters": []
+    }
+  }
+}

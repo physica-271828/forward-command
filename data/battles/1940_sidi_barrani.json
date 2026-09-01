@@ -1,0 +1,747 @@
+{
+  "name": "1940_sidi_barrani",
+  "title": "Operation Compass: Sidi Barrani, Dec 1940",
+  "notes": "Operation Compass, 9-11 Dec 1940. Western Desert Force (O'Connor) vs the Italian 10th Army's fortified camps. Researched (Playfair Vol.I, Wikipedia Operation Compass OOB per Montanari 1990/Christie 1999, Maletti Group/1st-2nd Libyan Div/63rd Cirene/64th Catanzaro/4th CC.NN. articles). AXES: the WDF marched from Mersa Matruh (E) via Bir Kenayis, passed through the Nibeiwa-Rabia gap and struck the camps from the desert flank (SW); dirs=E (coast road, Selby-style approach) + SW (main desert-flank attack) mirror that. ATTACKER (25 bns): 4th Indian Division (Beresford-Peirse) — 5th Ind Bde (1/R.Fus, 3/1.Punjab, 4/6.RajRif), 11th Ind Bde (1/6.RajRif, 2.Camerons, 4/7.Rajput), 16th Br Bde (2.Queen's, 1.A&SH, 2.Leicester), 7.RTR (47 Matilda IIs, led every wire break-in), div art (1st+25th Field + 7th Medium Regts RA); 7th Armoured Division (Caunter) — 4th Armd Bde (7.Hussars Mk VI, 2.RTR+6.RTR cruisers), 7th Armd Bde (3.KOH Mk VI, 8.KRIH Mk VI, 1.RTR cruisers), Support Group (1.KRRC+2.Rifle Bde motor battalions), 11.Hussars armoured cars, 3.RHA, 106th Lancs Yeomanry (AT), 2nd HAA Rgt. DEFENDER (29 bns): Raggruppamento Maletti at Nibeiwa (I/V/XVII/XIX Libyan bns + I Saharan bn, motorized; II Carri M bn M11/39; 65/17+75/27 groups); 2nd Libyan Division at Tummar West/East + Pt90 (II/VI/VII + XIV/XV/XVI Libyan bns, IX Carri L L3/35, 2 Libyan art groups, II Genio); 4th CC.NN. '3 Gennaio' in the town (228th+250th Legions, 204th Art Rgt); 1st Libyan Division remnants trapped in the town pocket (VIII/X/XII, org 35). EXCLUDED (out of the battle province and historically escaping): 63rd Cirene (Rabia/Sofafi — never attacked, withdrew to Halfaya), 64th Catanzaro (Alam Salamus/Buq Buq), 132nd Ariete (stayed in Italy — Playfair explicit; only 4th Tank Rgt's II Bn M was in Egypt), XXI Corps L3 battalions (Buq Buq). Terrain: pure desert (def -15%, no cover) + coast; VP1 town = the city flag. Italian colonial/blackshirt under-strength (org 45/30/35); Maletti motorized (the only mobile force — truck-borne). Stats = 1939 calibration: Matilda heavy_armor 70 (immune to 47/32 AT piercing 45); 2-pdr cruisers pierce 55 (M11 armor 30 is vulnerable); L3/Mk VI machine-gun tanks piercing 5.",
+  "province": 9989,
+  "dirs": [
+    "E",
+    "SW"
+  ],
+  "player_side": "attacker",
+  "enemy_tactic": "default",
+  "attacker": {
+    "tag": "ENG",
+    "division": "4th Indian Division",
+    "units": [
+      {
+        "name": "1.R.Fus (5th Bde)",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "3/1.Punjab (5th Bde)",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "4/6.RajRif (5th Bde)",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "1/6.RajRif (11th Bde)",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "supports": [
+          {
+            "kind": "recon",
+            "name": "Central India Horse"
+          }
+        ],
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "2.Camerons (11th Bde)",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "4/7.Rajput (11th Bde)",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "2.Queen's (16th Bde)",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "1.A&SH (16th Bde)",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "2.Leicester (16th Bde)",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "7.RTR (Matilda II)",
+        "type": "heavy_armor",
+        "soft": 10.0,
+        "hard": 15.0,
+        "defense": 6.0,
+        "breakthrough": 36.0,
+        "armor": 70.0,
+        "piercing": 55.0,
+        "hardness": 0.95,
+        "supports": [
+          {
+            "kind": "engineer",
+            "name": "1.Sappers"
+          }
+        ],
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "1.Fd Rgt RA",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "truck_towed",
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "25.Fd Rgt RA",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "truck_towed",
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "7.Med Rgt RA",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "truck_towed",
+        "division": "4th Indian Division"
+      },
+      {
+        "name": "7.Hussars (Mk VI)",
+        "type": "light_armor",
+        "soft": 12.0,
+        "hard": 3.0,
+        "defense": 4.0,
+        "breakthrough": 26.0,
+        "armor": 10.0,
+        "piercing": 5.0,
+        "hardness": 0.8,
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "2.RTR (Cruiser)",
+        "type": "light_armor",
+        "soft": 12.0,
+        "hard": 15.0,
+        "defense": 5.0,
+        "breakthrough": 36.0,
+        "armor": 15.0,
+        "piercing": 55.0,
+        "hardness": 0.8,
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "6.RTR (Cruiser)",
+        "type": "light_armor",
+        "soft": 12.0,
+        "hard": 15.0,
+        "defense": 5.0,
+        "breakthrough": 36.0,
+        "armor": 15.0,
+        "piercing": 55.0,
+        "hardness": 0.8,
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "3.KOH (Mk VI)",
+        "type": "light_armor",
+        "soft": 12.0,
+        "hard": 3.0,
+        "defense": 4.0,
+        "breakthrough": 26.0,
+        "armor": 10.0,
+        "piercing": 5.0,
+        "hardness": 0.8,
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "8.KRIH (Mk VI)",
+        "type": "light_armor",
+        "soft": 12.0,
+        "hard": 3.0,
+        "defense": 4.0,
+        "breakthrough": 26.0,
+        "armor": 10.0,
+        "piercing": 5.0,
+        "hardness": 0.8,
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "1.RTR (Cruiser)",
+        "type": "light_armor",
+        "soft": 12.0,
+        "hard": 15.0,
+        "defense": 5.0,
+        "breakthrough": 36.0,
+        "armor": 15.0,
+        "piercing": 55.0,
+        "hardness": 0.8,
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "1.KRRC (Mot)",
+        "type": "motorized",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 18.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "2.Rifle Bde (Mot)",
+        "type": "motorized",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 18.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "11.Hussars (AC)",
+        "type": "light_armor",
+        "soft": 10.0,
+        "hard": 2.0,
+        "defense": 3.0,
+        "breakthrough": 18.0,
+        "armor": 7.0,
+        "piercing": 5.0,
+        "hardness": 0.5,
+        "supports": [
+          {
+            "kind": "recon",
+            "name": "11.Hussars"
+          }
+        ],
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "3.RHA",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "truck_towed",
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "106.LancsYeo (AT)",
+        "type": "anti_tank",
+        "soft": 4.0,
+        "hard": 20.0,
+        "defense": 4.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 55.0,
+        "hardness": 0.0,
+        "chassis": "truck_towed",
+        "division": "7th Armoured Division"
+      },
+      {
+        "name": "2.HAA Rgt (AA)",
+        "type": "anti_air",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 8.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "truck_towed",
+        "division": "7th Armoured Division"
+      }
+    ]
+  },
+  "defender": {
+    "tag": "ITA",
+    "division": "Raggruppamento Maletti",
+    "units": [
+      {
+        "name": "I.Lib (Maletti)",
+        "type": "motorized",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 5.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.1,
+        "org": 45,
+        "division": "Raggruppamento Maletti"
+      },
+      {
+        "name": "V.Lib (Maletti)",
+        "type": "motorized",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 5.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.1,
+        "org": 45,
+        "division": "Raggruppamento Maletti"
+      },
+      {
+        "name": "XVII.Lib (Maletti)",
+        "type": "motorized",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 5.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.1,
+        "org": 45,
+        "division": "Raggruppamento Maletti"
+      },
+      {
+        "name": "XIX.Lib (Maletti)",
+        "type": "motorized",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 5.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.1,
+        "org": 45,
+        "division": "Raggruppamento Maletti"
+      },
+      {
+        "name": "I.Saharian (Maletti)",
+        "type": "motorized",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 18.0,
+        "breakthrough": 5.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.1,
+        "org": 50,
+        "division": "Raggruppamento Maletti"
+      },
+      {
+        "name": "II.Carri M (M11/39)",
+        "type": "light_armor",
+        "soft": 14.0,
+        "hard": 12.0,
+        "defense": 4.0,
+        "breakthrough": 26.0,
+        "armor": 30.0,
+        "piercing": 30.0,
+        "hardness": 0.8,
+        "supports": [
+          {
+            "kind": "anti_tank",
+            "name": "AT 47/32"
+          }
+        ],
+        "division": "Raggruppamento Maletti"
+      },
+      {
+        "name": "I Grp 65/17",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "truck_towed",
+        "division": "Raggruppamento Maletti"
+      },
+      {
+        "name": "II Grp 75/27",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "truck_towed",
+        "supports": [
+          {
+            "kind": "anti_air",
+            "name": "20mm AA"
+          }
+        ],
+        "division": "Raggruppamento Maletti"
+      },
+      {
+        "name": "II.Lib 'Offella'",
+        "type": "infantry",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 20.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 45,
+        "division": "2nd Libyan Division"
+      },
+      {
+        "name": "VI.Lib 'Gefara'",
+        "type": "infantry",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 20.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 45,
+        "supports": [
+          {
+            "kind": "anti_tank",
+            "name": "2nd Lib AT Coy"
+          }
+        ],
+        "division": "2nd Libyan Division"
+      },
+      {
+        "name": "VII.Lib 'Buerat'",
+        "type": "infantry",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 20.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 45,
+        "division": "2nd Libyan Division"
+      },
+      {
+        "name": "XIV.Lib 'Sorman'",
+        "type": "infantry",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 20.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 45,
+        "division": "2nd Libyan Division"
+      },
+      {
+        "name": "XV.Lib 'Tefren'",
+        "type": "infantry",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 20.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 45,
+        "division": "2nd Libyan Division"
+      },
+      {
+        "name": "XVI.Lib 'Aziza'",
+        "type": "infantry",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 20.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 45,
+        "division": "2nd Libyan Division"
+      },
+      {
+        "name": "IX.Carri L (L3/35)",
+        "type": "light_armor",
+        "soft": 12.0,
+        "hard": 3.0,
+        "defense": 3.0,
+        "breakthrough": 18.0,
+        "armor": 6.0,
+        "piercing": 5.0,
+        "hardness": 0.8,
+        "division": "2nd Libyan Division"
+      },
+      {
+        "name": "I.LibArt Grp",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "towed",
+        "division": "2nd Libyan Division"
+      },
+      {
+        "name": "II.LibArt Grp",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "towed",
+        "division": "2nd Libyan Division"
+      },
+      {
+        "name": "II.Genio Libico",
+        "type": "infantry",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 24.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 45,
+        "division": "2nd Libyan Division"
+      },
+      {
+        "name": "I./228.Leg CC.NN.",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 14.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "supports": [
+          {
+            "kind": "anti_tank",
+            "name": "204th AT Coy"
+          }
+        ],
+        "division": "4th CC.NN. '3 Gennaio'"
+      },
+      {
+        "name": "II./228.Leg CC.NN.",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 14.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "4th CC.NN. '3 Gennaio'"
+      },
+      {
+        "name": "III./228.Leg CC.NN.",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 14.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "4th CC.NN. '3 Gennaio'"
+      },
+      {
+        "name": "I./250.Leg 'Indomita'",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 14.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "4th CC.NN. '3 Gennaio'"
+      },
+      {
+        "name": "II./250.Leg 'Indomita'",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 14.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "4th CC.NN. '3 Gennaio'"
+      },
+      {
+        "name": "III./250.Leg 'Indomita'",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 14.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "4th CC.NN. '3 Gennaio'"
+      },
+      {
+        "name": "I./204.Art (75/27)",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "towed",
+        "division": "4th CC.NN. '3 Gennaio'"
+      },
+      {
+        "name": "II./204.Art (100/17)",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "towed",
+        "division": "4th CC.NN. '3 Gennaio'"
+      },
+      {
+        "name": "VIII.Lib (rem)",
+        "type": "infantry",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 20.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 35,
+        "division": "1st Libyan Division (remnants)"
+      },
+      {
+        "name": "X.Lib (rem)",
+        "type": "infantry",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 20.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 35,
+        "division": "1st Libyan Division (remnants)"
+      },
+      {
+        "name": "XII.Lib (rem)",
+        "type": "infantry",
+        "soft": 5.0,
+        "hard": 1.0,
+        "defense": 20.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 35,
+        "division": "1st Libyan Division (remnants)"
+      }
+    ]
+  }
+}

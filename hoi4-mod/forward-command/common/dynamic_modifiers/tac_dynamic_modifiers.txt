@@ -1,0 +1,19 @@
+# Forward Command — state-scope dynamic modifiers (DESIGN §8.4).
+#
+# tac_freeze: applied to the battle state for the duration of an external
+# tactical battle. Combat in the frozen state deals no damage — the tactical
+# engine is the sole damage channel — while the vanilla battle stays alive,
+# so pinning, reinforcement and attack progress all follow vanilla rules.
+# attacker_modifier = yes makes the modifier read for everyone engaging in
+# the combat (attackers included), same construction as the vanilla
+# unplanned_offensive modifier. The factors use a large negative value so
+# the total still clamps to zero regardless of other stacked bonuses; the
+# air pair suppresses CAS over the state.
+tac_freeze = {
+	icon = GFX_unplanned_offensive
+	attacker_modifier = yes
+
+	army_attack_factor = -10
+	air_cas_present_factor = -10
+	ground_attack_factor = -10
+}

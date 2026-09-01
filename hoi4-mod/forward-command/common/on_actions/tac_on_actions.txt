@@ -1,0 +1,18 @@
+# Daily heartbeat while tactical mode is active (DESIGN §10.5).
+# Vanilla has no hourly pulse hook — the heartbeat rides the daily pulse;
+# liveness only, the real game hour always comes from the log line's
+# [yyyy.mm.dd.hh] prefix externally. The bare on_daily hook fires once
+# per country per day with ROOT as that country (no tag filter — that
+# is what the on_daily_<TAG> family is for), so the heartbeat is gated
+# by the country flag instead. The flag trigger takes the flag name
+# directly (`= yes` is invalid).
+on_actions = {
+	on_daily = {
+		effect = {
+			if = {
+				limit = { has_country_flag = tac_mode_active }
+				log = "{\"type\":\"tac_heartbeat\",\"hour\":0}"
+			}
+		}
+	}
+}

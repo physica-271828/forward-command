@@ -1,0 +1,10 @@
+[package]
+name = "tactical-listen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+notify = "7"
+serde_json = "1"
+crossbeam-channel = "0.5"

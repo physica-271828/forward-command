@@ -1,0 +1,36 @@
+{
+  "name": "arena_2div",
+  "title": "Arena: two-division defender deploy probe",
+  "notes": "Defender deploy probe: the defender has TWO divisions (4 INF + 1 ART each). Each division's gun should cluster behind ITS OWN division's line centre, not the global front centroid, and flags must not pull them.",
+  "map": "synthetic",
+  "dirs": [],
+  "player_side": "attacker",
+  "enemy_tactic": "elastic_defense",
+  "attacker": {
+    "tag": "GER",
+    "division": "Attack Division",
+    "units": [
+      { "name": "1.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "2.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "3.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "4.INF", "type": "infantry", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "1.ART", "type": "artillery", "soft": 25.0, "hard": 2.0, "defense": 10.0, "breakthrough": 6.0, "armor": 0.0, "piercing": 5.0, "hardness": 0.0, "chassis": "towed" }
+    ]
+  },
+  "defender": {
+    "tag": "FRA",
+    "division": "North Division",
+    "units": [
+      { "name": "1.N-INF", "type": "infantry", "division": "North Division", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "2.N-INF", "type": "infantry", "division": "North Division", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "3.N-INF", "type": "infantry", "division": "North Division", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "4.N-INF", "type": "infantry", "division": "North Division", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "N-ART", "type": "artillery", "division": "North Division", "soft": 25.0, "hard": 2.0, "defense": 10.0, "breakthrough": 6.0, "armor": 0.0, "piercing": 5.0, "hardness": 0.0, "chassis": "towed" },
+      { "name": "1.S-INF", "type": "infantry", "division": "South Division", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "2.S-INF", "type": "infantry", "division": "South Division", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "3.S-INF", "type": "infantry", "division": "South Division", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "4.S-INF", "type": "infantry", "division": "South Division", "soft": 6.0, "hard": 1.0, "defense": 22.0, "breakthrough": 3.0, "armor": 0.0, "piercing": 4.0, "hardness": 0.0 },
+      { "name": "S-ART", "type": "artillery", "division": "South Division", "soft": 25.0, "hard": 2.0, "defense": 10.0, "breakthrough": 6.0, "armor": 0.0, "piercing": 5.0, "hardness": 0.0, "chassis": "towed" }
+    ]
+  }
+}

@@ -1,0 +1,261 @@
+{
+  "name": "arena_mil_inf",
+  "title": "Arena: Militia vs Infantry",
+  "notes": "Balance matrix: 9 under-strength INF (org 40 / str 20) + 1 ART attacks full INF div. Tests Lanchester squaring of understrength.",
+  "map": "synthetic",
+  "dirs": [],
+  "player_side": "attacker",
+  "enemy_tactic": "elastic_defense",
+  "attacker": {
+    "tag": "GER",
+    "division": "Militia Division",
+    "units": [
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "1.MIL",
+        "org": 40.0,
+        "strength": 20.0
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "2.MIL",
+        "org": 40.0,
+        "strength": 20.0
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "3.MIL",
+        "org": 40.0,
+        "strength": 20.0
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "4.MIL",
+        "org": 40.0,
+        "strength": 20.0
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "5.MIL",
+        "org": 40.0,
+        "strength": 20.0
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "6.MIL",
+        "org": 40.0,
+        "strength": 20.0
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "7.MIL",
+        "org": 40.0,
+        "strength": 20.0
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "8.MIL",
+        "org": 40.0,
+        "strength": 20.0
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "9.MIL",
+        "org": 40.0,
+        "strength": 20.0
+      },
+      {
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "towed",
+        "name": "1.ART"
+      }
+    ]
+  },
+  "defender": {
+    "tag": "FRA",
+    "division": "Infantry Division",
+    "units": [
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "1.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "2.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "3.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "4.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "5.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "6.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "7.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "8.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "9.INF"
+      },
+      {
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "towed",
+        "name": "1.ART"
+      }
+    ]
+  }
+}

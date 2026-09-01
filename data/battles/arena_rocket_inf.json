@@ -1,0 +1,245 @@
+{
+  "name": "arena_rocket_inf",
+  "title": "Arena: Rocket vs Infantry",
+  "notes": "Balance matrix: 7 INF + 2 towed rocket artillery (area-only, min range 3) + 1 ART attacks 9 INF + 1 ART.",
+  "map": "synthetic",
+  "dirs": [],
+  "player_side": "attacker",
+  "enemy_tactic": "elastic_defense",
+  "attacker": {
+    "tag": "GER",
+    "division": "Rocket Division",
+    "units": [
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "1.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "2.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "3.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "4.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "5.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "6.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "7.INF"
+      },
+      {
+        "type": "rocket_artillery",
+        "soft": 30.0,
+        "hard": 1.0,
+        "defense": 12.0,
+        "breakthrough": 9.0,
+        "armor": 0.0,
+        "piercing": 0.0,
+        "hardness": 0.0,
+        "chassis": "towed",
+        "name": "1.RKT"
+      },
+      {
+        "type": "rocket_artillery",
+        "soft": 30.0,
+        "hard": 1.0,
+        "defense": 12.0,
+        "breakthrough": 9.0,
+        "armor": 0.0,
+        "piercing": 0.0,
+        "hardness": 0.0,
+        "chassis": "towed",
+        "name": "2.RKT"
+      },
+      {
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "towed",
+        "name": "1.ART"
+      }
+    ]
+  },
+  "defender": {
+    "tag": "FRA",
+    "division": "Infantry Division",
+    "units": [
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "1.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "2.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "3.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "4.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "5.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "6.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "7.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "8.INF"
+      },
+      {
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "name": "9.INF"
+      },
+      {
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "towed",
+        "name": "1.ART"
+      }
+    ]
+  }
+}

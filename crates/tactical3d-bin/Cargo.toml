@@ -1,0 +1,37 @@
+[package]
+name = "tactical3d-bin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tactical-core = { path = "../tactical-core" }
+tactical-combat = { path = "../tactical-combat" }
+tactical-sync = { path = "../tactical-sync" }
+tactical-map = { path = "../tactical-map" }
+tactical-ai = { path = "../tactical-ai" }
+tactical-save = { path = "../tactical-save" }
+tactical-inject = { path = "../tactical-inject" }
+tactical-listen = { path = "../tactical-listen" }
+tactical-locale = { path = "../tactical-locale" }
+tactical3d-render = { path = "../tactical3d-render" }
+bevy = "0.15"
+bevy_egui = "0.31"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Diagnostic-bundle zip (diag.rs): deflate + CRC32. Both are
+# already in the graph via the image pipeline — no new downloads.
+flate2 = "1"
+crc32fast = "1"
+# Native loading splash (splash.rs) — same windows crate version as
+# tactical-inject so the graph keeps a single copy. Win32_UI_Shell =
+# Shell_NotifyIconW for the tray icon (tray.rs).
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_System_Com", "Win32_System_Threading", "Win32_System_Time"] }
+# Raw HWND access for the splash's foreground raise (already in the tree
+# via winit — no new download).
+raw-window-handle = "0.6"
+
+[[bin]]
+name = "forward-command"
+path = "src/main.rs"

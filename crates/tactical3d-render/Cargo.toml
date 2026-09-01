@@ -1,0 +1,17 @@
+[package]
+name = "tactical3d-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tactical-core = { path = "../tactical-core" }
+tactical-combat = { path = "../tactical-combat" }
+tactical-sync = { path = "../tactical-sync" }
+tactical-ai = { path = "../tactical-ai" }
+tactical-locale = { path = "../tactical-locale" }
+bevy = "0.15"
+bevy_egui = "0.31"
+# PNG decoding for the vendored Twemoji icons (icons.rs) — already compiled
+# into the tree via Bevy, so this adds no new build cost.
+image = "0.25"

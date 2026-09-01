@@ -1,0 +1,13 @@
+target/
+settings.json
+crash.log
+fc_trace*.log
+*.bak
+dist/
+previews/
+deploycheck_map.txt
+.venv-fonts/
+__pycache__/
+*.py[cod]
+Thumbs.db
+.DS_Store

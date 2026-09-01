@@ -1,0 +1,22 @@
+# Battle-state freeze (DESIGN §8.4): state-scope effects driven by console
+# injection — `eval_effect <state_id> = { d_tac_freeze_state = yes }`.
+# d_tac_unfreeze_all is the backstop sweep: any freeze left behind by an
+# aborted or crashed session is cleared wholesale.
+d_tac_freeze_state = {
+	set_state_flag = tac_frozen_battle
+	add_dynamic_modifier = { modifier = tac_freeze }
+	log = "tac_freeze applied"
+}
+
+d_tac_unfreeze_state = {
+	clr_state_flag = tac_frozen_battle
+	remove_dynamic_modifier = { modifier = tac_freeze }
+	log = "tac_freeze removed"
+}
+
+d_tac_unfreeze_all = {
+	every_state = {
+		limit = { has_state_flag = tac_frozen_battle }
+		d_tac_unfreeze_state = yes
+	}
+}

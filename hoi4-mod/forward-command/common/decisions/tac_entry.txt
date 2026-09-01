@@ -1,0 +1,109 @@
+# Forward Command — tactical mode entry decisions (DESIGN §10.1).
+# The player fires one during a land battle; complete_effect writes a
+# tac_start JSON line to game.log, which the external program listens to.
+
+forward_command_decisions = {
+
+	# "Enter Tactical Battle in <state>" — the category row is the opener:
+	# click it, then click a highlighted frontier state (enemy-controlled
+	# next to yours, or yours next to enemy-controlled). The external
+	# program resolves the battle — and the side — from the save.
+	tactical_command_entry = {
+		icon = generic_army_support
+		cost = 0
+		fire_only_once = no
+		# Re-takeable as fast as the engine allows; the per-target take
+		# record is daily-pulse-locked regardless (an engine limitation —
+		# a taken target cannot be re-armed by script the same day).
+		days_re_enable = 0
+
+		state_target = yes
+		# Listed in the category; clicking the row enters vanilla target
+		# selection (map icons over the candidates; ESC/right-click
+		# dismisses the selection).
+		on_map_mode = map_and_decisions_view
+		target_trigger = {
+			FROM = {
+				OR = {
+					AND = {
+						controller = { has_war_with = ROOT }
+						any_neighbor_state = { is_controlled_by = ROOT }
+					}
+					AND = {
+						is_controlled_by = ROOT
+						any_neighbor_state = { controller = { has_war_with = ROOT } }
+					}
+				}
+			}
+		}
+
+		# No generic at-war trigger exists in 1.19.2 (`is_at_war` is not a
+		# valid trigger — it would silently kill the decisions-tab row);
+		# peacetime shows the decision with zero candidates. Flag gates
+		# live in visible/available — the decision `allowed` block rejects
+		# flag triggers.
+		visible = {
+			NOT = { has_country_flag = tac_mode_active }
+		}
+		available = {
+			NOT = { has_country_flag = tac_mode_active }
+		}
+
+		complete_effect = {
+			# Mark the picked state FIRST — the external program snapshots
+			# right after tac_start and locates the pick via these state
+			# variables (state variables serialize to the save). The id
+			# capture is part of the take-record side channel — its presence
+			# makes the engine's daily-pulse decay restore the record to
+			# available; keep it (see d_tac_clear_tactical).
+			FROM = {
+				set_variable = { tac_pick = 1 }
+				set_variable = { ROOT.tac_picked_state = id }
+			}
+
+			# Trigger lines for the external listener (DESIGN §3.1).
+			# province/leader_id/attack_dirs are placeholders — the external
+			# program resolves the real province from the tac_pick snapshot;
+			# is_player_attacker is a constant (no script-reachable side
+			# trigger; the save's land_combat side tags win whenever
+			# present). BARE JSON only: a literal `[...]` wrapper is
+			# consumed by HOI4's localization interpolation, which would
+			# swallow the whole line.
+			log = "{\"type\":\"tac_start\",\"province\":0,\"leader_id\":0,\"is_player_attacker\":true}"
+
+			# Enemy tactic card (DESIGN §3.1): v1 ships the fixed default
+			# card; the real HOI4 combat-tactic mapping (16 cards, §7.2)
+			# is iteration 2.
+			log = "{\"type\":\"tac_enemy_tactic\",\"enemy_tactic\":\"default\"}"
+
+			# Freeze vanilla combat in the picked state for the battle's
+			# duration (DESIGN §8.4): the tactical engine is the sole damage
+			# channel while the frozen vanilla battle stays alive (pinning,
+			# reinforcement and attack progress keep vanilla rules). Lifted
+			# by every cleanup path via d_tac_clear_tactical.
+			FROM = { d_tac_freeze_state = yes }
+
+			# Enter tactical mode (the Force Exit decision shows; this row
+			# hides via the visible gate).
+			set_country_flag = tac_mode_active
+		}
+	}
+
+	# "Force Exit Tactical Mode" — always visible while tactical mode is on (§10.4).
+	tactical_force_exit = {
+		icon = generic_research
+		cost = 0
+		fire_only_once = no
+		# Re-takeable immediately — the default re-enable is next-day,
+		# which left the row showing as "already clicked" after a same-day
+		# reset (vanilla form: 124 uses).
+		days_re_enable = 0
+
+		visible = { has_country_flag = tac_mode_active }
+		available = { has_country_flag = tac_mode_active }
+
+		complete_effect = {
+			country_event = { id = tac_abort.1 hours = 0 }
+		}
+	}
+}

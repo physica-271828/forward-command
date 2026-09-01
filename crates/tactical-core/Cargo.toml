@@ -1,0 +1,8 @@
+[package]
+name = "tactical-core"
+description = "Hex math, terrain, units, pathfinding, LoS, fog of war, encirclement (per DESIGN.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

@@ -1,0 +1,145 @@
+l_english:
+# Battle log message templates (GameController.log lines). Placeholders: {name}, {n}, {q}, {r}, …
+
+# ── Deployment / command feedback ──
+log.checkpoint.restarted:0 "Battle restarted (checkpoint: battle start)"
+log.checkpoint.rollback:0 "Rolled back to last sync"
+log.deploy.cannot_start:0 "Cannot start: {n} units not deployed — place them from the OOB or click Auto Deploy"
+notice.deploy.undeployed:0 "{n} units not deployed — deploy them first"
+log.deploy.cannot_start_error:0 "Cannot start: {err}"
+log.deploy.battle_started:0 "Battle started — Attacker to move first (§6.12)"
+log.deploy.auto_deploy:0 "Auto deploy: {n} units placed by staff planning"
+notice.deploy.auto_deployed:0 "{n} units auto-deployed"
+log.deploy.auto_deploy_empty:0 "Auto deploy: nothing left to place"
+oob.unattached:0 "(unattached)"
+oob.all:0 "All"
+log.deploy.recall:0 "Recall: {n} battalions of {label} returned to the OOB"
+notice.deploy.recalled:0 "{n} battalions recalled to the OOB"
+log.deploy.impassable:0 "Cannot deploy on impassable/water terrain"
+log.deploy.sector_empty:0 "Sector empty — no deployable zone hexes inside the rectangle"
+log.deploy.sector_too_large:0 "Sector too large ({n} hexes) — keep the rectangle within the deployment area"
+log.deploy.sector_placed:0 "{label}: {n} battalions deployed into sector"
+log.deploy.sector_no_room:0 "{label}: no room left in the sector ({waiting} still waiting)"
+notice.deploy.ally_sector_set:0 "{div}: deployment suggestion recorded — allied staff deploys at battle start"
+
+# ── Sync / battle end ──
+log.sync.losses:0 "SYNC hour {hour} → losses: you org {p_org} str {p_str} | enemy org {e_org} str {e_str}"
+log.sync.summary:0 "Reported to HOI4 (your losses) — org {p_org} | str {p_str}\nEnemy losses — org {e_org} | str {e_str}"
+log.sync.rejected:0 "SYNC rejected by session: {err}"
+log.sync.applied:0 "Battle results applied. Window may be closed."
+log.sync.stalled:0 "Sync unconfirmed — HOI4 clock did not advance; awaiting your decision"
+log.sync.stall_retry:0 "Retry succeeded — HOI4 clock advanced"
+log.sync.stall_cancel:0 "Sync confirmation dismissed — battle continues (HOI4 clock left behind)"
+log.desync.hour:0 "CANNOT SYNC — the HOI4 clock no longer matches this battle (expected {expected}, read {found}); choose: end the battle or continue unsynced"
+log.desync.tag:0 "CANNOT SYNC — the save's played country is {found}, this battle belongs to {expected}; choose: end the battle or continue unsynced"
+log.desync.entered:0 "UNSYNCED MODE — no more clock advance / damage writeback / roster sync; every exit will only clean up HOI4's frozen state"
+log.desync.ended:0 "Tactical battle ended (desync guard) — HOI4 cleanup sent, results discarded"
+log.desync.cleanup_exit:0 "Unsynced battle closed — HOI4 cleanup only, no results written"
+log.end.rejected:0 "End-of-battle rejected by session: {err}"
+
+# ── Orders / actions ──
+log.order.stand_up:0 "{name} stands up — cover dropped"
+log.order.take_cover:0 "{name} takes cover (+25% def)"
+log.order.emplace:0 "{name} emplaces guns (action spent)"
+log.order.limber:0 "{name} limbers guns (action spent)"
+log.order.retreat:0 "{name} begins a fighting retreat"
+log.order.stand_by:0 "{name} stands by — orders cancelled"
+log.order.emplaced_move:0 "{name} is emplaced — limber first"
+log.order.already_acted:0 "{name} already acted this turn"
+log.order.attack_superseded:0 "{name} — earlier attack order cancelled"
+log.move.eta:0 "{name} → ({q}, {r}) — ETA {n} turn(s)"
+log.order.desc_assault:0 "assault {target}"
+log.order.desc_direct_fire:0 "direct fire on {target}"
+log.order.desc_fire_mission:0 "fire mission on ({q}, {r})"
+log.order.registered:0 "{name} → {desc} (registered)"
+log.order.rejected:0 "{name}: {reason}"
+
+# ── Rejection reasons (shared by the battle log AND the orange floaters) ──
+reject.shocked:0 "Shocked — cannot attack"
+reject.already_acted:0 "Already acted"
+reject.emplace_first:0 "Emplace first"
+reject.too_close:0 "Too close"
+reject.out_of_range:0 "Out of range"
+reject.holding:0 "Holding stance"
+reject.emplaced:0 "Emplaced — limber first"
+reject.cannot_assault:0 "Cannot assault"
+
+# ── Combat narration ──
+log.combat.target_lost:0 "{name}: target lost — order fizzled"
+log.combat.exchange:0 "{attacker} vs {defender}: -{org} org / -{str} str{suffixes}"
+log.combat.friendly_fire:0 " — FRIENDLY FIRE!"
+log.combat.broken:0 " — BROKEN!"
+log.combat.surrenders:0 " — SURRENDERS!"
+log.combat.annihilated:0 " — ANNIHILATED!"
+log.combat.counter:0 "  - counter: {name} -{org} org / -{str} str"
+log.combat.hq_destroyed:0 "{name} HQ destroyed — division command collapses!"
+
+# ── Movement events ──
+log.move.contact:0 "{name} makes contact — march halted"
+log.move.intercepted:0 "{name} intercepted by {enemy} — both halt"
+log.move.arrived:0 "{name} arrives at destination"
+log.move.blocked:0 "{name} is blocked — waiting"
+
+# ── Turn / AI turn ──
+log.turn.end:0 "Turn {n} ends — enemy thinking…"
+log.ai.plan:0 "AI plans: {move} move, {assault} assault, {fire} fire, {emplim} emplace/limber, {hold} hold"
+log.ai.move:0 "Enemy {name} → move ({q}, {r})"
+log.ai.emplace:0 "Enemy {name} emplaces guns"
+log.ai.limber:0 "Enemy {name} limbers guns"
+log.ai.shocked_hold:0 "Enemy {name} is shocked — holds position"
+log.ai.assault:0 "Enemy {name} → assault {target} (registered)"
+log.ai.fire_mission:0 "Enemy {name} → fire mission on ({q}, {r}) (registered)"
+
+# ── Victory / hour ──
+log.victory:0 "VICTORY! Enemy formation destroyed."
+log.defeat:0 "Defeat — your force has been destroyed."
+log.draw:0 "Mutual annihilation — the battle ends without a winner."
+log.hoi4_end.victory:0 "The HOI4 battle has ended — every enemy division has routed. Victory!"
+log.hoi4_end.defeat:0 "The HOI4 battle has ended — our divisions have routed. Defeat."
+log.hour.complete:0 "Hour {n} complete — click [Sync] to report results"
+
+# ── Mid-battle roster (DESIGN §8.2) ──
+log.roster.joined:0 "Reinforcements — {name} ({tag}) enters from the {dir}"
+log.roster.joined_unknown_dir:0 "Reinforcements — {name} ({tag}) joins the battle"
+log.roster.left:0 "{name} ({tag}) has left the battle"
+
+# ── Flag capture (DESIGN §6.11) ──
+log.flag.falling:0 "A key point is falling — contest the objective zone!"
+log.flag.collapse:0 "The key point has fallen — the defender's org is zeroed ({n} battalions, strength intact)!"
+
+# ── Notice-bar flashes ──
+notice.turn.yours:0 "Turn {n} — your move"
+notice.turn.enemy:0 "Enemy turn — thinking…"
+notice.battle_started:0 "Battle started — attacker moves first"
+notice.hour_complete:0 "Hour {n} complete — click [Sync to HOI4] in the right panel"
+notice.battle_resolved:0 "Battle resolved — click [Apply & Exit]"
+notice.flag.falling:0 "A KEY POINT IS FALLING — hold the objective or lose the battle!"
+notice.flag.collapse:0 "KEY POINT LOST — the defender surrenders: VICTORY!"
+notice.roster.changed:0 "OOB updated — {joined} division(s) reinforced, {left} left the battle"
+notice.desync.mode:0 "DESYNCED from HOI4 — sync disabled; results are no longer written back (exits clean up only)"
+
+# ── Floater popups (egui painter texts over the board) ──
+floater.org_damage:0 "-{n} org"
+floater.str_damage:0 "-{n} str"
+floater.shocked:0 "Shocked!"
+floater.contact:0 "Contact!"
+floater.intercepted:0 "Intercepted!"
+floater.congested:0 "Congested"
+floater.target_lost:0 "Target lost"
+floater.command_lost:0 "Command lost -{n} org"
+
+# ── Division orders (DESIGN §7.4) ──
+log.div.ordered:0 "{div} orders: {kind}"
+log.div.plan:0 "{div} division plan: {move} move, {assault} assault, {fire} fire, {emplim} emplace/limber"
+log.div.cancelled:0 "{div} division order cancelled"
+log.div.seized:0 "{div} seized the objective — holding it now"
+log.div.lost:0 "{div} objective lost — attacking again"
+log.div.engage_done:0 "{div} target destroyed or routed"
+log.div.no_units:0 "{div} has no units left — order complete"
+log.div.reject_hex:0 "{div}: impassable target"
+reject.impassable:0 "Impassable"
+log.oob.left:0 "{name} lingered out of bounds and left the battle (org 0, strength intact)"
+
+# ── Allied AI contingents (DESIGN §7.5) ──
+log.ally.plan:0 "Allies {tag} plan: {move} move, {assault} assault, {fire} fire, {emplim} emplace/limber"
+log.ally.deployed:0 "Allies {tag} deployed by their own staff planning"

@@ -1,0 +1,8 @@
+# Forward Command — decision category (DESIGN §10.1).
+# The category picture shows when a <category>_desc localisation key
+# exists; both sprites are vanilla-reused (zero new art).
+forward_command_decisions = {
+	icon = border_war
+	picture = GFX_decision_cat_picture_generic_border_conflicts
+	visible = { always = yes }
+}

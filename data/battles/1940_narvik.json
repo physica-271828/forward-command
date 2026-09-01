@@ -1,0 +1,578 @@
+{
+  "name": "1940_narvik",
+  "title": "Battle of Narvik, April-June 1940",
+  "notes": "Narvik, 13 Apr - 8 Jun 1940. The Allies' first land victory of the war. Roster at battalion level, names verified from en/fr/de/no/pl Wikipedia + Derry's official British history (Campaign in Norway, App. B + Ch. XIII). Attacker = the Allied Expeditionary Force under Gen. Be'thouart: 24th Guards Bde (1 Scots Gds / 1 Irish Gds / 2 SWB — present at Narvik Apr-16 May, then to the Bodo front; kept for the campaign-length battle), the 27e Demi-Brigade de Chasseurs Alpins (6e/12e/14e BCA — NOT the 27e BCA, which fought at the Ailette in France), the 13e Demi-Brigade de Legion Etrangere (1er/2e bns only, no III in 1940), the Polish Podhale Highland Bde (SBSP, FOUR battalions I-IV in two half-brigades + 25mm wz.34 AT guns — 'never seen mountains' per British reports, so standard mountaineer stats), and Fleischer's 6. Divisjon (II/IR 14, Lv.bat./IR 14, II/IR 15 — the 28 May assault battalion, I/IR 16, II/IR 16, and the elite Alta bataljon; I/IR 12 destroyed at Gratangen 25 Apr and I/IR 13 at Bjornfjell 16 Apr are pre-battle losses, I/IR 14 & I/IR 15 fought on Helgeland/Salten off-map). Supporting arms: 342e CACC (Hotchkiss H-39 tank company, ~10 tanks, 2 in the final assault), 31e Cie e'claireurs-skieurs ski company, 2e GAC 75mm batteries, 203rd Fd Bty (12x 25-pdr), Bergartilleribataljon nr. 3 + 10. motoriserte batteri, French AT coy, 404e RADCA AA. Defender = Gruppe Dietl (Gen. Dietl, 3. Gebirgs-Division, ~5,600 peak): the GJR 139 S-Staffel (~2,000, reinforced with Geb.Aufkl.112 elements), the SEVEN named Marine-Regiment Berger battalions of destroyer crews (Holtorf/Thiele/Zenker/Arnim/Erdmenger/Freytag-Loringhoven/Kothe, ~2,600, org 30 — ad-hoc infantry from the 10 sunk destroyers), FJR 1 paratroop company + GJR 138 companies air-landed via the frozen lakes (14 May-end, ~1,100 arrivals), I./GAR 112 mountain guns, and beached naval guns (2x 10.5cm FlaK + 11 light AA, sailor-manned). GJR 137 (2. Gebirgs-Division) did NOT reach Narvik during the battle (arrived symbolically 13 June) and is omitted. No German tanks/AT at Narvik. Attack axis = W (fjord side, province 3034): the Allies came from the Ofotfjord side (Harstad/Ballangen base area) against the town, while the German line of retreat ran east along the railway toward Bjornfjell/Sweden. Single W strip keeps the battle near the VP city — NE,SE strips (Bjerkvik side + railway corridor) would leave the city 50+ hexes from the contact line and freeze an AI-vs-AI battle at first contact (mountain standoff). Terrain: full mountain (3x move, -50% attack, LOS blocked) + fjord coastline; small-forces battle (real scale ~5k GER vs ~25k Allied). Stats = 1939 calibration; Allied bns full org 60, Norwegian mobilized org 50 (Alta elite 60, Lv. territorial 45), German naval personnel under-strength org 30, company-scale units (342e CACC/FJR 1 coy/GJR 138 coy/31e SES/AT/AA) org-discounted.",
+  "province": 192,
+  "dirs": [
+    "W"
+  ],
+  "player_side": "attacker",
+  "enemy_tactic": "elastic_defense",
+  "attacker": {
+    "tag": "ENG",
+    "division": "Allied Expeditionary Force (Narvik)",
+    "divisions": [
+      { "name": "27e Demi-Brigade de Chasseurs Alpins", "tag": "FRA" },
+      { "name": "13e Demi-Brigade de Legion Etrangere", "tag": "FRA" },
+      { "name": "CEFS Supports", "tag": "FRA" },
+      { "name": "24th Guards Brigade", "tag": "ENG", "control": "ai", "tactic": "assault" },
+      { "name": "Brygada Podhalanska (SBSP)", "tag": "POL", "control": "ai", "tactic": "assault" },
+      { "name": "6. Divisjon (Fleischer)", "tag": "NOR", "control": "ai", "tactic": "assault" }
+    ],
+    "units": [
+      {
+        "name": "1.ScotsGds",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 24.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "24th Guards Brigade"
+      },
+      {
+        "name": "2.SWB",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 24.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "24th Guards Brigade"
+      },
+      {
+        "name": "1.IrishGds",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 24.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "24th Guards Brigade"
+      },
+      {
+        "name": "6e BCA",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "27e Demi-Brigade de Chasseurs Alpins"
+      },
+      {
+        "name": "12e BCA",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "27e Demi-Brigade de Chasseurs Alpins"
+      },
+      {
+        "name": "14e BCA",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "27e Demi-Brigade de Chasseurs Alpins"
+      },
+      {
+        "name": "1er/13e DBMLE",
+        "type": "marine",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 24.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "supports": [
+          {
+            "kind": "engineer",
+            "name": "1.Genie"
+          }
+        ],
+        "division": "13e Demi-Brigade de Legion Etrangere"
+      },
+      {
+        "name": "2e/13e DBMLE",
+        "type": "marine",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 24.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "13e Demi-Brigade de Legion Etrangere"
+      },
+      {
+        "name": "I.Podhale",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "Brygada Podhalanska (SBSP)"
+      },
+      {
+        "name": "II.Podhale",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "Brygada Podhalanska (SBSP)"
+      },
+      {
+        "name": "III.Podhale",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "Brygada Podhalanska (SBSP)"
+      },
+      {
+        "name": "IV.Podhale",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "Brygada Podhalanska (SBSP)"
+      },
+      {
+        "name": "II./IR 14",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 50,
+        "division": "6. Divisjon (Fleischer)"
+      },
+      {
+        "name": "Lv.bat./IR 14",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 45,
+        "division": "6. Divisjon (Fleischer)"
+      },
+      {
+        "name": "II./IR 15",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 50,
+        "division": "6. Divisjon (Fleischer)"
+      },
+      {
+        "name": "I./IR 16",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 50,
+        "division": "6. Divisjon (Fleischer)"
+      },
+      {
+        "name": "II./IR 16",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 50,
+        "division": "6. Divisjon (Fleischer)"
+      },
+      {
+        "name": "Alta bataljon",
+        "type": "infantry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 24.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 60,
+        "division": "6. Divisjon (Fleischer)"
+      },
+      {
+        "name": "1.FrArt",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "division": "CEFS Supports"
+      },
+      {
+        "name": "2.FrArt",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "division": "CEFS Supports"
+      },
+      {
+        "name": "203.Fd Bty",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "division": "24th Guards Brigade"
+      },
+      {
+        "name": "1.NorArt",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "division": "6. Divisjon (Fleischer)"
+      },
+      {
+        "name": "10.MotBtr",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "chassis": "truck_towed",
+        "division": "6. Divisjon (Fleischer)"
+      },
+      {
+        "name": "342e CACC (H-39)",
+        "type": "light_armor",
+        "soft": 13.0,
+        "hard": 4.0,
+        "defense": 4.0,
+        "breakthrough": 26.0,
+        "armor": 10.0,
+        "piercing": 10.0,
+        "hardness": 0.8,
+        "division": "CEFS Supports"
+      },
+      {
+        "name": "31e SES",
+        "type": "cavalry",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 40,
+        "supports": [
+          {
+            "kind": "recon",
+            "name": "Ski Scout"
+          }
+        ],
+        "division": "CEFS Supports"
+      },
+      {
+        "name": "1.AT",
+        "type": "anti_tank",
+        "soft": 4.0,
+        "hard": 20.0,
+        "defense": 4.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 60.0,
+        "hardness": 0.0,
+        "org": 25,
+        "division": "CEFS Supports"
+      },
+      {
+        "name": "1.AA",
+        "type": "anti_air",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 8.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "org": 25,
+        "division": "CEFS Supports"
+      }
+    ]
+  },
+  "defender": {
+    "tag": "GER",
+    "division": "Gruppe Dietl (Narvik)",
+    "units": [
+      {
+        "name": "I./GJR 139",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "supports": [
+          {
+            "kind": "engineer",
+            "name": "1.GebPio"
+          }
+        ],
+        "division": "139. Gebirgs-Jaeger-Regiment"
+      },
+      {
+        "name": "II./GJR 139",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "supports": [
+          {
+            "kind": "recon",
+            "name": "Geb.Aufkl.112"
+          }
+        ],
+        "division": "139. Gebirgs-Jaeger-Regiment"
+      },
+      {
+        "name": "III./GJR 139",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "division": "139. Gebirgs-Jaeger-Regiment"
+      },
+      {
+        "name": "Marine-Btl. Holtorf",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "Marine-Regiment Berger"
+      },
+      {
+        "name": "Marine-Btl. Thiele",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "Marine-Regiment Berger"
+      },
+      {
+        "name": "Marine-Btl. Zenker",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "Marine-Regiment Berger"
+      },
+      {
+        "name": "Marine-Btl. Arnim",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "Marine-Regiment Berger"
+      },
+      {
+        "name": "Marine-Btl. Erdmenger",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "Marine-Regiment Berger"
+      },
+      {
+        "name": "Marine-Btl. Freytag-L.",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "Marine-Regiment Berger"
+      },
+      {
+        "name": "Marine-Btl. Kothe",
+        "type": "infantry",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 16.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 30,
+        "division": "Marine-Regiment Berger"
+      },
+      {
+        "name": "1./FJR 1",
+        "type": "paratrooper",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 40,
+        "division": "7. Flieger-Division (FJR 1)"
+      },
+      {
+        "name": "1./GJR 138",
+        "type": "mountaineer",
+        "soft": 6.0,
+        "hard": 1.0,
+        "defense": 22.0,
+        "breakthrough": 3.0,
+        "armor": 0.0,
+        "piercing": 4.0,
+        "hardness": 0.0,
+        "org": 35,
+        "division": "GJR 138 (air-landed)"
+      },
+      {
+        "name": "I./GAR 112",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "division": "Gebirgs-Artillerie-Regiment 112"
+      },
+      {
+        "name": "1.NavyGun",
+        "type": "artillery",
+        "soft": 25.0,
+        "hard": 2.0,
+        "defense": 10.0,
+        "breakthrough": 6.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "division": "Marine-Artillerie Narvik"
+      },
+      {
+        "name": "1.Schiffs-Flak",
+        "type": "anti_air",
+        "soft": 4.0,
+        "hard": 1.0,
+        "defense": 8.0,
+        "breakthrough": 2.0,
+        "armor": 0.0,
+        "piercing": 5.0,
+        "hardness": 0.0,
+        "division": "Marine-Artillerie Narvik"
+      }
+    ]
+  }
+}

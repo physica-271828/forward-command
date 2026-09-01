@@ -1,0 +1,76 @@
+# Forward Command — sync/abort/complete events (DESIGN §10.3).
+# All events are is_triggered_only: without it they are random-fire
+# eligible on the daily pulse (vanilla: 6586 uses).
+
+add_namespace = tac_sync
+add_namespace = tac_complete
+add_namespace = tac_abort
+add_namespace = tac_quiet
+
+# Hourly sync acknowledgement (fired by d_tac_sync_hourly).
+country_event = {
+	id = tac_sync.1
+	hidden = yes
+	is_triggered_only = yes
+
+	immediate = {
+		log = "{\"type\":\"tac_state\",\"hour\":0,\"phase\":\"synced\"}"
+	}
+}
+
+# Battle complete (fired by d_tac_end_battle). Constant receipt — console-
+# set variables are unreadable by mod scripts, so no result data rides the
+# event. Visible popup stating the battle ended.
+country_event = {
+	id = tac_complete.99
+	title = tac_complete.99.t
+	desc = tac_complete.99.d
+	is_triggered_only = yes
+
+	immediate = {
+		log = "{\"type\":\"tac_complete\"}"
+	}
+
+	option = {
+		name = tac_complete.99.o
+	}
+}
+
+# Abort — fired by the Force Exit decision, or injected on the picker
+# cancel. Shared cleanup + visible popup.
+country_event = {
+	id = tac_abort.1
+	title = tac_abort.1.t
+	desc = tac_abort.1.d
+	is_triggered_only = yes
+
+	immediate = {
+		d_tac_clear_tactical = yes
+		log = "{\"type\":\"tac_abort\"}"
+	}
+
+	option = {
+		name = tac_abort.1.o
+	}
+}
+
+# Quiet-state notify: the player picked a state that currently holds NO
+# running battle — the external program injects `event tac_quiet.1 <tag>`.
+# The popup explains; the shared cleanup resets every map decision. Logs
+# tac_abort so the external listener reads it as a uniform "tactical mode
+# off" signal.
+country_event = {
+	id = tac_quiet.1
+	title = tac_quiet.1.t
+	desc = tac_quiet.1.d
+	is_triggered_only = yes
+
+	immediate = {
+		d_tac_clear_tactical = yes
+		log = "{\"type\":\"tac_abort\"}"
+	}
+
+	option = {
+		name = tac_quiet.1.o
+	}
+}

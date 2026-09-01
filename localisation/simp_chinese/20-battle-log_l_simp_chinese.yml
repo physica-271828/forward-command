@@ -1,0 +1,145 @@
+l_simp_chinese:
+# 战斗日志消息模板（GameController.log 行）。占位符：{name}、{n}、{q}、{r} 等。
+
+# ── 部署 / 指挥反馈 ──
+log.checkpoint.restarted:0 "战斗已重新开始（存档点：战斗开始）"
+log.checkpoint.rollback:0 "已回滚至上次同步点"
+log.deploy.cannot_start:0 "无法开始：{n} 个单位尚未部署 — 请从战斗序列中部署，或点击「自动部署」"
+notice.deploy.undeployed:0 "{n} 个单位尚未部署 — 请先完成部署"
+log.deploy.cannot_start_error:0 "无法开始：{err}"
+log.deploy.battle_started:0 "战斗开始 — 进攻方先行动（§6.12）"
+log.deploy.auto_deploy:0 "自动部署：参谋部已部署 {n} 个单位"
+notice.deploy.auto_deployed:0 "已自动部署 {n} 个单位"
+log.deploy.auto_deploy_empty:0 "自动部署：没有待部署的单位"
+oob.unattached:0 "（未配属）"
+oob.all:0 "全部"
+log.deploy.recall:0 "召回：{label} 的 {n} 个营已返回战斗序列"
+notice.deploy.recalled:0 "{n} 个营已召回战斗序列"
+log.deploy.impassable:0 "无法部署在不可通行/水域地形"
+log.deploy.sector_empty:0 "区域为空 — 矩形内没有可部署的区域格"
+log.deploy.sector_too_large:0 "区域过大（{n} 格）— 请将矩形限制在部署区内"
+log.deploy.sector_placed:0 "{label}：{n} 个营已部署进该区域"
+log.deploy.sector_no_room:0 "{label}：区域内已无空位（还有 {waiting} 个营等待部署）"
+notice.deploy.ally_sector_set:0 "{div}：部署建议已记录 — 盟军参谋部将在开战时部署"
+
+# ── 同步 / 战斗结束 ──
+log.sync.losses:0 "同步第 {hour} 小时 → 损失：我方 组织度 {p_org} 兵力 {p_str} | 敌方 组织度 {e_org} 兵力 {e_str}"
+log.sync.summary:0 "已上报 HOI4（我方损失）— 组织度 {p_org} | 兵力 {p_str}\n敌方损失 — 组织度 {e_org} | 兵力 {e_str}"
+log.sync.rejected:0 "同步被会话拒绝：{err}"
+log.sync.applied:0 "战斗结果已应用，可以关闭窗口。"
+log.sync.stalled:0 "同步未确认 — HOI4 时钟未推进，等待你的抉择"
+log.sync.stall_retry:0 "重新同步成功 — HOI4 时钟已推进"
+log.sync.stall_cancel:0 "已取消同步确认 — 战斗继续（HOI4 时钟滞后）"
+log.desync.hour:0 "无法同步 — HOI4 时钟与本场战斗不再一致（应为 {expected}，读数 {found}）；请选择：结束战斗或不同步继续"
+log.desync.tag:0 "无法同步 — 存档主控国家为 {found}，本场战斗属于 {expected}；请选择：结束战斗或不同步继续"
+log.desync.entered:0 "不同步模式 — 不再走钟 / 回写伤害 / 名册同步；此后一切退出只清理 HOI4 冻结状态"
+log.desync.ended:0 "战术战斗已结束（去同步护栏）— 已发送 HOI4 清理，战果作废"
+log.desync.cleanup_exit:0 "不同步战斗已关闭 — 仅清理 HOI4，未回写任何战果"
+log.end.rejected:0 "结束战斗被会话拒绝：{err}"
+
+# ── 命令 / 行动 ──
+log.order.stand_up:0 "{name} 起立 — 放弃掩护"
+log.order.take_cover:0 "{name} 进入掩护（防御 +25%）"
+log.order.emplace:0 "{name} 架设火炮（消耗本回合行动）"
+log.order.limber:0 "{name} 撤收火炮（消耗本回合行动）"
+log.order.retreat:0 "{name} 开始边战边撤"
+log.order.stand_by:0 "{name} 待命 — 命令已取消"
+log.order.emplaced_move:0 "{name} 处于架设状态 — 请先撤收"
+log.order.already_acted:0 "{name} 本回合已行动过"
+log.order.attack_superseded:0 "{name} — 先前的攻击命令已取消"
+log.move.eta:0 "{name} → ({q}, {r}) — 预计 {n} 回合到达"
+log.order.desc_assault:0 "突击 {target}"
+log.order.desc_direct_fire:0 "直瞄射击 {target}"
+log.order.desc_fire_mission:0 "炮击 ({q}, {r})"
+log.order.registered:0 "{name} → {desc}（已登记）"
+log.order.rejected:0 "{name}：{reason}"
+
+# ── 拒绝原因（战斗日志与橙色浮动文字共用） ──
+reject.shocked:0 "震慑中 — 无法攻击"
+reject.already_acted:0 "已行动过"
+reject.emplace_first:0 "请先架设"
+reject.too_close:0 "距离太近"
+reject.out_of_range:0 "超出射程"
+reject.holding:0 "坚守姿态中"
+reject.emplaced:0 "已架设 — 请先撤收"
+reject.cannot_assault:0 "无法突击"
+
+# ── 战报 ──
+log.combat.target_lost:0 "{name}：目标丢失 — 命令失效"
+log.combat.exchange:0 "{attacker} vs {defender}：组织度 -{org} / 兵力 -{str}{suffixes}"
+log.combat.friendly_fire:0 " — 误伤！"
+log.combat.broken:0 " — 崩溃！"
+log.combat.surrenders:0 " — 投降！"
+log.combat.annihilated:0 " — 全歼！"
+log.combat.counter:0 "  - 反击：{name} 组织度 -{org} / 兵力 -{str}"
+log.combat.hq_destroyed:0 "{name} 指挥部被摧毁 — 全师指挥体系崩溃！"
+
+# ── 移动事件 ──
+log.move.contact:0 "{name} 与敌接触 — 行军停止"
+log.move.intercepted:0 "{name} 被 {enemy} 拦截 — 双方停止"
+log.move.arrived:0 "{name} 抵达目的地"
+log.move.blocked:0 "{name} 被堵 — 等待中"
+
+# ── 回合 / 敌方回合 ──
+log.turn.end:0 "第 {n} 回合结束 — 敌方思考中…"
+log.ai.plan:0 "AI 计划：{move} 移动、{assault} 突击、{fire} 射击、{emplim} 架设/撤收、{hold} 待命"
+log.ai.move:0 "敌军 {name} → 移动至 ({q}, {r})"
+log.ai.emplace:0 "敌军 {name} 架设火炮"
+log.ai.limber:0 "敌军 {name} 撤收火炮"
+log.ai.shocked_hold:0 "敌军 {name} 受到震慑 — 原地坚守"
+log.ai.assault:0 "敌军 {name} → 突击 {target}（已登记）"
+log.ai.fire_mission:0 "敌军 {name} → 炮击 ({q}, {r})（已登记）"
+
+# ── 胜负 / 小时 ──
+log.victory:0 "胜利！敌方部队已被全歼。"
+log.defeat:0 "战败 — 你的部队已被全歼。"
+log.draw:0 "双方同归于尽 — 战斗以平局告终。"
+log.hoi4_end.victory:0 "HOI4 侧战斗已结束 — 敌军全师溃退。胜利！"
+log.hoi4_end.defeat:0 "HOI4 侧战斗已结束 — 我方全师溃退。战败。"
+log.hour.complete:0 "第 {n} 小时结束 — 点击「同步」上报战果"
+
+# ── 战中战斗序列（DESIGN §8.2）──
+log.roster.joined:0 "增援抵达 — {name}（{tag}）自 {dir} 进入战场"
+log.roster.joined_unknown_dir:0 "增援抵达 — {name}（{tag}）加入战斗"
+log.roster.left:0 "{name}（{tag}）已脱离战斗"
+
+# ── 占点（DESIGN §6.11）──
+log.flag.falling:0 "关键点正在陷落 — 夺回目标区！"
+log.flag.collapse:0 "关键点失守 — 守方组织度清零（{n} 个营，兵力不受影响）！"
+
+# ── 顶部通知条 ──
+notice.turn.yours:0 "第 {n} 回合 — 轮到你了"
+notice.turn.enemy:0 "敌方回合 — 思考中…"
+notice.battle_started:0 "战斗开始 — 进攻方先行动"
+notice.hour_complete:0 "第 {n} 小时结束 — 点击右侧面板的「同步到 HOI4」"
+notice.battle_resolved:0 "战斗已结束 — 点击「应用并退出」"
+notice.flag.falling:0 "关键点正在陷落 — 守住目标区，否则将输掉这场战斗！"
+notice.flag.collapse:0 "关键点失守 — 守军投降：胜利！"
+notice.roster.changed:0 "战斗序列更新 — {joined} 个师增援，{left} 个师离场"
+notice.desync.mode:0 "已与 HOI4 去同步 — 同步已禁用，战果不再回写（退出时仅清理）"
+
+# ── 浮动文字（棋盘上方弹出） ──
+floater.org_damage:0 "-{n} 组织度"
+floater.str_damage:0 "-{n} 兵力"
+floater.shocked:0 "震慑！"
+floater.contact:0 "接触！"
+floater.intercepted:0 "被拦截！"
+floater.congested:0 "拥堵"
+floater.target_lost:0 "目标丢失"
+floater.command_lost:0 "失去指挥 -{n} 组织度"
+
+# ── 师级命令 (DESIGN §7.4) ──
+log.div.ordered:0 "{div} 接令：{kind}"
+log.div.plan:0 "{div} 师令计划：{move} 移动、{assault} 突击、{fire} 炮击、{emplim} 架设/撤收"
+log.div.cancelled:0 "{div} 师令已取消"
+log.div.seized:0 "{div} 已占领目标点 — 转入固守"
+log.div.lost:0 "{div} 目标点被夺回 — 重新进攻"
+log.div.engage_done:0 "{div} 目标已被消灭或击退"
+log.div.no_units:0 "{div} 已无兵力可调度 — 师令结束"
+log.div.reject_hex:0 "{div}：目标不可通行"
+reject.impassable:0 "不可通行"
+log.oob.left:0 "{name} 滞留界外，已脱离战斗（组织归零，兵力完整）"
+
+# ── 盟军 AI 部队 (DESIGN §7.5) ──
+log.ally.plan:0 "盟军 {tag} 计划：{move} 移动、{assault} 突击、{fire} 炮击、{emplim} 架设/撤收"
+log.ally.deployed:0 "盟军 {tag} 已由其参谋部完成部署"

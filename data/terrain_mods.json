@@ -1,0 +1,125 @@
+{
+  "unknown": {
+    "movement_cost": 0,
+    "combat_width": 0,
+    "combat_support_width": 0,
+    "attack_mod": 0.0,
+    "defense_mod": 0.0
+  },
+  "ocean": {
+    "movement_cost": 1.0,
+    "combat_width": 0,
+    "combat_support_width": 0,
+    "attack_mod": 0.0,
+    "defense_mod": 0.0
+  },
+  "lakes": {
+    "movement_cost": 1.0,
+    "combat_width": 0,
+    "combat_support_width": 0,
+    "attack_mod": 0.0,
+    "defense_mod": 0.0
+  },
+  "forest": {
+    "movement_cost": 1.5,
+    "combat_width": 60,
+    "combat_support_width": 30,
+    "attack_mod": -0.15,
+    "defense_mod": 0.0,
+    "enemy_air_sup_bonus": -0.1,
+    "truck_attrition_factor": 0.2,
+    "supply_flow_penalty_factor": 0.08
+  },
+  "hills": {
+    "movement_cost": 1.5,
+    "combat_width": 70,
+    "combat_support_width": 35,
+    "attack_mod": -0.25,
+    "defense_mod": 0.0,
+    "enemy_air_sup_bonus": -0.05,
+    "truck_attrition_factor": 0.2,
+    "supply_flow_penalty_factor": 0.1
+  },
+  "mountain": {
+    "movement_cost": 2.0,
+    "combat_width": 50,
+    "combat_support_width": 25,
+    "attack_mod": -0.5,
+    "defense_mod": 0.0,
+    "enemy_air_sup_bonus": -0.1,
+    "attrition": 0.3,
+    "truck_attrition_factor": 1.0,
+    "supply_flow_penalty_factor": 0.12
+  },
+  "plains": {
+    "movement_cost": 1.0,
+    "combat_width": 70,
+    "combat_support_width": 35,
+    "attack_mod": 0.0,
+    "defense_mod": 0.0
+  },
+  "urban": {
+    "movement_cost": 1.2,
+    "combat_width": 80,
+    "combat_support_width": 40,
+    "attack_mod": -0.3,
+    "defense_mod": 0.0,
+    "enemy_air_sup_bonus": -0.5,
+    "supply_flow_penalty_factor": -0.2
+  },
+  "jungle": {
+    "movement_cost": 1.5,
+    "combat_width": 60,
+    "combat_support_width": 30,
+    "attack_mod": -0.3,
+    "defense_mod": 0.0,
+    "enemy_air_sup_bonus": -0.25,
+    "attrition": 0.2,
+    "truck_attrition_factor": 3.0,
+    "supply_flow_penalty_factor": 0.16,
+    "sickness_chance": 1.0
+  },
+  "marsh": {
+    "movement_cost": 2.0,
+    "combat_width": 50,
+    "combat_support_width": 25,
+    "attack_mod": -0.4,
+    "defense_mod": 0.0,
+    "attrition": 0.35,
+    "truck_attrition_factor": 4.0,
+    "supply_flow_penalty_factor": 0.16,
+    "sickness_chance": 1.0
+  },
+  "desert": {
+    "movement_cost": 1.05,
+    "combat_width": 70,
+    "combat_support_width": 35,
+    "attack_mod": 0.0,
+    "defense_mod": 0.0,
+    "attrition": 0.15,
+    "truck_attrition_factor": 0.5,
+    "supply_flow_penalty_factor": 0.14,
+    "sickness_chance": 1.0
+  },
+  "water_fjords": {
+    "movement_cost": 1.0,
+    "combat_width": 0,
+    "combat_support_width": 0,
+    "attack_mod": 0.0,
+    "defense_mod": 0.0
+  },
+  "water_shallow_sea": {
+    "movement_cost": 1.0,
+    "combat_width": 0,
+    "combat_support_width": 0,
+    "attack_mod": 0.0,
+    "defense_mod": 0.0
+  },
+  "water_deep_ocean": {
+    "movement_cost": 1.0,
+    "combat_width": 0,
+    "combat_support_width": 0,
+    "attack_mod": 0.0,
+    "defense_mod": 0.0
+  }
+}

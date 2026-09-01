@@ -1,0 +1,10 @@
+# Battle termination (DESIGN §10.2): run the shared tactical-mode cleanup,
+# then show the completion popup and log the battle-ended line.
+# Pure cleanup — the final hour's damage rides the injection batch's own
+# effect lines (never this effect), and no result data rides the event
+# (console-set variables are unreadable by mod scripts).
+d_tac_end_battle = {
+	d_tac_clear_tactical = yes
+	country_event = { id = tac_complete.99 hours = 0 }
+	log = "{\"type\":\"tac_battle_ended\"}"
+}

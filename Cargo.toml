@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    "crates/tactical-core",
+    "crates/tactical-combat",
+    "crates/tactical-sync",
+    "crates/tactical-map",
+    "crates/tactical-ai",
+    "crates/tactical-save",
+    "crates/tactical-inject",
+    "crates/tactical-listen",
+    "crates/tactical-locale",
+    "crates/tactical3d-render",
+    "crates/tactical3d-bin",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+# Optimize DEPENDENCIES in dev builds too, so
+# the debug exe is playable (wgpu/bevy/egui were the lag, not our crates).
+# Workspace members stay at opt-level 0, so incremental dev/test compile
+# times are unchanged; the one-time cost is a full deps rebuild (~10 min).
+[profile.dev.package."*"]
+opt-level = 2

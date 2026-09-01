@@ -1,0 +1,3438 @@
+{
+  "land": {
+    "path": "folders\\doctrine_folders.txt",
+    "nodes": {
+      "land": {
+        "color_frame": 1.0
+      }
+    }
+  },
+  "naval": {
+    "path": "folders\\doctrine_folders.txt",
+    "nodes": {
+      "naval": {
+        "color_frame": 2.0
+      }
+    }
+  },
+  "air": {
+    "path": "folders\\doctrine_folders.txt",
+    "nodes": {
+      "air": {
+        "color_frame": 3.0
+      }
+    }
+  },
+  "special_forces": {
+    "path": "folders\\doctrine_folders.txt",
+    "nodes": {
+      "special_forces": {
+        "color_frame": 4.0
+      }
+    }
+  },
+  "new_strategic_destruction": {
+    "path": "grand_doctrines\\air_grand_doctrines.txt",
+    "nodes": {
+      "new_strategic_destruction": {
+        "xp_cost": 100.0,
+        "air_escort_efficiency": 0.25,
+        "air_strategic_bomber_bombing_factor": 0.2,
+        "army_bonus_air_superiority_factor": 0.15,
+        "air_nav_efficiency": 0.15
+      }
+    }
+  },
+  "category_heavy_fighter": {
+    "path": "grand_doctrines\\air_grand_doctrines.txt",
+    "nodes": {
+      "category_heavy_fighter": {
+        "air_agility": 0.1
+      }
+    }
+  },
+  "new_battlefield_support": {
+    "path": "grand_doctrines\\air_grand_doctrines.txt",
+    "nodes": {
+      "new_battlefield_support": {
+        "xp_cost": 100.0,
+        "air_superiority_detect_factor": 0.15,
+        "air_cas_efficiency": 0.2,
+        "air_cas_present_factor": 0.2
+      }
+    }
+  },
+  "tac_bomber": {
+    "path": "grand_doctrines\\air_grand_doctrines.txt",
+    "nodes": {
+      "tac_bomber": {
+        "air_bombing": 0.1
+      }
+    }
+  },
+  "new_operational_integrity": {
+    "path": "grand_doctrines\\air_grand_doctrines.txt",
+    "nodes": {
+      "new_operational_integrity": {
+        "xp_cost": 100.0,
+        "air_interception_detect_factor": 0.2,
+        "air_superiority_efficiency": 0.1,
+        "air_ace_generation_chance_factor": 0.1,
+        "army_bonus_air_superiority_factor": 0.1
+      }
+    }
+  },
+  "category_tac_bomber": {
+    "path": "grand_doctrines\\air_grand_doctrines.txt",
+    "nodes": {
+      "category_tac_bomber": {
+        "air_bombing": 0.2
+      }
+    }
+  },
+  "new_mobile_warfare": {
+    "path": "grand_doctrines\\land_grand_doctrines.txt",
+    "nodes": {
+      "new_mobile_warfare": {
+        "xp_cost": 100.0,
+        "planning_speed": 0.1,
+        "army_speed_factor": 0.1,
+        "enable_tactics": [
+          "tactic_overwhelming_fire"
+        ],
+        "org_loss_at_low_org_factor": -0.1
+      }
+    }
+  },
+  "superior_firepower": {
+    "path": "grand_doctrines\\land_grand_doctrines.txt",
+    "nodes": {
+      "superior_firepower": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_barrage"
+        ],
+        "category_modifiers": {
+          "line_artillery": {
+            "soft_attack": 0.1
+          },
+          "support_battalions": {
+            "max_organisation": 10.0
+          }
+        },
+        "additional_brigade_column_size": 1.0,
+        "planning_decay_rate_factor": -0.1
+      }
+    }
+  },
+  "category_army": {
+    "path": "grand_doctrines\\land_grand_doctrines.txt",
+    "nodes": {
+      "category_army": {
+        "default_morale": 0.1
+      }
+    }
+  },
+  "category_regimental_support_battalions": {
+    "path": "grand_doctrines\\land_grand_doctrines.txt",
+    "nodes": {
+      "category_regimental_support_battalions": {
+        "soft_attack": 0.05,
+        "hard_attack": 0.05
+      }
+    }
+  },
+  "grand_battleplan": {
+    "path": "grand_doctrines\\land_grand_doctrines.txt",
+    "nodes": {
+      "grand_battleplan": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_overwhelming_fire"
+        ],
+        "max_planning": 0.1,
+        "command_power_gain": 0.25,
+        "coordination_bonus": 0.1,
+        "category_modifiers": {
+          "regimental_support_battalions": {
+            "defense": 0.1,
+            "entrenchment": 0.2
+          }
+        }
+      }
+    }
+  },
+  "mass_assault": {
+    "path": "grand_doctrines\\land_grand_doctrines.txt",
+    "nodes": {
+      "mass_assault": {
+        "xp_cost": 100.0,
+        "no_supply_grace": 48.0,
+        "out_of_supply_factor": -0.05,
+        "enable_tactics": [
+          "tactic_elastic_defense"
+        ],
+        "minimum_training_level": -0.05
+      }
+    }
+  },
+  "new_fleet_in_being": {
+    "path": "grand_doctrines\\sea_grand_doctrines.txt",
+    "nodes": {
+      "new_fleet_in_being": {
+        "xp_cost": 100.0,
+        "navy_capital_ship_defence_factor": 0.1,
+        "navy_anti_air_attack_factor": 0.1,
+        "convoy_escort_efficiency": 0.15
+      }
+    }
+  },
+  "new_convoy_raiding": {
+    "path": "grand_doctrines\\sea_grand_doctrines.txt",
+    "nodes": {
+      "new_convoy_raiding": {
+        "xp_cost": 100.0,
+        "convoy_raiding_efficiency_factor": 0.15,
+        "strike_force_movement_org_loss": -0.15,
+        "naval_detection": 0.1
+      }
+    }
+  },
+  "new_base_strike": {
+    "path": "grand_doctrines\\sea_grand_doctrines.txt",
+    "nodes": {
+      "new_base_strike": {
+        "xp_cost": 100.0,
+        "port_strike": 0.4,
+        "convoy_escort_efficiency": 0.15
+      }
+    }
+  },
+  "special_forces_quantity": {
+    "path": "grand_doctrines\\special_forces_grand_doctrines.txt",
+    "nodes": {
+      "special_forces_quantity": {
+        "xp_cost": 60.0,
+        "special_forces_cap": 0.04,
+        "special_forces_training_time_factor": -0.2,
+        "category_modifiers": {
+          "special_forces": {
+            "max_organisation": 5.0
+          }
+        }
+      }
+    }
+  },
+  "special_forces_quality": {
+    "path": "grand_doctrines\\special_forces_grand_doctrines.txt",
+    "nodes": {
+      "special_forces_quality": {
+        "xp_cost": 60.0,
+        "category_modifiers": {
+          "special_forces": {
+            "acclimatization_hot_climate_gain_factor": 0.1,
+            "acclimatization_cold_climate_gain_factor": 0.1,
+            "soft_attack": 0.05,
+            "defense": 0.05
+          }
+        },
+        "special_forces_no_supply_grace": 24.0,
+        "special_forces_cap": 0.02
+      }
+    }
+  },
+  "air_subdoctrine_fighter_homeland_defense": {
+    "path": "subdoctrines\\air\\air_fighter_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_fighter_homeland_defense": {
+        "xp_cost": 100.0,
+        "air_home_defence_factor": 0.1,
+        "rewards": {
+          "interception_priority": {
+            "air_intercept_efficiency": 0.15
+          },
+          "air_defense_grids": {
+            "air_interception_detect_factor": 0.2
+          },
+          "air_wing_knowledge_transfer": {
+            "air_untrained_pilots_penalty_factor": -0.15
+          },
+          "experienced_pilots_protection": {
+            "air_ace_generation_chance_factor": 0.1
+          },
+          "mass_sorties": {
+            "air_mission_efficiency": 0.05
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_escort_fighter": {
+    "path": "subdoctrines\\air\\air_fighter_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_escort_fighter": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "escort_procedures": {
+            "air_escort_efficiency": 0.1
+          },
+          "extended_search_patterns": {
+            "air_superiority_efficiency": 0.1
+          },
+          "improved_maintenance_protocols": {
+            "air_accidents_factor": -0.2
+          },
+          "increased_sky_presence": {
+            "air_power_projection_factor": 0.1
+          },
+          "constant_air_offensive": {
+            "air_weather_penalty": -0.1,
+            "air_night_penalty": -0.1
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_fighter_bombers": {
+    "path": "subdoctrines\\air\\air_fighter_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_fighter_bombers": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "target_prioritization": {
+            "air_cas_efficiency": 0.1
+          },
+          "strafing_runs": {
+            "air_cas_present_factor": 0.1
+          },
+          "versatile_experience": {
+            "air_mission_xp_gain_factor": 0.1
+          },
+          "multi_mission_assignment": {
+            "air_mission_efficiency": 0.05
+          },
+          "night_target_search": {
+            "air_night_penalty": -0.1
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_tactical_flexibility": {
+    "path": "subdoctrines\\air\\air_fighter_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_tactical_flexibility": {
+        "xp_cost": 100.0,
+        "air_superiority_efficiency": 0.1,
+        "rewards": {
+          "loose_formation": {
+            "category_modifiers": {
+              "fighter": {
+                "air_agility": 0.05,
+                "air_attack": 0.05
+              }
+            }
+          },
+          "high_altitude_approach": {
+            "air_superiority_detect_factor": 0.15
+          },
+          "combat_discipline": {
+            "air_wing_xp_loss_when_killed_factor": -0.1
+          },
+          "high_speed_dive": {
+            "category_modifiers": {
+              "fighter": {
+                "maximum_speed": 0.05
+              }
+            }
+          },
+          "aces_of_the_sky": {
+            "ace_effectiveness_factor": 0.15
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_dogfighting_mastery": {
+    "path": "subdoctrines\\air\\air_fighter_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_dogfighting_mastery": {
+        "xp_cost": 100.0,
+        "air_ace_generation_chance_factor": 0.1,
+        "rewards": {
+          "pilot_quality_focus": {
+            "air_mission_xp_gain_factor": 0.1,
+            "air_training_xp_gain_factor": 0.1
+          },
+          "force_rotation": {
+            "air_interception_detect_factor": 0.15
+          },
+          "fighter_command_system": {
+            "category_modifiers": {
+              "fighter": {
+                "air_agility": 0.1
+              }
+            }
+          },
+          "combat_routines": {
+            "air_superiority_efficiency": 0.15
+          },
+          "improved_support_integration": {
+            "air_accidents_factor": -0.1,
+            "air_manpower_requirement_factor": -0.1
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_fighter_central_field": {
+    "path": "subdoctrines\\air\\air_fighter_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_fighter_central_field": {
+        "xp_cost": 100.0,
+        "sortie_efficiency": 0.15,
+        "rewards": {
+          "decoy_tactic": {
+            "air_superiority_detect_factor": 0.1,
+            "air_superiority_efficiency": 0.05
+          },
+          "three_plane_formation": {
+            "category_modifiers": {
+              "carrier_fighter": {
+                "air_agility": 0.1,
+                "maximum_speed": 0.1
+              }
+            }
+          },
+          "aggressive_spirit": {
+            "air_ace_generation_chance_factor": 0.05,
+            "ace_effectiveness_factor": 0.1
+          },
+          "naval_expertise": {
+            "naval_strike_targetting_factor": 0.1
+          },
+          "all_weather_operations": {
+            "air_weather_penalty": -0.1,
+            "carrier_traffic": 0.15
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_night_bombing": {
+    "path": "subdoctrines\\air\\air_heavy_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_night_bombing": {
+        "xp_cost": 100.0,
+        "air_strategic_bomber_night_penalty": -0.25,
+        "rewards": {
+          "night_raids": {
+            "air_night_penalty": -0.15
+          },
+          "stealth_approach": {
+            "strategic_bomb_visibility": -0.15
+          },
+          "shared_principles": {
+            "air_untrained_pilots_penalty_factor": -0.1
+          },
+          "bombing_discipline": {
+            "air_strategic_bomber_bombing_factor": 0.15
+          },
+          "durable_airframes": {
+            "air_strategic_bomber_defence_factor": 0.15
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_carpet_bombing": {
+    "path": "subdoctrines\\air\\air_heavy_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_carpet_bombing": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "veteran_bomber_crews": {
+            "ace_effectiveness_factor": 0.1,
+            "air_mission_xp_gain_factor": 0.05
+          },
+          "breaking_the_spirit": {
+            "army_bonus_air_superiority_factor": 0.05
+          },
+          "destruction_campaigns": {
+            "air_strategic_bomber_bombing_factor": 0.1
+          },
+          "coordinated_air_operations": {
+            "air_mission_efficiency": 0.05
+          },
+          "defensive_formation": {
+            "air_strategic_bomber_defence_factor": 0.1,
+            "category_modifiers": {
+              "strat_bomber": {
+                "air_attack": 0.05
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_deep_air_raids": {
+    "path": "subdoctrines\\air\\air_heavy_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_deep_air_raids": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "bad_weather_operations": {
+            "air_weather_penalty": -0.15
+          },
+          "effective_targetting": {
+            "air_strategic_bomber_bombing_factor": 0.2
+          },
+          "improved_mission_control": {
+            "air_mission_xp_gain_factor": 0.1
+          },
+          "escort_cooperation": {
+            "air_escort_efficiency": 0.1,
+            "air_superiority_detect_factor": 0.1
+          },
+          "long_range_missions": {
+            "air_range_factor": 0.05
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_flying_fortresses": {
+    "path": "subdoctrines\\air\\air_heavy_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_flying_fortresses": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "high_level_bombing": {
+            "air_strategic_bomber_defence_factor": 0.2
+          },
+          "experienced_gunners": {
+            "category_modifiers": {
+              "strat_bomber": {
+                "air_attack": 0.1
+              }
+            }
+          },
+          "pilot_rescue_missions": {
+            "air_wing_xp_loss_when_killed_factor": -0.1
+          },
+          "extensive_training": {
+            "air_training_xp_gain_factor": 0.1,
+            "air_ace_generation_chance_factor": 0.05
+          },
+          "safety_landing_procedures": {
+            "air_accidents_factor": -0.1
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_coastal_air_patrol": {
+    "path": "subdoctrines\\air\\air_heavy_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_coastal_air_patrol": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "coastal_air_minelaying": {
+            "mines_planting_by_air_factor": 0.2
+          },
+          "evasive_techniques": {
+            "category_modifiers": {
+              "maritime_patrol_bomber": {
+                "air_agility": 0.05,
+                "air_defence": 0.05
+              }
+            }
+          },
+          "efficient_maritime_patrols": {
+            "air_nav_efficiency": 0.1
+          },
+          "fog_patrol": {
+            "air_weather_penalty": -0.1
+          },
+          "improved_targetting_techniques": {
+            "category_modifiers": {
+              "maritime_patrol_bomber": {
+                "naval_strike_targetting": 0.1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_open_ocean_air_patrol": {
+    "path": "subdoctrines\\air\\air_heavy_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_open_ocean_air_patrol": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "harbor_raids": {
+            "port_strike": 0.2
+          },
+          "aerial_minesweeping": {
+            "mines_sweeping_by_air_factor": 0.2
+          },
+          "self_reliance": {
+            "category_modifiers": {
+              "maritime_patrol_bomber": {
+                "air_agility": 0.05,
+                "air_attack": 0.1
+              }
+            }
+          },
+          "night_patrols": {
+            "air_night_penalty": -0.1,
+            "spotting_chance": 0.05
+          },
+          "naval_destruction": {
+            "naval_strike_targetting_factor": 0.1
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_heavy_aircraft_focus": {
+    "path": "subdoctrines\\air\\air_heavy_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_heavy_aircraft_focus": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "heavy_aircraft_application": {
+            "air_mission_efficiency": 0.05
+          },
+          "specialized_payloads": {
+            "category_modifiers": {
+              "strat_bomber": {
+                "air_bombing": 0.1
+              },
+              "maritime_patrol_bomber": {
+                "naval_strike_attack": 0.05
+              }
+            }
+          },
+          "developed_training_programs": {
+            "air_training_xp_gain_factor": 0.05,
+            "air_untrained_pilots_penalty_factor": -0.05
+          },
+          "long_range_missions": {
+            "category_modifiers": {
+              "strat_bomber": {
+                "air_range": 0.1
+              }
+            }
+          },
+          "efficient_fuel_management": {
+            "air_fuel_consumption_factor": -0.05
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_bomber_interception": {
+    "path": "subdoctrines\\air\\air_medium_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_bomber_interception": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "night_interceptions": {
+            "air_night_penalty": -0.15
+          },
+          "dispersed_fighting": {
+            "air_intercept_efficiency": 0.1
+          },
+          "heavy_fighter_veteran_initiative": {
+            "air_ace_generation_chance_factor": 0.05,
+            "air_mission_xp_gain_factor": 0.1
+          },
+          "high_altitude_approach": {
+            "category_modifiers": {
+              "heavy_fighter": {
+                "air_defence": 0.1
+              }
+            }
+          },
+          "bomber_interception_patrols": {
+            "air_interception_detect_factor": 0.15
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_long_range_escort": {
+    "path": "subdoctrines\\air\\air_medium_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_long_range_escort": {
+        "xp_cost": 100.0,
+        "air_escort_efficiency": 0.1,
+        "rewards": {
+          "efficient_fly_routes": {
+            "category_modifiers": {
+              "heavy_fighter": {
+                "air_range": 0.1
+              }
+            }
+          },
+          "mutual_air_cover": {
+            "air_superiority_detect_factor": 0.15
+          },
+          "training_instructors": {
+            "air_training_xp_gain_factor": 0.1
+          },
+          "fighter_baiting": {
+            "category_modifiers": {
+              "heavy_fighter": {
+                "air_agility": 0.1
+              }
+            }
+          },
+          "far_reaching_airforce": {
+            "air_range_factor": 0.05
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_operational_air_support": {
+    "path": "subdoctrines\\air\\air_medium_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_operational_air_support": {
+        "xp_cost": 100.0,
+        "air_mission_efficiency": 0.05,
+        "rewards": {
+          "efficient_support_crews": {
+            "air_manpower_requirement_factor": -0.1,
+            "air_wing_xp_loss_when_killed_factor": -0.05
+          },
+          "ground_interdictions": {
+            "army_bonus_air_superiority_factor": 0.1
+          },
+          "operational_airforce_presence": {
+            "air_power_projection_factor": 0.1
+          },
+          "heavy_fighter_support": {
+            "category_modifiers": {
+              "heavy_fighter": {
+                "air_agility": 0.05,
+                "air_attack": 0.05
+              }
+            }
+          },
+          "tactical_bomber_preservation": {
+            "category_modifiers": {
+              "tac_bomber": {
+                "air_agility": 0.05,
+                "air_defence": 0.05
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_tactical_battlefield_support": {
+    "path": "subdoctrines\\air\\air_medium_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_tactical_battlefield_support": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "keypoint_bombing": {
+            "air_cas_present_factor": 0.1
+          },
+          "logistical_bombing": {
+            "army_bonus_air_superiority_factor": 0.05,
+            "air_cas_efficiency": 0.05
+          },
+          "ship_hunters": {
+            "category_modifiers": {
+              "tac_bomber": {
+                "naval_strike_attack": 0.1
+              }
+            }
+          },
+          "dedicated_record_keeping": {
+            "air_fuel_consumption_factor": -0.05
+          },
+          "bomber_aces": {
+            "ace_effectiveness_factor": 0.15
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_theater_interdiction": {
+    "path": "subdoctrines\\air\\air_medium_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_theater_interdiction": {
+        "xp_cost": 100.0,
+        "air_strategic_bomber_bombing_factor": 0.15,
+        "rewards": {
+          "extended_reach": {
+            "category_modifiers": {
+              "tac_bomber": {
+                "air_range": 0.1
+              }
+            }
+          },
+          "night_bombing": {
+            "air_night_penalty": -0.1,
+            "air_strategic_bomber_night_penalty": -0.1
+          },
+          "precision_bombing": {
+            "category_modifiers": {
+              "tac_bomber": {
+                "air_bombing": 0.05,
+                "air_agility": 0.05
+              }
+            }
+          },
+          "port_raids": {
+            "port_strike": 0.2
+          },
+          "improved_casualty_recovery": {
+            "air_accidents_factor": -0.05,
+            "air_wing_xp_loss_when_killed_factor": -0.1
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_aerial_reconnaissance": {
+    "path": "subdoctrines\\air\\air_medium_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_aerial_reconnaissance": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "extended_reconnaissance_radius": {
+            "category_modifiers": {
+              "scout_plane": {
+                "air_range": 0.15
+              }
+            }
+          },
+          "improved_observation_procedures": {
+            "intel_from_combat_factor": 0.1,
+            "army_intel_factor": 0.1
+          },
+          "naval_recon": {
+            "navy_intel_factor": 0.1,
+            "spotting_chance": 0.05
+          },
+          "distant_aerial_observation": {
+            "airforce_intel_factor": 0.1,
+            "air_mission_xp_gain_factor": 0.05
+          },
+          "well_coordinated_strikes": {
+            "civilian_intel_factor": 0.1,
+            "air_strategic_bomber_bombing_factor": 0.05
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_flying_artillery": {
+    "path": "subdoctrines\\air\\air_strike_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_flying_artillery": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "suppression_runs": {
+            "air_cas_efficiency": 0.1
+          },
+          "terrain_familiarity": {
+            "air_cas_present_factor": 0.1
+          },
+          "effective_payloads": {
+            "category_modifiers": {
+              "cas": {
+                "air_ground_attack": 0.05
+              }
+            }
+          },
+          "rugged_airframes": {
+            "air_accidents_factor": -0.05,
+            "air_wing_xp_loss_when_killed_factor": -0.05
+          },
+          "movement_interdiction": {
+            "air_close_air_support_org_damage_factor": 0.05,
+            "army_bonus_air_superiority_factor": 0.05
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_dive_bombers": {
+    "path": "subdoctrines\\air\\air_strike_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_dive_bombers": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "forward_air_controllers": {
+            "air_mission_efficiency": 0.05,
+            "ground_attack_factor": 0.05
+          },
+          "all_weather_drills": {
+            "air_weather_penalty": -0.05,
+            "category_modifiers": {
+              "cas": {
+                "air_agility": 0.05
+              }
+            }
+          },
+          "terrifying_precision": {
+            "air_close_air_support_org_damage_factor": 0.1
+          },
+          "close_air_support_aces": {
+            "air_ace_generation_chance_factor": 0.05,
+            "ace_effectiveness_factor": 0.05
+          },
+          "fighter_bomber_coordination": {
+            "air_escort_efficiency": 0.1
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_flexible_fire_support": {
+    "path": "subdoctrines\\air\\air_strike_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_flexible_fire_support": {
+        "xp_cost": 100.0,
+        "ground_attack_factor": 0.05,
+        "naval_strike_targetting_factor": 0.05,
+        "rewards": {
+          "cas_preservation": {
+            "category_modifiers": {
+              "cas": {
+                "air_defence": 0.05,
+                "air_attack": 0.05
+              }
+            }
+          },
+          "adaptable_nav_bombers": {
+            "category_modifiers": {
+              "nav_bomber": {
+                "naval_strike_attack": 0.05,
+                "air_range": 0.05
+              }
+            }
+          },
+          "forward_spotters": {
+            "air_cas_efficiency": 0.05,
+            "air_nav_efficiency": 0.05
+          },
+          "continuous_fire_support": {
+            "air_mission_efficiency": 0.05
+          },
+          "quick_turnaround": {
+            "category_modifiers": {
+              "nav_bomber": {
+                "air_agility": 0.05
+              },
+              "cas": {
+                "air_agility": 0.05
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_carrier_strikes": {
+    "path": "subdoctrines\\air\\air_strike_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_carrier_strikes": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "deck_coordination": {
+            "air_nav_efficiency": 0.1
+          },
+          "specialized_torpedoes": {
+            "naval_strike_targetting_factor": 0.1,
+            "category_modifiers": {
+              "carrier_nav_bomber": {
+                "naval_strike_attack": 0.08
+              }
+            }
+          },
+          "strike_wave_tactics": {
+            "air_cas_efficiency": 0.05,
+            "category_modifiers": {
+              "carrier_cas": {
+                "air_ground_attack": 0.08
+              }
+            }
+          },
+          "deck_cycle_training": {
+            "sortie_efficiency": 0.1
+          },
+          "optimized_deck_space_usage": {
+            "carrier_capacity_penalty_reduction": -0.1,
+            "air_accidents_factor": -0.05
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_naval_strike_tactics": {
+    "path": "subdoctrines\\air\\air_strike_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_naval_strike_tactics": {
+        "xp_cost": 100.0,
+        "naval_strike_targetting_factor": 0.1,
+        "rewards": {
+          "naval_disruption": {
+            "category_modifiers": {
+              "nav_bomber": {
+                "air_defence": 0.07,
+                "air_attack": 0.07
+              }
+            }
+          },
+          "attack_synchronization": {
+            "air_nav_efficiency": 0.12
+          },
+          "naval_strike_aces": {
+            "air_ace_generation_chance_factor": 0.05,
+            "ace_effectiveness_factor": 0.1
+          },
+          "safety_protocols": {
+            "air_accidents_factor": -0.1
+          },
+          "optimized_payload": {
+            "category_modifiers": {
+              "nav_bomber": {
+                "air_range": 0.05,
+                "naval_strike_attack": 0.05
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "air_subdoctrine_naval_torpedo_tactics": {
+    "path": "subdoctrines\\air\\air_strike_aircraft_subdoctrines.txt",
+    "nodes": {
+      "air_subdoctrine_naval_torpedo_tactics": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "port_strikes": {
+            "port_strike": 0.2
+          },
+          "low_level_attack_runs": {
+            "category_modifiers": {
+              "nav_bomber": {
+                "air_agility": 0.1
+              }
+            }
+          },
+          "extended_sea_patrols": {
+            "category_modifiers": {
+              "nav_bomber": {
+                "air_range": 0.05
+              },
+              "carrier_nav_bomber": {
+                "air_range": 0.05
+              }
+            }
+          },
+          "all_weather_training": {
+            "air_weather_penalty": -0.1
+          },
+          "naval_strike_mastery": {
+            "air_nav_efficiency": 0.1
+          }
+        }
+      }
+    }
+  },
+  "armored_spearhead": {
+    "path": "subdoctrines\\land\\armor_subdoctrines.txt",
+    "nodes": {
+      "armored_spearhead": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_breakthrough"
+        ],
+        "rewards": {
+          "force_concentration": {
+            "category_modifiers": {
+              "tanks": {
+                "max_organisation": 2.0,
+                "default_morale": 0.05
+              }
+            }
+          },
+          "armored_breakthrough_exploits": {
+            "category_modifiers": {
+              "all_armor": {
+                "breakthrough": 0.1
+              }
+            }
+          },
+          "local_reserves": {
+            "category_modifiers": {
+              "self_propelled_anti_air_regimental_support": {
+                "max_organisation": 10.0,
+                "air_attack": 0.05
+              }
+            }
+          },
+          "tactical_reconnaissance": {
+            "category_modifiers": {
+              "all_armor": {
+                "breakthrough": 0.1
+              }
+            }
+          },
+          "assault_detachments": {
+            "category_modifiers": {
+              "tanks": {
+                "max_organisation": 3.0,
+                "breakthrough": 0.2
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "armored_spearhead_no_lar": {
+    "path": "subdoctrines\\land\\armor_subdoctrines.txt",
+    "nodes": {
+      "armored_spearhead_no_lar": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_breakthrough"
+        ],
+        "rewards": {
+          "force_concentration": {
+            "category_modifiers": {
+              "tanks": {
+                "max_organisation": 2.0,
+                "default_morale": 0.05
+              }
+            }
+          },
+          "armored_breakthrough_exploits": {
+            "category_modifiers": {
+              "all_armor": {
+                "breakthrough": 0.1
+              }
+            }
+          },
+          "local_reserves": {},
+          "tactical_reconnaissance": {
+            "category_modifiers": {
+              "all_armor": {
+                "breakthrough": 0.1
+              }
+            }
+          },
+          "assault_detachments": {
+            "category_modifiers": {
+              "tanks": {
+                "max_organisation": 3.0,
+                "breakthrough": 0.2
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "armored_infantry_support": {
+    "path": "subdoctrines\\land\\armor_subdoctrines.txt",
+    "nodes": {
+      "armored_infantry_support": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_blitz"
+        ],
+        "rewards": {
+          "mobile_reserves": {},
+          "armored_cohorts": {
+            "category_modifiers": {
+              "tank_destroyer_regimental_support": {
+                "max_organisation": 5.0,
+                "ap_attack": 0.1
+              }
+            }
+          },
+          "maintenance_routines": {},
+          "fuel_rationing": {},
+          "mobile_armored_strongpoints": {
+            "category_modifiers": {
+              "all_infantry": {
+                "breakthrough": 0.05
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "streamlined_deployment": {
+    "path": "subdoctrines\\land\\armor_subdoctrines.txt",
+    "nodes": {
+      "streamlined_deployment": {
+        "xp_cost": 100.0,
+        "category_modifiers": {
+          "all_armor": {
+            "soft_attack": 0.1,
+            "breakthrough": 0.1
+          }
+        },
+        "rewards": {
+          "flexible_armored_battalions": {
+            "unit_medium_armor_design_cost_factor": -0.5,
+            "unit_light_armor_design_cost_factor": -0.5
+          },
+          "mechanized_wave": {
+            "category_modifiers": {
+              "all_armor": {
+                "default_morale": 0.05
+              }
+            }
+          },
+          "tank_desant": {},
+          "full_front_deployment": {
+            "category_modifiers": {
+              "all_armor": {
+                "reliability": 0.05,
+                "supply_consumption": -0.02
+              }
+            }
+          },
+          "continuous_offensives": {
+            "category_modifiers": {
+              "all_armor": {
+                "default_morale": 0.05,
+                "max_organisation": 3.0,
+                "breakthrough": 0.1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "mobile_defense": {
+    "path": "subdoctrines\\land\\armor_subdoctrines.txt",
+    "nodes": {
+      "mobile_defense": {
+        "xp_cost": 100.0,
+        "category_modifiers": {
+          "all_armor": {
+            "defense": 0.1
+          }
+        },
+        "rewards": {
+          "mechanized_offensive": {},
+          "advance_under_fire": {},
+          "attached_support": {
+            "category_modifiers": {
+              "self_propelled_anti_air_regimental_support": {
+                "max_organisation": 10.0,
+                "air_attack": 0.05
+              }
+            }
+          },
+          "combined_anti_armor": {
+            "category_modifiers": {
+              "tank_destroyer_regimental_support": {
+                "max_organisation": 5.0,
+                "hard_attack": 0.05,
+                "ap_attack": 0.15
+              }
+            }
+          },
+          "tank_on_tank_engagement": {
+            "category_modifiers": {
+              "all_armor": {
+                "hard_attack": 0.1,
+                "soft_attack": 0.1,
+                "ap_attack": 0.05
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "armored_cavalry": {
+    "path": "subdoctrines\\land\\armor_subdoctrines.txt",
+    "nodes": {
+      "armored_cavalry": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "cruiser_tanks": {},
+          "quick_response_force": {},
+          "speed_as_armour": {},
+          "fighting_reconnaissance": {},
+          "sustained_deployments": {}
+        }
+      }
+    }
+  },
+  "armored_cavalry_no_lar": {
+    "path": "subdoctrines\\land\\armor_subdoctrines.txt",
+    "nodes": {
+      "armored_cavalry_no_lar": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "cruiser_tanks": {},
+          "quick_response_force": {},
+          "speed_as_armour": {},
+          "fighting_reconnaissance": {},
+          "sustained_deployments": {}
+        }
+      }
+    }
+  },
+  "tank_destroyer_force": {
+    "path": "subdoctrines\\land\\armor_subdoctrines.txt",
+    "nodes": {
+      "tank_destroyer_force": {
+        "xp_cost": 100.0,
+        "category_modifiers": {
+          "all_armor": {
+            "defense": 0.1,
+            "hard_attack": 0.1,
+            "ap_attack": 0.1
+          }
+        },
+        "rewards": {
+          "mobile_anti_tank": {},
+          "committed_operational_units": {},
+          "redeployment_priority": {
+            "category_modifiers": {
+              "tank_destroyers": {
+                "supply_consumption": -0.02,
+                "default_morale": 0.1
+              }
+            }
+          },
+          "independent_counterattacks": {
+            "category_modifiers": {
+              "tank_destroyers": {
+                "max_organisation": 6.0,
+                "initiative": 0.01
+              }
+            }
+          },
+          "selfsufficient_battalion": {
+            "category_modifiers": {
+              "tank_destroyer_regimental_support": {
+                "max_organisation": 5.0,
+                "hard_attack": 0.1,
+                "ap_attack": 0.1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "fire_concentration": {
+    "path": "subdoctrines\\land\\combat_support_subdoctrines.txt",
+    "nodes": {
+      "fire_concentration": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_overwhelming_fire"
+        ],
+        "category_modifiers": {
+          "line_artillery": {
+            "defense": 0.05,
+            "max_organisation": 5.0
+          }
+        },
+        "rewards": {
+          "predicted_fire": {
+            "category_modifiers": {
+              "line_artillery": {
+                "defense": 0.05
+              }
+            }
+          },
+          "standing_barrage": {},
+          "artillery_groups": {
+            "category_modifiers": {
+              "regimental_support_artillery": {
+                "soft_attack": 0.05,
+                "breakthrough": 0.1
+              },
+              "support_artillery": {
+                "soft_attack": 0.05,
+                "breakthrough": 0.1
+              },
+              "line_artillery": {
+                "soft_attack": 0.05,
+                "breakthrough": 0.1
+              }
+            }
+          },
+          "dedicated_air_support": {
+            "category_modifiers": {
+              "anti_air": {
+                "air_attack": 0.1
+              }
+            }
+          },
+          "weakpoint_studies": {}
+        }
+      }
+    }
+  },
+  "anti_tank_frontline": {
+    "path": "subdoctrines\\land\\combat_support_subdoctrines.txt",
+    "nodes": {
+      "anti_tank_frontline": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "pakfront": {},
+          "emplacement_rotation": {},
+          "weakpoint_studies": {},
+          "offensive_deployments": {},
+          "assault_anti_tank": {}
+        }
+      }
+    }
+  },
+  "flying_batteries": {
+    "path": "subdoctrines\\land\\combat_support_subdoctrines.txt",
+    "nodes": {
+      "flying_batteries": {
+        "xp_cost": 100.0,
+        "category_modifiers": {
+          "line_artillery": {
+            "soft_attack": 0.1
+          }
+        },
+        "rewards": {
+          "deployment_drills": {},
+          "counter_battery_tasks": {},
+          "ballistics_corrections": {},
+          "mobile_barrages": {
+            "category_modifiers": {
+              "line_artillery": {
+                "default_morale": 0.05,
+                "breakthrough": 0.05
+              }
+            }
+          },
+          "wide_dispersal_positions": {}
+        }
+      }
+    }
+  },
+  "air_cavalry": {
+    "path": "subdoctrines\\land\\combat_support_subdoctrines.txt",
+    "nodes": {
+      "air_cavalry": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "airborne_observers": {},
+          "service_and_support": {
+            "category_modifiers": {
+              "helicopter_support_companies": {
+                "max_strength": 0.03
+              }
+            }
+          },
+          "rescue_liasions": {},
+          "transport_assault": {},
+          "intervention_units": {}
+        }
+      }
+    }
+  },
+  "mobile_recon_and_assault": {
+    "path": "subdoctrines\\land\\combat_support_subdoctrines.txt",
+    "nodes": {
+      "mobile_recon_and_assault": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "motorization_support": {
+            "category_modifiers": {
+              "mobile_and_mobile_combat_sup": {
+                "maximum_speed": 0.1,
+                "default_morale": 0.1
+              }
+            }
+          },
+          "long_range_reconnaissance": {
+            "category_modifiers": {
+              "recon": {
+                "maximum_speed": 0.15
+              }
+            }
+          },
+          "mobile_operational_deployments": {},
+          "self_propelled_support_elements": {
+            "category_modifiers": {
+              "self_propelled_artillery": {
+                "soft_attack": 0.1
+              },
+              "self_propelled_anti_air": {
+                "air_attack": 0.15,
+                "soft_attack": 0.05
+              },
+              "tank_destroyers": {
+                "hard_attack": 0.1,
+                "ap_attack": 0.03
+              }
+            }
+          },
+          "deep_reconnaissance_focus": {
+            "category_modifiers": {
+              "recon": {
+                "maximum_speed": 0.1
+              },
+              "tank_destroyer_regimental_support": {
+                "breakthrough": 0.2
+              },
+              "self_propelled_anti_air_regimental_support": {
+                "breakthrough": 0.2
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "mobile_recon_and_assault_no_lar": {
+    "path": "subdoctrines\\land\\combat_support_subdoctrines.txt",
+    "nodes": {
+      "mobile_recon_and_assault_no_lar": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "motorization_support": {
+            "category_modifiers": {
+              "mobile_and_mobile_combat_sup": {
+                "maximum_speed": 0.1,
+                "default_morale": 0.1
+              }
+            }
+          },
+          "long_range_reconnaissance": {
+            "category_modifiers": {
+              "recon": {
+                "maximum_speed": 0.15
+              }
+            }
+          },
+          "mobile_operational_deployments": {},
+          "self_propelled_support_elements": {
+            "category_modifiers": {
+              "self_propelled_artillery": {
+                "soft_attack": 0.1
+              },
+              "self_propelled_anti_air": {
+                "air_attack": 0.15,
+                "soft_attack": 0.05
+              },
+              "tank_destroyers": {
+                "hard_attack": 0.1,
+                "ap_attack": 0.03
+              }
+            }
+          },
+          "deep_reconnaissance_focus": {
+            "category_modifiers": {
+              "recon": {
+                "maximum_speed": 0.1
+              },
+              "tank_destroyer_regimental_support": {
+                "breakthrough": 0.2
+              },
+              "self_propelled_anti_air_regimental_support": {
+                "breakthrough": 0.2
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "self_propelled_support": {
+    "path": "subdoctrines\\land\\combat_support_subdoctrines.txt",
+    "nodes": {
+      "self_propelled_support": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "mobile_battery_management_platoons": {
+            "category_modifiers": {
+              "self_propelled_artillery": {
+                "max_organisation": 10.0
+              },
+              "self_propelled_anti_air": {
+                "max_organisation": 10.0
+              },
+              "tank_destroyers": {
+                "max_organisation": 10.0
+              }
+            }
+          },
+          "screening_attacks": {},
+          "all_terrain_mobility": {
+            "category_modifiers": {
+              "self_propelled_artillery": {
+                "maximum_speed": 0.3
+              },
+              "self_propelled_anti_air": {
+                "maximum_speed": 0.3
+              },
+              "tank_destroyers": {
+                "maximum_speed": 0.3
+              }
+            }
+          },
+          "multirole_support_vehicles": {
+            "category_modifiers": {
+              "tank_destroyer_regimental_support": {
+                "max_organisation": 10.0,
+                "hard_attack": 0.1,
+                "breakthrough": 0.2
+              },
+              "self_propelled_anti_air_regimental_support": {
+                "max_organisation": 10.0,
+                "air_attack": 0.1,
+                "breakthrough": 0.2
+              }
+            }
+          },
+          "shoot_and_scoot": {
+            "category_modifiers": {
+              "self_propelled_artillery": {
+                "max_organisation": 5.0,
+                "default_morale": 0.15,
+                "soft_attack": 0.05
+              },
+              "self_propelled_anti_air": {
+                "max_organisation": 5.0,
+                "default_morale": 0.15,
+                "air_attack": 0.05
+              },
+              "tank_destroyers": {
+                "max_organisation": 5.0,
+                "default_morale": 0.15,
+                "hard_attack": 0.05
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "siege_artillery": {
+    "path": "subdoctrines\\land\\combat_support_subdoctrines.txt",
+    "nodes": {
+      "siege_artillery": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "fortress_busters": {},
+          "improved_transport_preparation": {
+            "category_modifiers": {
+              "line_artillery": {
+                "default_morale": 0.1
+              }
+            }
+          },
+          "precomputed_firing_data": {},
+          "urban_strongpoint_sieges": {
+            "category_modifiers": {
+              "artillery": {
+                "soft_attack": 0.05
+              },
+              "regimental_support_artillery": {
+                "soft_attack": 0.1
+              }
+            }
+          },
+          "mobile_artillery_command": {
+            "category_modifiers": {
+              "support_artillery": {
+                "max_organisation": 10.0
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "field_engineering": {
+    "path": "subdoctrines\\land\\combat_support_subdoctrines.txt",
+    "nodes": {
+      "field_engineering": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "rapid_fire_lane_clearance": {},
+          "sapper_fieldcraft": {},
+          "engineerdug_gun_emplacements": {},
+          "smoke_projector_training": {},
+          "charge_and_flame": {}
+        }
+      }
+    }
+  },
+  "mobile_infantry": {
+    "path": "subdoctrines\\land\\infantry_subdoctrines.txt",
+    "nodes": {
+      "mobile_infantry": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_overwhelming_fire"
+        ],
+        "category_modifiers": {
+          "all_infantry": {
+            "breakthrough": 0.1
+          }
+        },
+        "rewards": {
+          "cavalry_charge": {
+            "category_modifiers": {
+              "cavalry": {
+                "breakthrough": 0.2
+              }
+            }
+          },
+          "combined_arms_planning": {
+            "category_modifiers": {
+              "all_infantry": {
+                "max_organisation": 10.0,
+                "maximum_speed": 0.05
+              }
+            }
+          },
+          "decisive_operations": {
+            "category_modifiers": {
+              "vehicle_infantry": {
+                "max_organisation": 20.0
+              },
+              "regimental_support_artillery": {
+                "soft_attack": 0.15
+              }
+            }
+          },
+          "delegated_authority": {
+            "category_modifiers": {
+              "vehicle_infantry": {
+                "default_morale": 0.1,
+                "soft_attack": 0.1
+              }
+            }
+          },
+          "maneuver_warfare": {
+            "category_modifiers": {
+              "all_infantry": {
+                "max_organisation": 10.0,
+                "maximum_speed": 0.2
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "defensive_postures": {
+    "path": "subdoctrines\\land\\infantry_subdoctrines.txt",
+    "nodes": {
+      "defensive_postures": {
+        "xp_cost": 100.0,
+        "category_modifiers": {
+          "cavalry": {
+            "supply_consumption": -0.01
+          },
+          "all_infantry": {
+            "entrenchment": 0.2
+          }
+        },
+        "rewards": {
+          "improvised_fighting_position": {
+            "dig_in_speed_factor": 0.05
+          },
+          "elastic_operations": {
+            "category_modifiers": {
+              "all_infantry": {
+                "max_organisation": 10.0,
+                "defense": 0.1
+              }
+            }
+          },
+          "developed_trench_networking": {
+            "category_modifiers": {
+              "all_infantry": {
+                "entrenchment": 0.2
+              }
+            }
+          },
+          "field_emplacements": {
+            "category_modifiers": {
+              "all_infantry": {
+                "soft_attack": 0.1
+              },
+              "regimental_support_artillery": {
+                "soft_attack": 0.2
+              }
+            }
+          },
+          "field_construction_training": {
+            "dig_in_speed_factor": 0.15
+          }
+        }
+      }
+    }
+  },
+  "large_unit_tactics": {
+    "path": "subdoctrines\\land\\infantry_subdoctrines.txt",
+    "nodes": {
+      "large_unit_tactics": {
+        "xp_cost": 100.0,
+        "category_modifiers": {
+          "all_infantry": {
+            "supply_consumption": -0.01
+          }
+        },
+        "rewards": {
+          "wide_trench_networks": {
+            "dig_in_speed_factor": 0.1
+          },
+          "flexible_division_structures": {
+            "unit_infantry_design_cost_factor": -1.0
+          },
+          "unit_knowledge_sharing": {
+            "category_modifiers": {
+              "all_infantry": {
+                "experience_loss_factor": -0.01
+              }
+            }
+          },
+          "large_front_offensive": {
+            "category_modifiers": {
+              "all_infantry": {
+                "max_organisation": 10.0,
+                "soft_attack": 0.1
+              },
+              "regimental_support_artillery": {
+                "soft_attack": 0.1
+              }
+            },
+            "army_morale": 0.1
+          },
+          "motorization_initiative": {
+            "category_modifiers": {
+              "all_infantry": {
+                "breakthrough": 0.1,
+                "soft_attack": 0.1
+              },
+              "vehicle_infantry": {
+                "supply_consumption": -0.02,
+                "reliability": 0.1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "assault_infantry": {
+    "path": "subdoctrines\\land\\infantry_subdoctrines.txt",
+    "nodes": {
+      "assault_infantry": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "low_echelon_fire_support": {},
+          "organic_battalion_fire_support": {
+            "category_modifiers": {
+              "regimental_support_artillery": {
+                "soft_attack": 0.1
+              }
+            }
+          },
+          "integrated_support_batteries": {
+            "category_modifiers": {
+              "support_artillery": {
+                "max_organisation": 20.0,
+                "soft_attack": 0.05
+              }
+            }
+          },
+          "breakthrough_fireteams": {},
+          "assault_detachments": {
+            "category_modifiers": {
+              "support_artillery": {
+                "supply_consumption": -0.02
+              },
+              "regimental_support_artillery": {
+                "supply_consumption": -0.01
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "mounted_infantry": {
+    "path": "subdoctrines\\land\\infantry_subdoctrines.txt",
+    "nodes": {
+      "mounted_infantry": {
+        "xp_cost": 100.0,
+        "category_modifiers": {
+          "cavalry": {
+            "soft_attack": 0.1,
+            "breakthrough": 0.1
+          }
+        },
+        "unit_cavalry_design_cost_factor": -1.0,
+        "rewards": {
+          "dragoon_traditions": {
+            "category_modifiers": {
+              "cavalry": {
+                "breakthrough": 0.2,
+                "defense": 0.1
+              }
+            }
+          },
+          "mounted_skirmish_groups": {
+            "category_modifiers": {
+              "cavalry": {
+                "max_organisation": 5.0
+              }
+            }
+          },
+          "anti_mechanized_cavalry_groups": {
+            "category_modifiers": {
+              "cavalry": {
+                "hard_attack": 0.2,
+                "ap_attack": 0.2
+              }
+            }
+          },
+          "beasts_of_war": {
+            "category_modifiers": {
+              "cavalry": {
+                "maximum_speed": 0.5,
+                "max_strength": 0.05
+              }
+            }
+          },
+          "limbered_combat_support": {}
+        }
+      }
+    }
+  },
+  "commandos": {
+    "path": "subdoctrines\\land\\infantry_subdoctrines.txt",
+    "nodes": {
+      "commandos": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_infantry_charge"
+        ],
+        "rewards": {
+          "isolated_combat_elements": {
+            "category_modifiers": {
+              "light_infantry": {
+                "supply_consumption": -0.01,
+                "reliability": 0.05
+              },
+              "regimental_support_artillery": {
+                "supply_consumption": -0.01,
+                "soft_attack": 0.05
+              }
+            }
+          },
+          "security_zone_operations": {
+            "category_modifiers": {
+              "vehicle_infantry": {
+                "reliability": 0.05,
+                "breakthrough": 0.1
+              }
+            }
+          },
+          "rigorous_training_regimen": {},
+          "field_intel_retrieval": {
+            "intel_from_combat_factor": 0.15
+          },
+          "integrated_assaults": {
+            "category_modifiers": {
+              "all_infantry": {
+                "soft_attack": 0.1,
+                "breakthrough": 0.1
+              },
+              "regimental_support_artillery": {
+                "breakthrough": 0.15
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "irregulars": {
+    "path": "subdoctrines\\land\\infantry_subdoctrines.txt",
+    "nodes": {
+      "irregulars": {
+        "xp_cost": 50.0,
+        "rewards": {
+          "service_by_lot": {
+            "mobilization_speed": 0.05
+          },
+          "partisan_regiments": {
+            "category_modifiers": {
+              "light_infantry": {
+                "defense": 0.1
+              }
+            }
+          },
+          "improvised_officer_groups": {
+            "category_modifiers": {
+              "light_infantry": {
+                "max_organisation": 10.0,
+                "soft_attack": 0.1,
+                "breakthrough": 0.1
+              }
+            }
+          },
+          "levee_en_masse": {
+            "conscription": 0.02,
+            "mobilization_speed": 0.05
+          },
+          "standardization_efforts": {
+            "category_modifiers": {
+              "light_infantry": {
+                "max_organisation": 10.0,
+                "soft_attack": 0.1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "peoples_war": {
+    "path": "subdoctrines\\land\\infantry_subdoctrines.txt",
+    "nodes": {
+      "peoples_war": {
+        "xp_cost": 50.0,
+        "enable_tactics": [
+          "tactic_guerrilla_tactics"
+        ],
+        "rewards": {
+          "revolutionary_base_area": {
+            "mastery": 50.0,
+            "category_modifiers": {
+              "light_infantry": {
+                "max_organisation": 5.0
+              }
+            }
+          },
+          "destruction_over_land_gains": {
+            "mastery": 50.0,
+            "category_modifiers": {
+              "light_infantry": {
+                "default_morale": 0.1
+              }
+            }
+          },
+          "quick_decision_offensive_warfare": {},
+          "people_not_things": {
+            "mastery": 50.0,
+            "category_modifiers": {
+              "light_infantry": {
+                "soft_attack": 0.1,
+                "max_strength": 0.15
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "great_war_infantry": {
+    "path": "subdoctrines\\land\\infantry_subdoctrines.txt",
+    "nodes": {
+      "great_war_infantry": {
+        "xp_cost": 50.0,
+        "category_modifiers": {
+          "cavalry": {
+            "supply_consumption": -0.02
+          },
+          "light_infantry": {
+            "defense": 0.1
+          }
+        },
+        "production_speed_bunker_factor": 0.25,
+        "rewards": {
+          "traverse_digging": {
+            "dig_in_speed_factor": 0.05
+          },
+          "sapping_operations": {
+            "category_modifiers": {
+              "light_infantry": {
+                "defense": 0.1
+              }
+            }
+          },
+          "centralized_artillery_control": {
+            "category_modifiers": {
+              "regimental_support_artillery": {
+                "soft_attack": 0.2
+              }
+            }
+          },
+          "field_fortification_emphasis": {
+            "category_modifiers": {
+              "light_infantry": {
+                "reliability": 0.05,
+                "defense": 0.05,
+                "max_organisation": 5.0
+              }
+            }
+          },
+          "redoubt_networks": {
+            "dig_in_speed_factor": 0.1
+          }
+        }
+      }
+    }
+  },
+  "mission_type_tactics": {
+    "path": "subdoctrines\\land\\operations_subdoctrines.txt",
+    "nodes": {
+      "mission_type_tactics": {
+        "xp_cost": 100.0,
+        "command_power_gain": 0.02,
+        "category_modifiers": {
+          "all_infantry": {
+            "max_organisation": 15.0
+          }
+        },
+        "rewards": {
+          "low_level_delegation": {
+            "category_modifiers": {
+              "all_infantry": {
+                "default_morale": 0.1
+              },
+              "regimental_support_artillery": {
+                "max_organisation": 5.0,
+                "soft_attack": 0.05
+              }
+            }
+          },
+          "flexible_command": {
+            "org_loss_when_moving": -0.15
+          },
+          "maneouver_drills": {
+            "land_reinforce_rate": 0.02,
+            "category_modifiers": {
+              "all_armor": {
+                "maximum_speed": 0.1
+              }
+            }
+          },
+          "flexible_combat_formations": {
+            "category_modifiers": {
+              "all_infantry": {
+                "breakthrough": 0.1,
+                "max_organisation": 10.0
+              }
+            }
+          },
+          "control_zone_responsibilities": {
+            "category_modifiers": {
+              "all_infantry": {
+                "default_morale": 0.2
+              },
+              "tanks": {
+                "default_morale": 0.1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "last_stand": {
+    "path": "subdoctrines\\land\\operations_subdoctrines.txt",
+    "nodes": {
+      "last_stand": {
+        "xp_cost": 100.0,
+        "conscription": 0.05,
+        "rewards": {
+          "werwolf_groups": {
+            "resistance_damage_to_garrison_on_our_occupied_states": 0.25
+          },
+          "pocket_consolidation": {
+            "category_modifiers": {
+              "all_infantry": {
+                "defense": 0.1
+              }
+            }
+          },
+          "digging_in": {
+            "out_of_supply_factor": -0.2,
+            "category_modifiers": {
+              "all_infantry": {
+                "entrenchment": 0.1
+              }
+            }
+          },
+          "stocking_up": {
+            "no_supply_grace": 72.0
+          },
+          "breaking_out": {
+            "category_modifiers": {
+              "army": {
+                "soft_attack": 0.15
+              },
+              "regimental_support_artillery": {
+                "max_organisation": 5.0,
+                "soft_attack": 0.1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "infiltration_tactics": {
+    "path": "subdoctrines\\land\\operations_subdoctrines.txt",
+    "nodes": {
+      "infiltration_tactics": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_infantry_charge"
+        ],
+        "max_planning": 0.05,
+        "rewards": {
+          "infiltration_assault": {
+            "category_modifiers": {
+              "army": {
+                "breakthrough": 0.1,
+                "max_organisation": 5.0
+              }
+            }
+          },
+          "nightly_assaults": {
+            "land_night_attack": 0.25
+          },
+          "self_sustaining_infiltration_units": {
+            "supply_consumption_factor": -0.1,
+            "command_power_gain": 0.015,
+            "category_modifiers": {
+              "tanks": {
+                "max_organisation": 2.0
+              },
+              "all_armor": {
+                "default_morale": 0.1
+              }
+            }
+          },
+          "terrain_and_situation_assessment": {
+            "category_modifiers": {
+              "recon": {
+                "recon": 1.0
+              }
+            }
+          },
+          "infiltration_in_depth": {
+            "land_reinforce_rate": 0.02,
+            "org_loss_when_moving": -0.2
+          }
+        }
+      }
+    }
+  },
+  "grand_assault": {
+    "path": "subdoctrines\\land\\operations_subdoctrines.txt",
+    "nodes": {
+      "grand_assault": {
+        "xp_cost": 100.0,
+        "max_planning": 0.1,
+        "category_modifiers": {
+          "army": {
+            "breakthrough": 0.1,
+            "soft_attack": 0.05
+          }
+        },
+        "rewards": {
+          "central_planning": {
+            "max_command_power": 30.0
+          },
+          "multiple_attack_directions": {
+            "category_modifiers": {
+              "army": {
+                "breakthrough": 0.15
+              }
+            }
+          },
+          "combined_arms_integration": {
+            "army_bonus_air_superiority_factor": 0.05,
+            "coordination_bonus": 0.1,
+            "category_modifiers": {
+              "tank_destroyer_regimental_support": {
+                "max_organisation": 5.0
+              }
+            }
+          },
+          "forward_command_posts": {
+            "category_modifiers": {
+              "recon": {
+                "recon": 0.1
+              }
+            }
+          },
+          "c3i_theory": {
+            "max_planning": 0.1,
+            "category_modifiers": {
+              "all_infantry": {
+                "max_organisation": 8.0
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "deep_battle": {
+    "path": "subdoctrines\\land\\operations_subdoctrines.txt",
+    "nodes": {
+      "deep_battle": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_backhand_blow"
+        ],
+        "category_modifiers": {
+          "tanks": {
+            "max_organisation": 4.0
+          }
+        },
+        "rewards": {
+          "bounding_overwatch": {
+            "category_modifiers": {
+              "vehicle_infantry": {
+                "max_organisation": 2.0
+              }
+            }
+          },
+          "operational_concentration": {
+            "category_modifiers": {
+              "tanks": {
+                "max_organisation": 4.0
+              }
+            },
+            "land_reinforce_rate": 0.05
+          },
+          "maskirovka": {
+            "army_intel_to_others": -10.0,
+            "airforce_intel_to_others": -5.0,
+            "army_intel_factor": 0.05
+          },
+          "breakthrough_priority": {
+            "org_loss_when_moving": -0.2,
+            "category_modifiers": {
+              "vehicle_infantry": {
+                "max_organisation": 10.0,
+                "default_morale": 0.1
+              },
+              "tanks": {
+                "max_organisation": 2.0
+              },
+              "all_armor": {
+                "default_morale": 0.1
+              }
+            }
+          },
+          "operational_depth_control": {
+            "org_loss_when_moving": -0.1,
+            "land_reinforce_rate": 0.05,
+            "category_modifiers": {
+              "regimental_support_artillery": {
+                "max_organisation": 5.0,
+                "soft_attack": 0.1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "deep_battle_no_lar": {
+    "path": "subdoctrines\\land\\operations_subdoctrines.txt",
+    "nodes": {
+      "deep_battle_no_lar": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_backhand_blow"
+        ],
+        "category_modifiers": {
+          "tanks": {
+            "max_organisation": 4.0
+          }
+        },
+        "rewards": {
+          "bounding_overwatch": {
+            "category_modifiers": {
+              "vehicle_infantry": {
+                "max_organisation": 2.0
+              }
+            }
+          },
+          "operational_concentration": {
+            "category_modifiers": {
+              "tanks": {
+                "max_organisation": 4.0
+              }
+            },
+            "land_reinforce_rate": 0.05
+          },
+          "maskirovka": {
+            "army_intel_to_others": -10.0,
+            "airforce_intel_to_others": -5.0,
+            "army_intel_factor": 0.05
+          },
+          "breakthrough_priority": {
+            "org_loss_when_moving": -0.2,
+            "category_modifiers": {
+              "vehicle_infantry": {
+                "max_organisation": 10.0,
+                "default_morale": 0.1
+              },
+              "tanks": {
+                "max_organisation": 2.0
+              },
+              "all_armor": {
+                "default_morale": 0.1
+              }
+            }
+          },
+          "operational_depth_control": {
+            "org_loss_when_moving": -0.1,
+            "land_reinforce_rate": 0.05
+          }
+        }
+      }
+    }
+  },
+  "guerilla_war": {
+    "path": "subdoctrines\\land\\operations_subdoctrines.txt",
+    "nodes": {
+      "guerilla_war": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_guerrilla_tactics"
+        ],
+        "rewards": {
+          "catch_and_seize": {
+            "category_modifiers": {
+              "cavalry": {
+                "equipment_capture_factor": 0.01
+              },
+              "light_infantry": {
+                "equipment_capture_factor": 0.01
+              }
+            },
+            "pocket_penalty": -0.1
+          },
+          "galvanize_support": {
+            "army_intel_to_others": -10.0,
+            "army_intel_factor": 0.05,
+            "war_support_factor": 0.1,
+            "political_power_factor": 0.1,
+            "mobilization_speed": 0.15
+          },
+          "scorched_earth": {
+            "resistance_damage_to_garrison_on_our_occupied_states": 0.1,
+            "resistance_target_on_our_occupied_states": 0.1,
+            "category_modifiers": {
+              "army": {
+                "defense": 0.1
+              }
+            }
+          },
+          "urban_assaults": {},
+          "defense_of_gained_power": {
+            "stability_factor": 0.1,
+            "party_popularity_stability_factor": 0.05,
+            "category_modifiers": {
+              "army": {
+                "defense": 0.1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "rapid_domination": {
+    "path": "subdoctrines\\land\\operations_subdoctrines.txt",
+    "nodes": {
+      "rapid_domination": {
+        "xp_cost": 100.0,
+        "enable_tactics": [
+          "tactic_breakthrough"
+        ],
+        "land_reinforce_rate": 0.02,
+        "category_modifiers": {
+          "all_infantry": {
+            "soft_attack": 0.1
+          },
+          "line_artillery": {
+            "soft_attack": 0.1
+          }
+        },
+        "rewards": {
+          "forward_observers": {
+            "land_reinforce_rate": 0.02,
+            "category_modifiers": {
+              "recon": {
+                "recon": 1.0
+              },
+              "support_artillery": {
+                "soft_attack": 0.05
+              },
+              "regimental_support_artillery": {
+                "breakthrough": 0.1
+              }
+            }
+          },
+          "advanced_firebases": {
+            "category_modifiers": {
+              "support_artillery": {
+                "supply_consumption": -0.1
+              },
+              "regimental_support_artillery": {
+                "soft_attack": 0.1
+              }
+            }
+          },
+          "centralized_fire_control": {},
+          "regimental_combat_teams": {
+            "category_modifiers": {
+              "support_battalions": {
+                "max_organisation": 10.0,
+                "soft_attack": 0.1
+              }
+            }
+          },
+          "shock_and_awe": {
+            "category_modifiers": {
+              "army": {
+                "soft_attack": 0.05
+              },
+              "all_infantry": {
+                "soft_attack": 0.1,
+                "hard_attack": 0.1
+              }
+            },
+            "army_bonus_air_superiority_factor": 0.1
+          }
+        }
+      }
+    }
+  },
+  "expeditionary_warfare": {
+    "path": "subdoctrines\\land\\operations_subdoctrines.txt",
+    "nodes": {
+      "expeditionary_warfare": {
+        "xp_cost": 100.0,
+        "send_volunteer_divisions_required": -0.5,
+        "send_volunteer_factor": 0.25,
+        "send_volunteers_tension": -0.1,
+        "rewards": {
+          "staging_area_security": {
+            "dig_in_speed_factor": 0.05,
+            "out_of_supply_factor": -0.2,
+            "category_modifiers": {
+              "army": {
+                "defense": 0.1
+              }
+            }
+          },
+          "landing_operations": {
+            "naval_invasion_prep_speed": 0.2,
+            "naval_invasion_penalty": -0.15,
+            "naval_invasion_planning_bonus_speed": 0.2,
+            "category_modifiers": {
+              "army": {
+                "soft_attack": 0.1
+              }
+            }
+          },
+          "shore_fire_control_parties": {
+            "shore_bombardment_bonus": 0.25
+          },
+          "breakout_emphasis": {
+            "no_supply_grace": 32.0
+          },
+          "withdrawal_protocols": {
+            "org_loss_when_moving": -0.2
+          }
+        }
+      }
+    }
+  },
+  "dispersed_operations": {
+    "path": "subdoctrines\\land\\operations_subdoctrines.txt",
+    "nodes": {
+      "dispersed_operations": {
+        "xp_cost": 100.0,
+        "enemy_army_bonus_air_superiority_factor": -0.1,
+        "land_reinforce_rate": 0.05,
+        "rewards": {
+          "camouflage_discipline": {
+            "enemy_army_bonus_air_superiority_factor": -0.15
+          },
+          "hardened_logistics": {
+            "no_supply_grace": 24.0
+          },
+          "local_air_defense": {
+            "category_modifiers": {
+              "self_propelled_anti_air_regimental_support": {
+                "air_attack": 0.2
+              }
+            }
+          },
+          "scattered_formations": {
+            "cas_damage_reduction": 0.05
+          },
+          "independent_operations": {
+            "category_modifiers": {
+              "all_infantry": {
+                "initiative": 0.01,
+                "breakthrough": 0.1,
+                "max_organisation": 5.0
+              },
+              "all_armor": {
+                "initiative": 0.01,
+                "breakthrough": 0.1,
+                "max_organisation": 2.0
+              }
+            },
+            "out_of_supply_factor": -0.15
+          }
+        }
+      }
+    }
+  },
+  "line_of_battle": {
+    "path": "subdoctrines\\sea\\navy_capital_subdoctrines.txt",
+    "nodes": {
+      "line_of_battle": {
+        "xp_cost": 100.0,
+        "navy_fuel_consumption_factor": -0.05,
+        "naval_has_potf_in_combat_attack": 0.1,
+        "rewards": {
+          "flagships": {},
+          "ordnance_handling_training": {},
+          "blue_water_logistics": {},
+          "bulkhead_drills": {},
+          "modernized_line_of_battle": {}
+        }
+      }
+    }
+  },
+  "battlecruiser_supremacy": {
+    "path": "subdoctrines\\sea\\navy_capital_subdoctrines.txt",
+    "nodes": {
+      "battlecruiser_supremacy": {
+        "xp_cost": 100.0,
+        "naval_supply_consumption_factor": -0.05,
+        "naval_critical_score_chance_factor": 0.03,
+        "rewards": {
+          "ship_of_the_line": {},
+          "coordinated_strike_protocol": {},
+          "open_water_patrolling": {},
+          "planning_at_speed": {},
+          "capital_drills": {}
+        }
+      }
+    }
+  },
+  "armored_raiders": {
+    "path": "subdoctrines\\sea\\navy_capital_subdoctrines.txt",
+    "nodes": {
+      "armored_raiders": {
+        "xp_cost": 100.0,
+        "naval_supply_consumption_factor": -0.1,
+        "screening_without_screens": 0.1,
+        "rewards": {
+          "expert_reconnaissance": {},
+          "speed_trials": {},
+          "modernized_officer_education": {},
+          "capital_raiders": {},
+          "crisis_management": {}
+        }
+      }
+    }
+  },
+  "coastal_defence_fleet": {
+    "path": "subdoctrines\\sea\\navy_capital_subdoctrines.txt",
+    "nodes": {
+      "coastal_defence_fleet": {
+        "xp_cost": 100.0,
+        "naval_supply_consumption_factor": -0.15,
+        "navy_max_range_factor": -0.1,
+        "rewards": {
+          "aging_navy": {},
+          "casemate_upgrades": {},
+          "escort_duties": {},
+          "hail_of_fire": {},
+          "spare_part_logistics": {}
+        }
+      }
+    }
+  },
+  "naval_gunfire_support": {
+    "path": "subdoctrines\\sea\\navy_capital_subdoctrines.txt",
+    "nodes": {
+      "naval_gunfire_support": {
+        "xp_cost": 100.0,
+        "shore_bombardment_bonus": 0.25,
+        "navy_fuel_consumption_factor": -0.1,
+        "rewards": {
+          "landing_lane_clearance": {},
+          "inshore_aa_screen": {},
+          "joint_operations": {
+            "naval_invasion_planning_bonus_speed": 0.2,
+            "naval_repair_support_value_factor": 0.1,
+            "naval_general_support_value_factor": 0.1
+          },
+          "floating_base": {},
+          "green_water_operations": {
+            "naval_coordination": 0.1,
+            "refit_speed": 0.2
+          }
+        }
+      }
+    }
+  },
+  "battleship_antiair_screen": {
+    "path": "subdoctrines\\sea\\navy_capital_subdoctrines.txt",
+    "nodes": {
+      "battleship_antiair_screen": {
+        "xp_cost": 100.0,
+        "navy_anti_air_attack_factor": 0.1,
+        "rewards": {
+          "all_seas_anti_aircraft": {},
+          "efficient_navigation": {},
+          "broad_air_cover": {},
+          "inaccessible_skies": {},
+          "capital_screens": {}
+        }
+      }
+    }
+  },
+  "carrier_battlegroups": {
+    "path": "subdoctrines\\sea\\navy_carrier_doctrines.txt",
+    "nodes": {
+      "carrier_battlegroups": {
+        "xp_cost": 100.0,
+        "port_strike": 0.2,
+        "rewards": {
+          "long_distance_logistics": {
+            "navy_max_range_factor": 0.1
+          },
+          "long_range_target_acquisition": {
+            "navy_carrier_air_targetting_factor": 0.1
+          },
+          "personnel_management": {},
+          "dedicated_record_keeping": {},
+          "floating_fortresses": {}
+        }
+      }
+    }
+  },
+  "floating_airfields": {
+    "path": "subdoctrines\\sea\\navy_carrier_doctrines.txt",
+    "nodes": {
+      "floating_airfields": {
+        "xp_cost": 100.0,
+        "sortie_efficiency": 0.1,
+        "rewards": {
+          "traffic_control_systems": {
+            "carrier_capacity_penalty_reduction": -0.2
+          },
+          "floating_city": {},
+          "veteran_pilots": {
+            "navy_carrier_air_attack_factor": 0.15
+          },
+          "night_fighting_expertise": {
+            "air_carrier_night_penalty_reduction_factor": 0.15
+          },
+          "rough_weather_procedures": {}
+        }
+      }
+    }
+  },
+  "escort_carrier_support": {
+    "path": "subdoctrines\\sea\\navy_carrier_doctrines.txt",
+    "nodes": {
+      "escort_carrier_support": {
+        "xp_cost": 100.0,
+        "convoy_escort_efficiency": 0.5,
+        "rewards": {
+          "evasive_convoy_maneuvers": {
+            "convoy_retreat_speed": 0.5
+          },
+          "anti_submarine_escorts": {},
+          "civilian_hull_shapes": {},
+          "integrated_convoy_escorts": {},
+          "convoy_carrier_support_groups": {}
+        }
+      }
+    }
+  },
+  "broad_naval_support": {
+    "path": "subdoctrines\\sea\\navy_carrier_doctrines.txt",
+    "nodes": {
+      "broad_naval_support": {
+        "xp_cost": 100.0,
+        "critical_receive_chance": -0.1,
+        "rewards": {
+          "carrier_maneuvering": {},
+          "task_force_concentration": {
+            "ships_at_battle_start": 0.1
+          },
+          "organized_support_protocols": {
+            "naval_repair_support_value_factor": 0.25,
+            "naval_general_support_value_factor": 0.25
+          },
+          "escorts_in_battle": {},
+          "support_rotation": {
+            "naval_repair_support_factor": 0.25,
+            "naval_general_support_factor": 0.25
+          }
+        }
+      }
+    }
+  },
+  "massed_carrier_fleet": {
+    "path": "subdoctrines\\sea\\navy_carrier_doctrines.txt",
+    "nodes": {
+      "massed_carrier_fleet": {
+        "xp_cost": 100.0,
+        "naval_morale_factor": 0.05,
+        "rewards": {
+          "deep_operative_support": {},
+          "carrier_independence": {
+            "screening_without_screens": 0.3
+          },
+          "crew_shifts": {
+            "sortie_efficiency": 0.3,
+            "carrier_sortie_hours_delay": -2.0
+          },
+          "efficient_rearming": {},
+          "unceasing_airpower": {
+            "carrier_traffic": 0.3,
+            "carrier_night_traffic": 0.3
+          }
+        }
+      }
+    }
+  },
+  "light_task_forces": {
+    "path": "subdoctrines\\sea\\navy_carrier_doctrines.txt",
+    "nodes": {
+      "light_task_forces": {
+        "xp_cost": 100.0,
+        "naval_retreat_speed_after_initial_combat": 0.2,
+        "rewards": {
+          "direct_fire_avoidance": {},
+          "surface_fleets": {},
+          "screen_raiders": {},
+          "evasive_engagements_focus": {},
+          "localized_sea_power": {
+            "strike_force_movement_org_loss": -0.3,
+            "naval_enemy_fleet_size_ratio_penalty_factor": 0.2
+          }
+        }
+      }
+    }
+  },
+  "convoy_escort": {
+    "path": "subdoctrines\\sea\\navy_screen_doctrines.txt",
+    "nodes": {
+      "convoy_escort": {
+        "xp_cost": 100.0,
+        "convoy_escort_efficiency": 0.1,
+        "convoy_retreat_speed": 0.1,
+        "rewards": {
+          "anti_submarine_sweep_training": {},
+          "escort_reclassification": {},
+          "sweeping_duty": {
+            "mines_sweeping_by_fleets_factor": 0.15
+          },
+          "creeping_attack": {},
+          "as_below_so_above": {}
+        }
+      }
+    }
+  },
+  "support_integrated_operations": {
+    "path": "subdoctrines\\sea\\navy_screen_doctrines.txt",
+    "nodes": {
+      "support_integrated_operations": {
+        "xp_cost": 100.0,
+        "screening_efficiency": 0.05,
+        "rewards": {
+          "first_line_of_defense": {},
+          "first_line_of_attack": {},
+          "blue_water_training": {},
+          "fleet_coordination": {
+            "screening_efficiency": 0.1
+          },
+          "early_warning": {}
+        }
+      }
+    }
+  },
+  "hunter_killers": {
+    "path": "subdoctrines\\sea\\navy_screen_doctrines.txt",
+    "nodes": {
+      "hunter_killers": {
+        "xp_cost": 100.0,
+        "naval_coordination": 0.1,
+        "rewards": {
+          "search_and_destroy": {},
+          "flotilla_leader": {},
+          "group_operations": {},
+          "combat_readiness": {},
+          "escort_group_patrols": {}
+        }
+      }
+    }
+  },
+  "torpedo_primacy": {
+    "path": "subdoctrines\\sea\\navy_screen_doctrines.txt",
+    "nodes": {
+      "torpedo_primacy": {
+        "xp_cost": 100.0,
+        "naval_night_attack": 0.25,
+        "rewards": {
+          "modern_broadsides": {},
+          "coordinated_fire_patterns": {},
+          "dedicated_torpedo_task_forces": {},
+          "improved_escort_role": {},
+          "task_force_integration": {}
+        }
+      }
+    }
+  },
+  "anti_aircraft_cruisers": {
+    "path": "subdoctrines\\sea\\navy_screen_doctrines.txt",
+    "nodes": {
+      "anti_aircraft_cruisers": {
+        "xp_cost": 100.0,
+        "navy_anti_air_attack_factor": 0.2,
+        "rewards": {
+          "calibrated_deck_guns": {},
+          "priority_air_targets": {},
+          "evasion_techniques": {},
+          "air_interdiction_screening": {},
+          "sustained_engagements": {}
+        }
+      }
+    }
+  },
+  "screen_support_focus": {
+    "path": "subdoctrines\\sea\\navy_screen_doctrines.txt",
+    "nodes": {
+      "screen_support_focus": {
+        "xp_cost": 100.0,
+        "navy_max_range_factor": 0.1,
+        "rewards": {
+          "close_support_integration": {
+            "naval_general_support_value_factor": 0.1
+          },
+          "sustainable_task_forces": {
+            "naval_general_support_factor": 0.1
+          },
+          "maintenance_routines": {},
+          "protected_naval_expansion": {},
+          "patrol_pattern_improvements": {}
+        }
+      }
+    }
+  },
+  "jeune_ecole": {
+    "path": "subdoctrines\\sea\\navy_screen_doctrines.txt",
+    "nodes": {
+      "jeune_ecole": {
+        "xp_cost": 100.0,
+        "convoy_raiding_efficiency_factor": 0.3,
+        "rewards": {
+          "commerce_raiding_priority": {},
+          "large_torpedo_boats": {},
+          "total_economic_warfare": {},
+          "sea_scabs": {
+            "convoy_retreat_speed": 0.1
+          },
+          "autonomous_cruisers": {}
+        }
+      }
+    }
+  },
+  "patrol_boats": {
+    "path": "subdoctrines\\sea\\navy_screen_doctrines.txt",
+    "nodes": {
+      "patrol_boats": {
+        "xp_cost": 50.0,
+        "naval_retreat_chance_after_initial_combat": 0.25,
+        "navy_max_range_factor": -0.1,
+        "rewards": {
+          "hit_and_run": {
+            "naval_retreat_speed": 0.2
+          },
+          "small_craft_harassment": {
+            "amphibious_invasion_defence": 0.1
+          },
+          "lie_in_wait": {},
+          "fast_sortie_turnaround": {
+            "naval_morale_factor": 0.1
+          },
+          "home_waters_defense": {
+            "industrial_capacity_dockyard": 0.05
+          }
+        }
+      }
+    }
+  },
+  "wolfpacks": {
+    "path": "subdoctrines\\sea\\navy_submarine_doctrines.txt",
+    "nodes": {
+      "wolfpacks": {
+        "xp_cost": 100.0,
+        "naval_retreat_speed_after_initial_combat": 0.15,
+        "rewards": {
+          "predictive_expertise": {},
+          "pack_search_patterns": {},
+          "improvisation": {},
+          "rough_weather_procedure": {},
+          "wolfpack_coordination": {}
+        }
+      }
+    }
+  },
+  "submarine_fleet_operations": {
+    "path": "subdoctrines\\sea\\navy_submarine_doctrines.txt",
+    "nodes": {
+      "submarine_fleet_operations": {
+        "xp_cost": 100.0,
+        "naval_torpedo_screen_penetration_factor": 0.05,
+        "rewards": {
+          "long_range_patrol_schedule": {},
+          "sustained_operations": {},
+          "ambush_tactics": {
+            "navy_submarine_attack_factor": 0.1
+          },
+          "diverse_operations": {},
+          "predictive_search_patterns": {}
+        }
+      }
+    }
+  },
+  "capital_hunters": {
+    "path": "subdoctrines\\sea\\navy_submarine_doctrines.txt",
+    "nodes": {
+      "capital_hunters": {
+        "xp_cost": 100.0,
+        "naval_torpedo_reveal_chance_factor": -0.1,
+        "rewards": {
+          "fire_protocol_drills": {},
+          "battle_line_priority": {
+            "naval_torpedo_screen_penetration_factor": 0.05
+          },
+          "quick_reload_procedures": {},
+          "battleship_chase": {},
+          "escape_when_empty": {
+            "sub_retreat_speed": 0.1
+          }
+        }
+      }
+    }
+  },
+  "submarine_coastal_defense": {
+    "path": "subdoctrines\\sea\\navy_submarine_doctrines.txt",
+    "nodes": {
+      "submarine_coastal_defense": {
+        "xp_cost": 100.0,
+        "rewards": {
+          "optimized_compartments": {},
+          "patrol_vigilance": {},
+          "maneuever_fire": {},
+          "locals_knowledge": {},
+          "counter_submarine_operations": {}
+        }
+      }
+    }
+  },
+  "coastal_minelaying": {
+    "path": "subdoctrines\\sea\\navy_submarine_doctrines.txt",
+    "nodes": {
+      "coastal_minelaying": {
+        "xp_cost": 100.0,
+        "naval_mines_effect_reduction": 0.1,
+        "rewards": {
+          "covert_buildup": {},
+          "placement_for_effect": {
+            "naval_mines_damage_factor": 0.25
+          },
+          "minefield_patrols": {},
+          "overhead_protection": {},
+          "clearing_procedures": {}
+        }
+      }
+    }
+  },
+  "long_range_submarines": {
+    "path": "subdoctrines\\sea\\navy_submarine_doctrines.txt",
+    "nodes": {
+      "long_range_submarines": {
+        "xp_cost": 100.0,
+        "naval_torpedo_hit_chance_factor": 0.1,
+        "rewards": {
+          "ocean_patrols": {},
+          "improved_dive_protocols": {},
+          "support_the_surface": {},
+          "stowage_efficiency": {},
+          "deep_water_supremacy": {}
+        }
+      }
+    }
+  },
+  "mountaineers_1": {
+    "path": "subdoctrines\\special_forces\\special_forces_subdoctrines.txt",
+    "nodes": {
+      "mountaineers_1": {
+        "xp_cost": 60.0,
+        "mountaineers_special_forces_contribution_factor": -0.25,
+        "rewards": {
+          "reward_1": {
+            "mastery": 60.0,
+            "special_forces_out_of_supply_factor": -0.1,
+            "acclimatization_cold_climate_gain_factor": 0.1,
+            "category_modifiers": {
+              "special_forces": {
+                "max_organisation": 5.0,
+                "soft_attack": 0.05
+              }
+            }
+          },
+          "reward_2": {
+            "mastery": 60.0,
+            "special_forces_training_time_factor": -0.1,
+            "mountaineers_special_forces_contribution_factor": -0.25
+          },
+          "reward_3": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "mountaineers": {
+                "defense": 0.1
+              }
+            }
+          },
+          "reward_4": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "mountaineers": {
+                "max_organisation": 10.0
+              }
+            }
+          },
+          "reward_5": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "mountaineers": {
+                "soft_attack": 0.1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "mountaineers_2": {
+    "path": "subdoctrines\\special_forces\\special_forces_subdoctrines.txt",
+    "nodes": {
+      "mountaineers_2": {
+        "xp_cost": 60.0,
+        "mountaineers_special_forces_contribution_factor": -0.25,
+        "rewards": {
+          "reward_1": {
+            "mastery": 60.0,
+            "acclimatization_hot_climate_gain_factor": 0.1,
+            "acclimatization_cold_climate_gain_factor": 0.1
+          },
+          "reward_2": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "mountaineers": {
+                "initiative": 0.01
+              }
+            },
+            "unit_mountaineers_design_cost_factor": -0.5,
+            "unit_rangers_support_design_cost_factor": -0.5
+          },
+          "reward_3": {
+            "mastery": 60.0
+          },
+          "reward_4": {
+            "mastery": 60.0,
+            "mountaineers_special_forces_contribution_factor": -0.25,
+            "category_modifiers": {
+              "mountaineers": {
+                "supply_consumption": -0.02,
+                "max_organisation": 10.0
+              }
+            }
+          },
+          "reward_5": {
+            "mastery": 60.0,
+            "special_forces_attack_factor": 0.1
+          }
+        }
+      }
+    }
+  },
+  "marines_1": {
+    "path": "subdoctrines\\special_forces\\special_forces_subdoctrines.txt",
+    "nodes": {
+      "marines_1": {
+        "xp_cost": 60.0,
+        "marines_special_forces_contribution_factor": -0.25,
+        "rewards": {
+          "reward_1": {
+            "mastery": 60.0
+          },
+          "reward_2": {
+            "mastery": 60.0,
+            "unit_marine_design_cost_factor": -0.5
+          },
+          "reward_3": {
+            "mastery": 60.0
+          },
+          "reward_4": {
+            "mastery": 60.0,
+            "naval_invasion_plan_cap": 2.0,
+            "marines_special_forces_contribution_factor": -0.25
+          },
+          "reward_5": {
+            "mastery": 60.0
+          }
+        }
+      }
+    }
+  },
+  "marines_2": {
+    "path": "subdoctrines\\special_forces\\special_forces_subdoctrines.txt",
+    "nodes": {
+      "marines_2": {
+        "xp_cost": 60.0,
+        "marines_special_forces_contribution_factor": -0.25,
+        "rewards": {
+          "reward_1": {
+            "mastery": 60.0,
+            "naval_invasion_prep_days": -5.0,
+            "naval_invasion_division_cap": 2.0,
+            "naval_invasion_plan_cap": 1.0,
+            "marines_special_forces_contribution_factor": -0.25
+          },
+          "reward_2": {
+            "mastery": 60.0
+          },
+          "reward_3": {
+            "mastery": 60.0,
+            "extra_marine_supply_grace": 36.0
+          },
+          "reward_4": {
+            "mastery": 60.0,
+            "naval_invasion_planning_bonus_speed": 0.2,
+            "shore_bombardment_bonus": 0.15,
+            "army_bonus_air_superiority_factor": 0.1
+          },
+          "reward_5": {
+            "mastery": 60.0,
+            "special_forces_attack_factor": 0.1
+          }
+        }
+      }
+    }
+  },
+  "paratroopers_1": {
+    "path": "subdoctrines\\special_forces\\special_forces_subdoctrines.txt",
+    "nodes": {
+      "paratroopers_1": {
+        "xp_cost": 60.0,
+        "paratroopers_special_forces_contribution_factor": -0.25,
+        "extra_paratrooper_supply_grace": 48.0,
+        "rewards": {
+          "reward_1": {
+            "mastery": 60.0
+          },
+          "reward_2": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "paratroopers": {
+                "supply_consumption": -0.02
+              }
+            },
+            "acclimatization_hot_climate_gain_factor": 0.1,
+            "acclimatization_cold_climate_gain_factor": 0.1
+          },
+          "reward_3": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "special_forces": {
+                "max_organisation": 10.0,
+                "soft_attack": 0.05
+              }
+            }
+          },
+          "reward_4": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "paratroopers": {
+                "default_morale": 0.15
+              }
+            }
+          },
+          "reward_5": {
+            "mastery": 60.0,
+            "paratroopers_special_forces_contribution_factor": -0.25,
+            "category_modifiers": {
+              "paratroopers": {
+                "soft_attack": 0.15,
+                "breakthrough": 0.15
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "paratroopers_2": {
+    "path": "subdoctrines\\special_forces\\special_forces_subdoctrines.txt",
+    "nodes": {
+      "paratroopers_2": {
+        "xp_cost": 60.0,
+        "paratroopers_special_forces_contribution_factor": -0.25,
+        "paradrop_organization_factor": 0.5,
+        "rewards": {
+          "reward_1": {
+            "mastery": 60.0,
+            "paratroopers_special_forces_contribution_factor": -0.25
+          },
+          "reward_2": {
+            "mastery": 60.0,
+            "special_forces_training_time_factor": -0.1
+          },
+          "reward_3": {
+            "mastery": 60.0
+          },
+          "reward_4": {
+            "mastery": 60.0,
+            "paratrooper_weight_factor": -0.5,
+            "paratrooper_aa_defense": 0.1
+          },
+          "reward_5": {
+            "mastery": 60.0,
+            "special_forces_attack_factor": 0.1
+          }
+        }
+      }
+    }
+  },
+  "rangers_1": {
+    "path": "subdoctrines\\special_forces\\special_forces_subdoctrines.txt",
+    "nodes": {
+      "rangers_1": {
+        "xp_cost": 60.0,
+        "rangers_special_forces_contribution_factor": -0.25,
+        "rewards": {
+          "reward_1": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "rangers": {
+                "defense": 0.1,
+                "initiative": 0.01,
+                "maximum_speed": 0.1
+              }
+            }
+          },
+          "reward_2": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "special_forces": {
+                "soft_attack": 0.05,
+                "max_organisation": 5.0
+              }
+            },
+            "rangers_special_forces_contribution_factor": -0.25
+          },
+          "reward_3": {
+            "mastery": 60.0
+          },
+          "reward_4": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "rangers": {
+                "default_morale": 0.1,
+                "supply_consumption": -0.02
+              }
+            }
+          },
+          "reward_5": {
+            "mastery": 60.0
+          }
+        }
+      }
+    }
+  },
+  "rangers_2": {
+    "path": "subdoctrines\\special_forces\\special_forces_subdoctrines.txt",
+    "nodes": {
+      "rangers_2": {
+        "xp_cost": 60.0,
+        "rangers_special_forces_contribution_factor": -0.25,
+        "rewards": {
+          "reward_1": {
+            "mastery": 60.0
+          },
+          "reward_2": {
+            "mastery": 60.0,
+            "category_modifiers": {
+              "rangers": {
+                "soft_attack": 0.1,
+                "defense": 0.1,
+                "max_organisation": 5.0
+              }
+            }
+          },
+          "reward_3": {
+            "mastery": 60.0,
+            "special_forces_no_supply_grace": 36.0
+          },
+          "reward_4": {
+            "mastery": 60.0,
+            "special_forces_training_time_factor": -0.1,
+            "rangers_special_forces_contribution_factor": -0.25
+          },
+          "reward_5": {
+            "mastery": 60.0,
+            "special_forces_attack_factor": 0.1
+          }
+        }
+      }
+    }
+  }
+}

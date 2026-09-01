@@ -1,0 +1,4 @@
+# Hourly sync receiver (DESIGN §10.2).
+d_tac_sync_hourly = {
+	country_event = { id = tac_sync.1 hours = 0 }
+}
