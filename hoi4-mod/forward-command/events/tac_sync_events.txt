@@ -6,6 +6,8 @@ add_namespace = tac_sync
 add_namespace = tac_complete
 add_namespace = tac_abort
 add_namespace = tac_quiet
+add_namespace = tac_watchdog
+add_namespace = tac_notice
 
 # Hourly sync acknowledgement (fired by d_tac_sync_hourly).
 country_event = {
@@ -72,5 +74,40 @@ country_event = {
 
 	option = {
 		name = tac_quiet.1.o
+	}
+}
+
+# Watchdog rescue (DESIGN §10.5): fired by the daily pulse after two
+# consecutive days without an exe sync ack — the external program is
+# absent or died mid-battle. Shared cleanup lifts the freeze; the popup
+# explains and points at the Workshop page. Logs tac_abort so a
+# still-listening exe reads the uniform "tactical mode off" signal.
+country_event = {
+	id = tac_watchdog.1
+	title = tac_watchdog.1.t
+	desc = tac_watchdog.1.d
+	is_triggered_only = yes
+
+	immediate = {
+		d_tac_clear_tactical = yes
+		log = "{\"type\":\"tac_abort\"}"
+	}
+
+	option = {
+		name = tac_watchdog.1.o
+	}
+}
+
+# One-time boot notice (DESIGN §10.6): fired by the on_startup on_action
+# once per new game (never on save load). Plain informational popup — no
+# game.log line, no exe involvement.
+country_event = {
+	id = tac_notice.1
+	title = tac_notice.1.t
+	desc = tac_notice.1.d
+	is_triggered_only = yes
+
+	option = {
+		name = tac_notice.1.o
 	}
 }

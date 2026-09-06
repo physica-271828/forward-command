@@ -29,6 +29,9 @@ d_tac_clear_tactical = {
 	# frozen, so every caller gets it unconditionally.
 	d_tac_unfreeze_all = yes
 	clr_country_flag = tac_mode_active
+	# Watchdog mailboxes (§10.5) — every cleanup path leaves them empty.
+	clr_country_flag = tac_alive
+	clr_country_flag = tac_watchdog_warned
 	# Purge the ordinary-decision cooldown records so the entry row and the
 	# Force Exit row are immediately re-clickable after a reset (vanilla
 	# INS/YUG/RAJ_GOE/NSB form).

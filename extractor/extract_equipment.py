@@ -15,6 +15,12 @@ GAME_DIR = _args.hoi4_dir
 OUT_DIR = _args.out
 EQUIP_DIR = os.path.join(GAME_DIR, "common", "units", "equipment")
 OUT_FILE = os.path.join(OUT_DIR, "equipment_stats.json")
+TANK_MODULES_FILE = os.path.join(EQUIP_DIR, "modules", "00_tank_modules.txt")
+LAND_UPGRADES_FILE = os.path.join(EQUIP_DIR, "upgrades", "land_upgrades.txt")
+X_TANK_CHASSIS_FILE = os.path.join(EQUIP_DIR, "x_tank_chassis.txt")
+OUT_MODULES_FILE = os.path.join(OUT_DIR, "tank_modules.json")
+OUT_UPGRADES_FILE = os.path.join(OUT_DIR, "tank_upgrades.json")
+OUT_FAMILIES_FILE = os.path.join(OUT_DIR, "tank_families.json")
 
 COMPARISON_OPS = frozenset({">", "<", ">=", "<=", "!=", "=="})
 
@@ -119,8 +125,23 @@ def parse_val(tokens, pos):
                 pos += 1
             return result, pos
         result = {}
+        anon_index = 0
         while pos < len(tokens) and tokens[pos] != "}":
-            if isinstance(tokens[pos], str):
+            if tokens[pos] == "{":
+                # Anonymous nested block (array-of-arrays member): parse it
+                # fully so the brace balance holds, keep it under a synthetic
+                # key (e.g. save-game style `{ token level }` upgrade rows).
+                val, pos = parse_val(tokens, pos)
+                result[f"#{anon_index}"] = val
+                anon_index += 1
+            elif isinstance(tokens[pos], (int, float)):
+                # Numeric key (`5 = { has_tech = ... }` in upgrade
+                # definitions): consume key + `=`, then the value.
+                pos += 1
+                if pos < len(tokens) and tokens[pos] == "=":
+                    pos += 1
+                    _, pos = parse_val(tokens, pos)
+            elif isinstance(tokens[pos], str):
                 key = tokens[pos]
                 pos += 1
                 if pos < len(tokens) and isinstance(tokens[pos], str) and tokens[pos] in COMPARISON_OPS:
@@ -171,6 +192,115 @@ def parse_file(filepath):
             return equipments_block if isinstance(equipments_block, dict) else {}
         idx += 1
     return {}
+
+
+def parse_named_blocks(filepath, block_name):
+    """All top-level `block_name = { ... }` blocks of a file, merged into one
+    dict (a file may repeat the block — 00_tank_modules.txt carries one
+    `equipment_modules` block per DLC gate)."""
+    with open(filepath, "r", encoding="utf-8-sig") as f:
+        text = f.read()
+    tokens = tokenize(text)
+    merged = {}
+    idx = 0
+    while idx < len(tokens):
+        if tokens[idx] == block_name and idx + 1 < len(tokens) and tokens[idx + 1] == "=":
+            block, idx = parse_val(tokens, idx + 2)
+            if isinstance(block, dict):
+                merged.update(block)
+        else:
+            idx += 1
+    return merged
+
+
+# Combat stats the tactical side models on tank designs — module/upgrade
+# blocks carry more (cost, fuel, reliability, ...), all deliberately dropped.
+DESIGN_STAT_KEYS = [
+    "soft_attack", "hard_attack", "ap_attack", "armor_value",
+    "hardness", "defense", "breakthrough",
+]
+
+
+def _filtered_stats(block):
+    """The DESIGN_STAT_KEYS subset of an add_stats/multiply_stats dict."""
+    if not isinstance(block, dict):
+        return {}
+    return {k: v for k, v in block.items()
+            if k in DESIGN_STAT_KEYS and isinstance(v, (int, float))}
+
+
+def extract_tank_modules(filepath):
+    """00_tank_modules.txt → {module token: {"add": {...}, "mult": {...}}}.
+    Every module token is kept, even with empty stats, so the runtime can
+    tell "known module with no combat stats" apart from "unknown token"."""
+    modules = parse_named_blocks(filepath, "equipment_modules")
+    out = {}
+    for token, data in modules.items():
+        if token == "limit" or not isinstance(data, dict):
+            continue
+        out[token] = {
+            "add": _filtered_stats(data.get("add_stats")),
+            "mult": _filtered_stats(data.get("multiply_stats")),
+        }
+    return out
+
+
+def extract_tank_upgrades(filepath):
+    """land_upgrades.txt → {upgrade token: {"add": {per-level stats}}}.
+    Only the add_stats (per-level flat) form is extracted; legacy
+    factor-per-level upgrades (tank_gun_upgrade & friends) apply to
+    non-designer fixed equipment and are out of scope."""
+    upgrades = parse_named_blocks(filepath, "upgrades")
+    out = {}
+    for token, data in upgrades.items():
+        if not isinstance(data, dict):
+            continue
+        raw_add = data.get("add_stats")
+        if isinstance(raw_add, dict):
+            # Kept even when the combat-key filter leaves nothing (the
+            # engine upgrade only touches speed/cost): the runtime must
+            # still recognize the token as a known upgrade.
+            out[token] = {"add": _filtered_stats(raw_add)}
+    return out
+
+
+def extract_tank_families(filepath, equipment_names):
+    """x_tank_chassis.txt `duplicate_archetypes` → per family:
+    {archetype, type, hardness override, variants {variant token: source
+    chassis token}}. The runtime clones every child of the source archetype
+    whose name starts with it (`light_tank_chassis_1` →
+    `light_tank_aa_chassis_1`); children whose names don't contain the
+    archetype token (gw_tank_equipment, the legacy fixed rows) are NOT
+    duplicated by the game and are excluded here too."""
+    families = parse_named_blocks(filepath, "duplicate_archetypes")
+    out = {}
+    for fam, data in families.items():
+        if not isinstance(data, dict):
+            continue
+        archetype = data.get("archetype")
+        if not isinstance(archetype, str):
+            continue
+        raw_type = data.get("type")
+        type_list = [t for t in raw_type if isinstance(t, str)] if isinstance(raw_type, list) else []
+        hardness = None
+        for_each = data.get("for_each")
+        if isinstance(for_each, dict):
+            h = for_each.get("hardness")
+            if isinstance(h, dict) and isinstance(h.get("set"), (int, float)):
+                hardness = h["set"]
+        variants = {}
+        prefix = archetype + "_"
+        for name in equipment_names:
+            if name.startswith(prefix):
+                variants[fam + name[len(archetype):]] = name
+        out[fam] = {
+            "archetype": archetype,
+            "type": type_list,
+            "variants": variants,
+        }
+        if hardness is not None:
+            out[fam]["hardness"] = hardness
+    return out
 
 
 def collect_equipment_files(base_dir):
@@ -308,10 +438,41 @@ def main():
             continue
         result[name] = extract_equipment(data, name)
 
+    # Tank designer variant families (duplicate_archetypes): the game clones
+    # each chassis tier into the AA/SP-artillery/TD/flame/amphibious families
+    # at runtime — they exist in no equipment file, so they are synthesized
+    # here from the source chassis row plus the family's overrides.
+    families = extract_tank_families(X_TANK_CHASSIS_FILE, all_equipment.keys())
+    synthesized = 0
+    for fam, spec in families.items():
+        for variant, source in spec["variants"].items():
+            source_row = result.get(source)
+            if source_row is None:
+                continue
+            row = dict(source_row)
+            row["archetype"] = fam
+            if "hardness" in spec:
+                row["hardness"] = spec["hardness"]
+            if spec["type"]:
+                row["categories"] = spec["type"]
+            row["family"] = fam
+            result[variant] = row
+            synthesized += 1
+
+    modules = extract_tank_modules(TANK_MODULES_FILE)
+    upgrades = extract_tank_upgrades(LAND_UPGRADES_FILE)
+
     with open(OUT_FILE, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
+    with open(OUT_MODULES_FILE, "w", encoding="utf-8") as f:
+        json.dump(modules, f, indent=2, ensure_ascii=False)
+    with open(OUT_UPGRADES_FILE, "w", encoding="utf-8") as f:
+        json.dump(upgrades, f, indent=2, ensure_ascii=False)
+    with open(OUT_FAMILIES_FILE, "w", encoding="utf-8") as f:
+        json.dump(families, f, indent=2, ensure_ascii=False)
 
-    print(f"Extracted {len(result)} equipment entries from {len(files)} files")
+    print(f"Extracted {len(result)} equipment entries ({synthesized} synthesized variant-family rows) from {len(files)} files")
+    print(f"Extracted {len(modules)} tank modules, {len(upgrades)} tank upgrades, {len(families)} variant families")
     print(f"Output: {OUT_FILE}")
     if errors:
         print(f"\nErrors ({len(errors)}):")

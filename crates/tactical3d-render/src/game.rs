@@ -416,6 +416,7 @@ impl Plugin for GameLoopPlugin {
             .init_resource::<AiTurn>()
             .init_resource::<Checkpoints>()
             .init_resource::<BattleTour>()
+            .init_resource::<crate::automation::TurnAutomation>()
             // Render gate: PreUpdate so the egui painters / picking
             // read this frame's gate.open decision. No-ops (beyond the
             // minimize guard) when the low_power setting didn't insert the
@@ -433,6 +434,7 @@ impl Plugin for GameLoopPlugin {
                     tick_division_orders,
                     tick_battle_tour,
                     tick_battle,
+                    crate::automation::tick_turn_automation,
                 )
                     .chain()
                     // Consume this frame's inputs, never stale ones —

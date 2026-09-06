@@ -1,0 +1,727 @@
+{
+  "tank_gasoline_engine": {
+    "add": {},
+    "mult": {}
+  },
+  "tank_diesel_engine": {
+    "add": {},
+    "mult": {}
+  },
+  "tank_petrol_electric_engine": {
+    "add": {
+      "breakthrough": 2,
+      "defense": 2
+    },
+    "mult": {
+      "breakthrough": 0.15,
+      "defense": 0.15
+    }
+  },
+  "tank_gas_turbine_engine": {
+    "add": {},
+    "mult": {}
+  },
+  "tank_riveted_armor": {
+    "add": {
+      "defense": 2,
+      "breakthrough": 2
+    },
+    "mult": {}
+  },
+  "tank_cast_armor": {
+    "add": {
+      "defense": 3,
+      "breakthrough": 3,
+      "hardness": 0.02
+    },
+    "mult": {
+      "armor_value": 0.3
+    }
+  },
+  "tank_welded_armor": {
+    "add": {
+      "defense": 4,
+      "breakthrough": 4
+    },
+    "mult": {
+      "armor_value": 0.3
+    }
+  },
+  "NOR_tank_rikstanken_armor": {
+    "add": {
+      "defense": 1,
+      "breakthrough": 0,
+      "hardness": -0.3
+    },
+    "mult": {}
+  },
+  "tank_torsion_bar_suspension": {
+    "add": {},
+    "mult": {}
+  },
+  "tank_christie_suspension": {
+    "add": {},
+    "mult": {}
+  },
+  "tank_bogie_suspension": {
+    "add": {},
+    "mult": {}
+  },
+  "tank_interleaved_suspension": {
+    "add": {
+      "breakthrough": 4
+    },
+    "mult": {}
+  },
+  "tank_wheeled_suspension": {
+    "add": {},
+    "mult": {
+      "hardness": -0.4
+    }
+  },
+  "tank_half_track_suspension": {
+    "add": {},
+    "mult": {
+      "hardness": -0.3
+    }
+  },
+  "tank_light_one_man_tank_turret": {
+    "add": {
+      "breakthrough": 7
+    },
+    "mult": {}
+  },
+  "tank_light_two_man_tank_turret": {
+    "add": {
+      "breakthrough": 10
+    },
+    "mult": {}
+  },
+  "tank_light_three_man_tank_turret": {
+    "add": {
+      "breakthrough": 14
+    },
+    "mult": {}
+  },
+  "tank_light_fixed_superstructure_turret": {
+    "add": {
+      "defense": 3
+    },
+    "mult": {
+      "breakthrough": -0.25
+    }
+  },
+  "tank_medium_one_man_tank_turret": {
+    "add": {
+      "breakthrough": 8
+    },
+    "mult": {
+      "hard_attack": -0.05,
+      "soft_attack": -0.05
+    }
+  },
+  "tank_medium_two_man_tank_turret": {
+    "add": {
+      "breakthrough": 16
+    },
+    "mult": {}
+  },
+  "tank_medium_three_man_tank_turret": {
+    "add": {
+      "breakthrough": 24
+    },
+    "mult": {}
+  },
+  "tank_medium_fixed_superstructure_turret": {
+    "add": {
+      "defense": 3
+    },
+    "mult": {
+      "breakthrough": -0.25
+    }
+  },
+  "tank_heavy_two_man_tank_turret": {
+    "add": {
+      "breakthrough": 18
+    },
+    "mult": {}
+  },
+  "tank_heavy_three_man_tank_turret": {
+    "add": {
+      "breakthrough": 22
+    },
+    "mult": {}
+  },
+  "tank_heavy_fixed_superstructure_turret": {
+    "add": {
+      "defense": 3
+    },
+    "mult": {
+      "breakthrough": -0.25
+    }
+  },
+  "tank_super_heavy_three_man_tank_turret": {
+    "add": {
+      "breakthrough": 24
+    },
+    "mult": {
+      "hard_attack": -0.1
+    }
+  },
+  "tank_super_heavy_four_man_tank_turret": {
+    "add": {
+      "breakthrough": 35
+    },
+    "mult": {}
+  },
+  "tank_modern_tank_turret": {
+    "add": {
+      "breakthrough": 24
+    },
+    "mult": {}
+  },
+  "tank_heavy_machine_gun": {
+    "add": {
+      "soft_attack": 8,
+      "hard_attack": 2,
+      "ap_attack": 6
+    },
+    "mult": {}
+  },
+  "flamethrower": {
+    "add": {
+      "soft_attack": 5
+    },
+    "mult": {}
+  },
+  "advanced_flamethrower": {
+    "add": {
+      "soft_attack": 12,
+      "breakthrough": 6
+    },
+    "mult": {}
+  },
+  "tank_auto_cannon": {
+    "add": {
+      "soft_attack": 15,
+      "hard_attack": 5,
+      "ap_attack": 20
+    },
+    "mult": {}
+  },
+  "tank_auto_cannon_2": {
+    "add": {
+      "soft_attack": 20,
+      "hard_attack": 7,
+      "ap_attack": 35
+    },
+    "mult": {}
+  },
+  "tank_anti_air_cannon": {
+    "add": {
+      "soft_attack": 6,
+      "hard_attack": 2,
+      "ap_attack": 10
+    },
+    "mult": {}
+  },
+  "tank_anti_air_cannon_2": {
+    "add": {
+      "soft_attack": 8,
+      "hard_attack": 5,
+      "ap_attack": 18
+    },
+    "mult": {}
+  },
+  "tank_anti_air_cannon_3": {
+    "add": {
+      "soft_attack": 10,
+      "hard_attack": 5,
+      "ap_attack": 24
+    },
+    "mult": {}
+  },
+  "tank_small_cannon": {
+    "add": {
+      "soft_attack": 10,
+      "hard_attack": 6,
+      "ap_attack": 25
+    },
+    "mult": {}
+  },
+  "tank_small_cannon_2": {
+    "add": {
+      "soft_attack": 15,
+      "hard_attack": 15,
+      "ap_attack": 50
+    },
+    "mult": {}
+  },
+  "tank_close_support_gun": {
+    "add": {
+      "soft_attack": 22,
+      "hard_attack": 5,
+      "ap_attack": 10
+    },
+    "mult": {}
+  },
+  "tank_medium_cannon": {
+    "add": {
+      "soft_attack": 20,
+      "hard_attack": 15,
+      "ap_attack": 60,
+      "breakthrough": 2
+    },
+    "mult": {}
+  },
+  "tank_medium_cannon_2": {
+    "add": {
+      "soft_attack": 32,
+      "hard_attack": 20,
+      "ap_attack": 90,
+      "breakthrough": 4
+    },
+    "mult": {}
+  },
+  "tank_medium_howitzer": {
+    "add": {
+      "soft_attack": 35,
+      "hard_attack": 1,
+      "ap_attack": 20,
+      "breakthrough": -2
+    },
+    "mult": {}
+  },
+  "tank_medium_howitzer_2": {
+    "add": {
+      "soft_attack": 45,
+      "hard_attack": 2,
+      "ap_attack": 30,
+      "breakthrough": -2
+    },
+    "mult": {}
+  },
+  "tank_rocket_launcher": {
+    "add": {
+      "soft_attack": 25,
+      "hard_attack": 1,
+      "ap_attack": 2,
+      "breakthrough": -4
+    },
+    "mult": {}
+  },
+  "tank_rocket_launcher_2": {
+    "add": {
+      "soft_attack": 35,
+      "hard_attack": 1,
+      "ap_attack": 2,
+      "breakthrough": -4
+    },
+    "mult": {}
+  },
+  "tank_high_velocity_cannon": {
+    "add": {
+      "soft_attack": 10,
+      "hard_attack": 26,
+      "ap_attack": 68
+    },
+    "mult": {}
+  },
+  "tank_high_velocity_cannon_2": {
+    "add": {
+      "soft_attack": 20,
+      "hard_attack": 35,
+      "ap_attack": 125
+    },
+    "mult": {}
+  },
+  "tank_high_velocity_cannon_3": {
+    "add": {
+      "soft_attack": 25,
+      "hard_attack": 45,
+      "ap_attack": 200
+    },
+    "mult": {}
+  },
+  "tank_heavy_cannon": {
+    "add": {
+      "soft_attack": 20,
+      "hard_attack": 20,
+      "ap_attack": 90
+    },
+    "mult": {}
+  },
+  "tank_heavy_cannon_2": {
+    "add": {
+      "soft_attack": 25,
+      "hard_attack": 35,
+      "ap_attack": 125
+    },
+    "mult": {}
+  },
+  "tank_heavy_cannon_3": {
+    "add": {
+      "soft_attack": 30,
+      "hard_attack": 40,
+      "ap_attack": 170
+    },
+    "mult": {}
+  },
+  "tank_heavy_howitzer": {
+    "add": {
+      "soft_attack": 55,
+      "hard_attack": 2,
+      "ap_attack": 60,
+      "breakthrough": -4
+    },
+    "mult": {}
+  },
+  "tank_super_heavy_cannon": {
+    "add": {
+      "soft_attack": 35,
+      "hard_attack": 45,
+      "ap_attack": 225
+    },
+    "mult": {}
+  },
+  "NOR_rikstanken_turret": {
+    "add": {
+      "breakthrough": 1
+    },
+    "mult": {}
+  },
+  "tank_radio_1": {
+    "add": {},
+    "mult": {
+      "defense": 0.2,
+      "breakthrough": 0.15
+    }
+  },
+  "tank_radio_2": {
+    "add": {},
+    "mult": {
+      "defense": 0.4,
+      "breakthrough": 0.25
+    }
+  },
+  "tank_radio_3": {
+    "add": {},
+    "mult": {
+      "defense": 0.6,
+      "breakthrough": 0.4
+    }
+  },
+  "amphibious_drive": {
+    "add": {},
+    "mult": {}
+  },
+  "secondary_turret_hmg": {
+    "add": {
+      "soft_attack": 4
+    },
+    "mult": {}
+  },
+  "secondary_turret_small_cannon": {
+    "add": {
+      "soft_attack": 5,
+      "hard_attack": 3,
+      "breakthrough": 2
+    },
+    "mult": {}
+  },
+  "sloped_armor": {
+    "add": {},
+    "mult": {
+      "armor_value": 0.25
+    }
+  },
+  "stabilizer": {
+    "add": {
+      "breakthrough": 5
+    },
+    "mult": {}
+  },
+  "smoke_launchers": {
+    "add": {
+      "defense": 2,
+      "breakthrough": 1
+    },
+    "mult": {}
+  },
+  "extra_ammo_storage": {
+    "add": {
+      "breakthrough": 2,
+      "defense": 4
+    },
+    "mult": {}
+  },
+  "wet_ammo_storage": {
+    "add": {},
+    "mult": {}
+  },
+  "squeezebore_adaptor": {
+    "add": {},
+    "mult": {
+      "ap_attack": 0.1
+    }
+  },
+  "armor_skirts": {
+    "add": {
+      "armor_value": 3,
+      "breakthrough": 3
+    },
+    "mult": {}
+  },
+  "dozer_blade": {
+    "add": {},
+    "mult": {}
+  },
+  "auto_loader": {
+    "add": {
+      "breakthrough": 4,
+      "defense": 4
+    },
+    "mult": {}
+  },
+  "easy_maintenance": {
+    "add": {},
+    "mult": {}
+  },
+  "additional_machine_guns": {
+    "add": {
+      "soft_attack": 1,
+      "defense": 2
+    },
+    "mult": {}
+  },
+  "expanded_fuel_tank": {
+    "add": {},
+    "mult": {}
+  },
+  "lc_heavy_naval_guns": {
+    "add": {
+      "breakthrough": 40,
+      "soft_attack": 60,
+      "hard_attack": 55,
+      "ap_attack": 240
+    },
+    "mult": {}
+  },
+  "lc_super_heavy_railway_gun": {
+    "add": {
+      "breakthrough": 30,
+      "soft_attack": 80,
+      "hard_attack": 8,
+      "ap_attack": 80
+    },
+    "mult": {}
+  },
+  "lc_high_impact_obliterator_cannon": {
+    "add": {
+      "breakthrough": 25,
+      "soft_attack": 35,
+      "hard_attack": 75,
+      "ap_attack": 280
+    },
+    "mult": {}
+  },
+  "lc_heavy_anti_air_platform": {
+    "add": {
+      "breakthrough": 20,
+      "soft_attack": 20,
+      "hard_attack": 10,
+      "ap_attack": 50
+    },
+    "mult": {}
+  },
+  "lc_medium_naval_guns": {
+    "add": {
+      "breakthrough": 25,
+      "soft_attack": 42,
+      "hard_attack": 52,
+      "ap_attack": 230
+    },
+    "mult": {}
+  },
+  "lc_hull_mounted_railway_gun": {
+    "add": {
+      "breakthrough": 15,
+      "soft_attack": 70,
+      "hard_attack": 5,
+      "ap_attack": 70
+    },
+    "mult": {}
+  },
+  "lc_super_heavy_howitzer": {
+    "add": {
+      "breakthrough": 20,
+      "soft_attack": 65,
+      "hard_attack": 4,
+      "ap_attack": 65
+    },
+    "mult": {}
+  },
+  "lc_heavy_high_velocity_cannons": {
+    "add": {
+      "breakthrough": 15,
+      "soft_attack": 30,
+      "hard_attack": 55,
+      "ap_attack": 250
+    },
+    "mult": {}
+  },
+  "lc_heavy_anti_air_battery": {
+    "add": {
+      "breakthrough": 10,
+      "soft_attack": 14,
+      "hard_attack": 7,
+      "ap_attack": 40
+    },
+    "mult": {}
+  },
+  "lc_medium_cannon_turret": {
+    "add": {
+      "breakthrough": 8,
+      "soft_attack": 32,
+      "hard_attack": 20,
+      "ap_attack": 90
+    },
+    "mult": {}
+  },
+  "lc_assault_gun": {
+    "add": {
+      "breakthrough": 16,
+      "soft_attack": 55,
+      "hard_attack": 2,
+      "ap_attack": 40
+    },
+    "mult": {}
+  },
+  "lc_high_velocity_cannon_turret": {
+    "add": {
+      "breakthrough": 4,
+      "soft_attack": 25,
+      "hard_attack": 45,
+      "ap_attack": 200
+    },
+    "mult": {}
+  },
+  "lc_light_anti_air_battery": {
+    "add": {
+      "soft_attack": 10,
+      "hard_attack": 5,
+      "ap_attack": 30
+    },
+    "mult": {}
+  },
+  "lc_flamethrower_turret": {
+    "add": {
+      "breakthrough": 8,
+      "soft_attack": 8
+    },
+    "mult": {}
+  },
+  "lc_rocket_launcher": {
+    "add": {
+      "breakthrough": 4,
+      "soft_attack": 35,
+      "hard_attack": 1,
+      "ap_attack": 2
+    },
+    "mult": {}
+  },
+  "lc_radio_1": {
+    "add": {},
+    "mult": {
+      "defense": 0.2,
+      "breakthrough": 0.15
+    }
+  },
+  "lc_radio_2": {
+    "add": {},
+    "mult": {
+      "defense": 0.4,
+      "breakthrough": 0.25
+    }
+  },
+  "lc_radio_3": {
+    "add": {},
+    "mult": {
+      "defense": 0.6,
+      "breakthrough": 0.4
+    }
+  },
+  "lc_command_center": {
+    "add": {},
+    "mult": {
+      "defense": 0.75,
+      "breakthrough": 0.5
+    }
+  },
+  "lc_aircraft_catapult": {
+    "add": {
+      "defense": 1
+    },
+    "mult": {}
+  },
+  "lc_helipad": {
+    "add": {
+      "defense": 1
+    },
+    "mult": {}
+  },
+  "lc_armored_skirts": {
+    "add": {
+      "armor_value": 6,
+      "breakthrough": 6
+    },
+    "mult": {}
+  },
+  "lc_smoke_generators": {
+    "add": {
+      "defense": 2,
+      "breakthrough": 3
+    },
+    "mult": {}
+  },
+  "lc_obstacle_clearance_gear": {
+    "add": {},
+    "mult": {}
+  },
+  "lc_radar": {
+    "add": {},
+    "mult": {
+      "defense": 0.1
+    }
+  },
+  "lc_internal_fuel_tanks": {
+    "add": {},
+    "mult": {}
+  },
+  "lc_internal_ammunition_compartments": {
+    "add": {
+      "breakthrough": 2,
+      "defense": 4
+    },
+    "mult": {}
+  },
+  "lc_wet_ammunition_storage": {
+    "add": {},
+    "mult": {}
+  },
+  "lc_bunker_emplacement": {
+    "add": {
+      "defense": 10,
+      "armor_value": 8,
+      "breakthrough": 10,
+      "soft_attack": 10
+    },
+    "mult": {}
+  },
+  "lc_stabilizers": {
+    "add": {
+      "breakthrough": 6
+    },
+    "mult": {}
+  }
+}

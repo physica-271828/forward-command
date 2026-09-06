@@ -34,7 +34,7 @@
 //! equipment variant (`infantry_equipment_0..3`) appears in the save — so the
 //! tech modifier is 1.0 here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tactical_core::{BattalionUnit, HexCoord, Side, UnitType};
 
@@ -42,14 +42,20 @@ use crate::mapping::{
     canonical_template_key, fallback_equipment_archetype, fallback_equipment_target,
     map_support_kind, UnitNaming,
 };
-use crate::model::{BattalionInfo, CountryData, DivisionData, LeaderData, SaveGame};
+use crate::model::{BattalionInfo, CountryData, DivisionData, EquipmentDesign, LeaderData, SaveGame};
 use crate::tables::{
-    DoctrineTable, EquipmentTable, ModifierTable, UnitTemplateStats, UnitTemplateTable,
+    design_stats, DesignTables, DoctrineTable, EquipmentTable, ModifierTable, UnitTemplateStats,
+    UnitTemplateTable,
 };
 
 /// §5.3 degradation factor: at 0% equipment fill a battalion still fights at
 /// 50% of its equipment-derived stats (people fight, not gear).
 pub const DEFAULT_DEGRADATION_FACTOR: f32 = 0.5;
+
+/// One equipment variant a division holds: (equipment-table key, piece
+/// count, registry design id when the save references the per-design id
+/// form). The design id routes the variant through the §5.3 designer path.
+type VariantStock<'a> = Vec<(&'a str, f32, Option<u64>)>;
 
 /// HOI4 division experience → soft/hard attack multiplier.
 ///
@@ -429,6 +435,11 @@ const FALLBACK_MAX_STRENGTH: f32 = 25.0;
 /// (see [`leader_bonus`]; the neutral default applies no
 /// leader). `start_id` is the id assigned to the first produced
 /// unit; ids increment.
+///
+/// Static-path convenience wrapper: no equipment registry, so the
+/// design-aware branch never engages (production assembly — live, script
+/// from-save, roster sync — uses [`create_tactical_units_named`] with the
+/// save's `designs` and the designer tables).
 #[allow(clippy::too_many_arguments)]
 pub fn create_tactical_units(
     division: &DivisionData,
@@ -452,6 +463,9 @@ pub fn create_tactical_units(
         leader,
         start_id,
         &UnitNaming::default(),
+        &HashMap::new(),
+        &DesignTables::default(),
+        &mut Vec::new(),
     )
 }
 
@@ -459,6 +473,13 @@ pub fn create_tactical_units(
 /// production passes the session language's table so generated
 /// counter names / support tags / the HQ label read in the player's
 /// language; the wrapper above keeps the English default for tests.
+///
+/// `designs` is the save's root `equipments` registry and `design_tables`
+/// the designer module/upgrade stat tables: a battalion holding a designer
+/// variant (tank chassis with module picks) computes its attack triple and
+/// armor/hardness bases from the design (§5.3 designer path); anything else
+/// keeps the static equipment-row values. Lookup failures (unknown module
+/// tokens, modded content) append to `warnings` for the caller to log.
 #[allow(clippy::too_many_arguments)]
 pub fn create_tactical_units_named(
     division: &DivisionData,
@@ -471,6 +492,9 @@ pub fn create_tactical_units_named(
     leader: &LeaderBonus,
     start_id: usize,
     naming: &UnitNaming,
+    designs: &HashMap<u64, EquipmentDesign>,
+    design_tables: &DesignTables,
+    warnings: &mut Vec<String>,
 ) -> Vec<BattalionUnit> {
     let factors = doctrines.map(DoctrineTable::factors).unwrap_or_default();
 
@@ -529,13 +553,32 @@ pub fn create_tactical_units_named(
     //    stats, not the archetype's latest one (§5.3 Σ over equipment types).
     //    Unknown equipment keys (not in the table at all) are ignored
     //    gracefully (§5.3 fallback rule).
-    let mut available: HashMap<String, Vec<(&str, f32)>> = HashMap::new();
-    for (key, count) in &division.equipment {
-        if let Some(archetype) = equipment_stats.archetype_of(key) {
-            available
-                .entry(archetype)
-                .or_default()
-                .push((key.as_str(), *count));
+    //    The 1.19 id-reference form (division.equipment_ids + the root
+    //    registry) is preferred when present: each entry carries its design
+    //    id, so two same-token variants with different module picks stay
+    //    distinct. The token map alone (legacy saves, synthetic fixtures)
+    //    runs the same path with no design attached.
+    let mut available: HashMap<String, VariantStock> = HashMap::new();
+    if !division.equipment_ids.is_empty() && !designs.is_empty() {
+        for (id, count) in &division.equipment_ids {
+            let Some(design) = designs.get(id) else {
+                continue;
+            };
+            if let Some(archetype) = equipment_stats.archetype_of(&design.token) {
+                available
+                    .entry(archetype)
+                    .or_default()
+                    .push((design.token.as_str(), *count, Some(*id)));
+            }
+        }
+    } else {
+        for (key, count) in &division.equipment {
+            if let Some(archetype) = equipment_stats.archetype_of(key) {
+                available
+                    .entry(archetype)
+                    .or_default()
+                    .push((key.as_str(), *count, None));
+            }
         }
     }
 
@@ -555,6 +598,9 @@ pub fn create_tactical_units_named(
     let mut units = Vec::new();
     let mut next_id = start_id;
     let mut numbering: HashMap<UnitType, usize> = HashMap::new();
+    // Design-lookup warnings dedup per division (a 5-battalion division
+    // shares its designs — the same unknown module must not log 5×).
+    let mut warned: HashSet<String> = HashSet::new();
 
     for s in &subunits {
         // Per-type leader trait bonuses of this subunit's
@@ -570,7 +616,16 @@ pub fn create_tactical_units_named(
             .filter_map(|g| leader.type_defense.get(g))
             .sum();
         for _ in 0..s.info.count {
-            let stats = BattalionStats::compute(s, equipment_stats, &total_need, &available);
+            let stats = BattalionStats::compute(
+                s,
+                equipment_stats,
+                &total_need,
+                &available,
+                designs,
+                design_tables,
+                warnings,
+                &mut warned,
+            );
 
             let n = numbering.entry(s.info.unit_type).or_insert(0);
             *n += 1;
@@ -808,11 +863,16 @@ struct BattalionStats {
 }
 
 impl BattalionStats {
+    #[allow(clippy::too_many_arguments)]
     fn compute(
         s: &Subunit,
         equipment_stats: &EquipmentTable,
         total_need: &HashMap<&str, f32>,
-        available: &HashMap<String, Vec<(&str, f32)>>,
+        available: &HashMap<String, VariantStock>,
+        designs: &HashMap<u64, EquipmentDesign>,
+        design_tables: &DesignTables,
+        warnings: &mut Vec<String>,
+        warned: &mut HashSet<String>,
     ) -> Self {
         let mut soft = 0.0;
         let mut hard = 0.0;
@@ -841,13 +901,13 @@ impl BattalionStats {
             // Surplus equipment cannot be used: when the division holds MORE
             // of an archetype than the line battalions need, each battalion
             // is capped at its own requirement (the rest stays in the depot).
-            let arch_available: f32 = variants.iter().map(|(_, c)| *c).sum();
+            let arch_available: f32 = variants.iter().map(|(_, c, _)| *c).sum();
             let cap_scale = if arch_available > total && arch_available > 0.0 {
                 total / arch_available
             } else {
                 1.0
             };
-            for (key, count) in variants {
+            for (key, count, design_id) in variants {
                 let alloc = count * need / total * cap_scale;
                 alloc_sum += alloc;
                 // Equipment missing from the stats table contributes nothing
@@ -861,13 +921,48 @@ impl BattalionStats {
                 // ×1, not ×100); without it the save-path values read 100×
                 // the HOI4/script scale.
                 let fill = if *need > 0.0 { alloc / need } else { 0.0 };
-                soft += eq.soft_attack * fill;
-                hard += eq.hard_attack * fill;
+                // Designer path (§5.3): a save design's own module picks and
+                // upgrade levels compute the attack triple and the
+                // armor/hardness bases — tank chassis rows carry no attack
+                // stats (the gun is a module), so the static row would read
+                // 0. Designs that don't resolve (chassis token missing from
+                // the table) fall back to the static row untouched.
+                // defense/breakthrough keep the static row values either way.
+                let designed = design_id
+                    .and_then(|id| designs.get(&id))
+                    .and_then(|d| {
+                        let mut local = Vec::new();
+                        let out = design_stats(d, equipment_stats, design_tables, &mut local);
+                        for w in local {
+                            if warned.insert(w.clone()) {
+                                warnings.push(w);
+                            }
+                        }
+                        out
+                    });
+                let (soft_v, hard_v, pierce_v, armor_v, hardness_v) = match designed {
+                    Some(ds) => (
+                        ds.soft_attack,
+                        ds.hard_attack,
+                        ds.piercing,
+                        ds.armor,
+                        ds.hardness,
+                    ),
+                    None => (
+                        eq.soft_attack,
+                        eq.hard_attack,
+                        eq.piercing,
+                        eq.armor,
+                        eq.hardness,
+                    ),
+                };
+                soft += soft_v * fill;
+                hard += hard_v * fill;
                 defense += eq.defense * fill;
                 breakthrough += eq.breakthrough * fill;
-                armor = armor.max(eq.armor);
-                piercing_weighted += eq.piercing * alloc;
-                hardness_weighted += eq.hardness * alloc;
+                armor = armor.max(armor_v);
+                piercing_weighted += pierce_v * alloc;
+                hardness_weighted += hardness_v * alloc;
                 weight_sum += alloc;
             }
         }
@@ -1022,6 +1117,9 @@ countries = {
             &LeaderBonus::default(),
             5,
             &naming,
+            &HashMap::new(),
+            &DesignTables::default(),
+            &mut Vec::new(),
         );
         assert_eq!(units[0].name, "1. 步兵");
         assert_eq!(units[0].support[0].name, "工兵");
@@ -1571,6 +1669,355 @@ countries = {
         );
         // No Recon unit deploys — the company rides with the first
         // battalion (asserted above).
+    }
+
+    /// The variant-family chassis rows synthesized by the extractor
+    /// (duplicate_archetypes) resolve like any equipment — before the
+    /// synthesis the whole family was missing from the table and SPAA/TD/
+    /// SPG battalions silently fielded 0 strength.
+    #[test]
+    fn variant_family_chassis_rows_resolve() {
+        let data_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("data");
+        let eq = EquipmentTable::load(data_dir.join("equipment_stats.json")).unwrap();
+        let ut = UnitTemplateTable::load(data_dir.join("unit_templates.json")).unwrap();
+
+        // The family row carries the family's archetype, the source
+        // chassis's stats and the family hardness override (light AA: 0.5).
+        let aa = eq.resolve("light_tank_aa_chassis_1").unwrap();
+        assert!((aa.hardness - 0.5).abs() < 1e-6, "hardness={}", aa.hardness);
+        assert!((aa.armor - 15.0).abs() < 1e-6, "armor={}", aa.armor);
+        assert_eq!(
+            eq.archetype_of("light_tank_aa_chassis_1").as_deref(),
+            Some("light_tank_aa_chassis")
+        );
+        // Families exist per weight class and tier; the families the game
+        // never clones stay absent.
+        assert!(eq.resolve("medium_tank_destroyer_chassis_3").is_some());
+        assert!(eq.resolve("super_heavy_tank_aa_chassis_1").is_some());
+        assert!(eq.resolve("modern_tank_flame_chassis_1").is_none());
+
+        // An SPAA battalion holding family equipment gets real strength
+        // (equipment resolves under its need archetype again).
+        let save = r#"
+division_templates = {
+    division_template = {
+        id = { id = 7 type = 47 }
+        name = "AA-Division"
+        regiments = {
+            light_sp_anti_air_brigade = { x = 0 y = 0 }
+        }
+    }
+}
+countries = {
+    GER = {
+        units = {
+            division = {
+                id = 1
+                division_template_id = { id = 7 type = 47 }
+                location = 6334
+                organization = 0.9
+                strength = 0.95
+                equipment = {
+                    light_tank_aa_chassis_1 = 40
+                }
+            }
+        }
+    }
+}
+"#;
+        let parsed = SaveParser::parse_save_from_str(save).unwrap();
+        let div = &parsed.countries["GER"].divisions[0];
+        let units = create_tactical_units(
+            div,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+        );
+        let spaa = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::AntiAirBrigade)
+            .unwrap();
+        assert!(spaa.strength > 0.0, "spaa strength={}", spaa.strength);
+        assert!((spaa.hardness - 0.5).abs() < 1e-3, "hardness={}", spaa.hardness);
+        assert!((spaa.armor - 15.0).abs() < 1e-3, "armor={}", spaa.armor);
+    }
+
+    /// §5.3 designer path end to end: the save's registry carries each
+    /// design's module picks, the division references designs by id, and
+    /// the battalion's attack triple comes from the modules — two
+    /// same-archetype designs blend by their actual piece counts.
+    #[test]
+    fn design_modules_drive_tank_attack() {
+        // Vanilla-true fixture values (light_tank_chassis_0/2 rows,
+        // HMG 8/2/6, secondary_turret_hmg +4 soft).
+        let eq = EquipmentTable::from_str(
+            r#"{
+                "light_tank_chassis_0": {"archetype": "light_tank_chassis", "year": 1922,
+                    "soft_attack": 0, "hard_attack": 0, "defense": 0, "breakthrough": 0,
+                    "armor": 10.0, "piercing": 0, "hardness": 0.8, "max_speed": 4.0},
+                "light_tank_chassis_2": {"archetype": "light_tank_chassis", "year": 1936,
+                    "soft_attack": 0, "hard_attack": 0, "defense": 0, "breakthrough": 0,
+                    "armor": 20.0, "piercing": 0, "hardness": 0.8, "max_speed": 6.0}
+            }"#,
+        )
+        .unwrap();
+        let ut = UnitTemplateTable::from_str(
+            r#"{
+                "line_battalions": {
+                    "light_armor": {"max_strength": 2, "max_organisation": 10,
+                        "needs": {"light_tank_chassis": 60}}
+                },
+                "support_companies": {}
+            }"#,
+        )
+        .unwrap();
+        let design_tables = DesignTables {
+            modules: crate::TankModuleTable::from_str(
+                r#"{
+                    "tank_heavy_machine_gun": {"add": {"soft_attack": 8, "hard_attack": 2, "ap_attack": 6}, "mult": {}},
+                    "secondary_turret_hmg": {"add": {"soft_attack": 4}, "mult": {}},
+                    "tank_gasoline_engine": {"add": {}, "mult": {}},
+                    "tank_light_one_man_tank_turret": {"add": {"breakthrough": 7}, "mult": {}},
+                    "tank_bogie_suspension": {"add": {}, "mult": {}},
+                    "tank_riveted_armor": {"add": {"defense": 2, "breakthrough": 2}, "mult": {}}
+                }"#,
+            )
+            .unwrap(),
+            upgrades: crate::TankUpgradeTable::from_str(
+                r#"{
+                    "tank_nsb_engine_upgrade": {"add": {}},
+                    "tank_nsb_armor_upgrade": {"add": {"breakthrough": 1.25, "armor_value": 2.5}}
+                }"#,
+            )
+            .unwrap(),
+        };
+        // Two designs share the light_tank_chassis archetype: id 2203
+        // (chassis_2, plain HMG → 8/2/6) and id 2200 (chassis_0, HMG +
+        // secondary turret HMG → 12/2/6). The division holds 60 of each.
+        let save = r#"
+equipments = {
+    light_tank_chassis_0 = {
+        id = { id = 2200 type = 70 }
+        name = "Type 92 Tankette"
+        is_frame = no
+        modules = {
+            main_armament_slot = tank_heavy_machine_gun
+            special_type_slot_1 = secondary_turret_hmg
+            engine_type_slot = tank_gasoline_engine
+            turret_type_slot = tank_light_one_man_tank_turret
+            suspension_type_slot = tank_bogie_suspension
+            armor_type_slot = tank_riveted_armor
+        }
+        upgrades = {
+            upgrades = {
+                { tank_nsb_engine_upgrade 0 }
+                { tank_nsb_armor_upgrade 0 }
+            }
+        }
+    }
+    light_tank_chassis_2 = {
+        id = { id = 2203 type = 70 }
+        name = "Type 95 Ha-Go"
+        is_frame = no
+        modules = {
+            main_armament_slot = tank_heavy_machine_gun
+            engine_type_slot = tank_gasoline_engine
+            turret_type_slot = tank_light_one_man_tank_turret
+            suspension_type_slot = tank_bogie_suspension
+            armor_type_slot = tank_riveted_armor
+        }
+        upgrades = {
+            upgrades = {
+                { tank_nsb_engine_upgrade 0 }
+                { tank_nsb_armor_upgrade 0 }
+            }
+        }
+    }
+}
+division_templates = {
+    division_template = {
+        id = { id = 7 type = 47 }
+        name = "Panzer-Division"
+        regiments = {
+            light_armor = { x = 0 y = 0 }
+            light_armor = { x = 0 y = 1 }
+        }
+    }
+}
+countries = {
+    JAP = {
+        units = {
+            division = {
+                id = 1
+                division_template_id = { id = 7 type = 47 }
+                location = 6334
+                organization = 0.9
+                strength = 0.95
+                equipment = {
+                    equipment = { id = { id = 2200 type = 70 } amount = 60 }
+                    equipment = { id = { id = 2203 type = 70 } amount = 60 }
+                }
+            }
+        }
+    }
+}
+"#;
+        let parsed = SaveParser::parse_save_from_str(save).unwrap();
+        let div = &parsed.countries["JAP"].divisions[0];
+        let mut warnings = Vec::new();
+        let units = create_tactical_units_named(
+            div,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+            &UnitNaming::default(),
+            &parsed.designs,
+            &design_tables,
+            &mut warnings,
+        );
+        assert_eq!(warnings, Vec::<String>::new());
+        let tank = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::LightArmor)
+            .unwrap();
+        // 60+60 of 120 needed → each design fills half a battalion:
+        // soft = 8 × 0.5 + 12 × 0.5 = 10. The token-only path could not
+        // tell the two designs apart (and bare chassis rows read 0).
+        assert!((tank.soft_attack - 10.0).abs() < 1e-3, "soft={}", tank.soft_attack);
+        assert!((tank.hard_attack - 2.0).abs() < 1e-3, "hard={}", tank.hard_attack);
+        assert!((tank.piercing - 6.0).abs() < 1e-3, "pierce={}", tank.piercing);
+        // Armor keeps the max rule over the design bases (20 vs 10).
+        assert!((tank.armor - 20.0).abs() < 1e-3, "armor={}", tank.armor);
+        assert!((tank.hardness - 0.8).abs() < 1e-3, "hardness={}", tank.hardness);
+        assert!(tank.strength > 0.0);
+    }
+
+    /// Designer-path degradation: a design whose registry entry carries no
+    /// modules block computes to the bare chassis (attack 0, real
+    /// armor/hardness); an unknown module token warns and counts 0 while
+    /// the rest of the design still sums.
+    #[test]
+    fn design_path_degrades_without_modules_or_on_unknown_tokens() {
+        let eq = EquipmentTable::from_str(
+            r#"{
+                "light_tank_chassis_2": {"archetype": "light_tank_chassis", "year": 1936,
+                    "soft_attack": 0, "hard_attack": 0, "defense": 0, "breakthrough": 0,
+                    "armor": 20.0, "piercing": 0, "hardness": 0.8, "max_speed": 6.0}
+            }"#,
+        )
+        .unwrap();
+        let ut = UnitTemplateTable::from_str(
+            r#"{
+                "line_battalions": {
+                    "light_armor": {"max_strength": 2, "max_organisation": 10,
+                        "needs": {"light_tank_chassis": 60}}
+                },
+                "support_companies": {}
+            }"#,
+        )
+        .unwrap();
+        let design_tables = DesignTables::default();
+        let build = |modules_block: &str| {
+            let save = format!(
+                r#"
+equipments = {{
+    light_tank_chassis_2 = {{
+        id = {{ id = 2203 type = 70 }}
+        is_frame = no
+        {modules_block}
+    }}
+}}
+division_templates = {{
+    division_template = {{
+        id = {{ id = 7 type = 47 }}
+        name = "Panzer-Division"
+        regiments = {{ light_armor = {{ x = 0 y = 0 }} }}
+    }}
+}}
+countries = {{
+    JAP = {{
+        units = {{
+            division = {{
+                id = 1
+                division_template_id = {{ id = 7 type = 47 }}
+                organization = 0.9
+                strength = 0.95
+                equipment = {{
+                    equipment = {{ id = {{ id = 2203 type = 70 }} amount = 60 }}
+                }}
+            }}
+        }}
+    }}
+}}
+"#
+            );
+            SaveParser::parse_save_from_str(&save).unwrap()
+        };
+
+        // No modules block at all → chassis base (attack 0), no warnings.
+        let parsed = build("");
+        let div = &parsed.countries["JAP"].divisions[0];
+        let mut warnings = Vec::new();
+        let units = create_tactical_units_named(
+            div,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+            &UnitNaming::default(),
+            &parsed.designs,
+            &design_tables,
+            &mut warnings,
+        );
+        let tank = &units[0];
+        assert_eq!(tank.unit_type, UnitType::LightArmor);
+        assert!((tank.soft_attack - 0.0).abs() < 1e-6, "soft={}", tank.soft_attack);
+        assert!((tank.armor - 20.0).abs() < 1e-3, "armor={}", tank.armor);
+        assert!(tank.strength > 0.0);
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+
+        // Unknown (modded) module token → warning surfaced, stats treat it
+        // as 0, no fallback of the whole design.
+        let parsed = build("modules = { main_armament_slot = modded_raygun }");
+        let div = &parsed.countries["JAP"].divisions[0];
+        let mut warnings = Vec::new();
+        let units = create_tactical_units_named(
+            div,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+            &UnitNaming::default(),
+            &parsed.designs,
+            &design_tables,
+            &mut warnings,
+        );
+        assert!((units[0].soft_attack - 0.0).abs() < 1e-6);
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(warnings[0].contains("modded_raygun"));
     }
 
     #[test]

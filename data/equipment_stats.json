@@ -6109,5 +6109,1605 @@
       "armor"
     ],
     "group": "archetype"
+  },
+  "light_tank_aa_chassis_0": {
+    "archetype": "light_tank_aa_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 10,
+    "piercing": 0,
+    "hardness": 0.5,
+    "max_speed": 4,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 2.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "light_tank_aa_chassis"
+  },
+  "light_tank_aa_chassis_1": {
+    "archetype": "light_tank_aa_chassis",
+    "year": 1934,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 15,
+    "piercing": 0,
+    "hardness": 0.5,
+    "max_speed": 5,
+    "reliability": 0.95,
+    "supply_use": 0,
+    "build_cost": 2.35,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "light_tank_aa_chassis"
+  },
+  "light_tank_aa_chassis_2": {
+    "archetype": "light_tank_aa_chassis",
+    "year": 1936,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 20,
+    "piercing": 0,
+    "hardness": 0.5,
+    "max_speed": 6,
+    "reliability": 1.1,
+    "supply_use": 0,
+    "build_cost": 2.7,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "light_tank_aa_chassis"
+  },
+  "light_tank_aa_chassis_3": {
+    "archetype": "light_tank_aa_chassis",
+    "year": 1942,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 25,
+    "piercing": 0,
+    "hardness": 0.5,
+    "max_speed": 7,
+    "reliability": 1.3,
+    "supply_use": 0,
+    "build_cost": 3.0,
+    "resources": {
+      "steel": 2
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "light_tank_aa_chassis"
+  },
+  "light_tank_artillery_chassis_0": {
+    "archetype": "light_tank_artillery_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 10,
+    "piercing": 0,
+    "hardness": 0.5,
+    "max_speed": 4,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 2.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "light_tank_artillery_chassis"
+  },
+  "light_tank_artillery_chassis_1": {
+    "archetype": "light_tank_artillery_chassis",
+    "year": 1934,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 15,
+    "piercing": 0,
+    "hardness": 0.5,
+    "max_speed": 5,
+    "reliability": 0.95,
+    "supply_use": 0,
+    "build_cost": 2.35,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "light_tank_artillery_chassis"
+  },
+  "light_tank_artillery_chassis_2": {
+    "archetype": "light_tank_artillery_chassis",
+    "year": 1936,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 20,
+    "piercing": 0,
+    "hardness": 0.5,
+    "max_speed": 6,
+    "reliability": 1.1,
+    "supply_use": 0,
+    "build_cost": 2.7,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "light_tank_artillery_chassis"
+  },
+  "light_tank_artillery_chassis_3": {
+    "archetype": "light_tank_artillery_chassis",
+    "year": 1942,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 25,
+    "piercing": 0,
+    "hardness": 0.5,
+    "max_speed": 7,
+    "reliability": 1.3,
+    "supply_use": 0,
+    "build_cost": 3.0,
+    "resources": {
+      "steel": 2
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "light_tank_artillery_chassis"
+  },
+  "light_tank_destroyer_chassis_0": {
+    "archetype": "light_tank_destroyer_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 10,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 4,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 2.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "light_tank_destroyer_chassis"
+  },
+  "light_tank_destroyer_chassis_1": {
+    "archetype": "light_tank_destroyer_chassis",
+    "year": 1934,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 15,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 0.95,
+    "supply_use": 0,
+    "build_cost": 2.35,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "light_tank_destroyer_chassis"
+  },
+  "light_tank_destroyer_chassis_2": {
+    "archetype": "light_tank_destroyer_chassis",
+    "year": 1936,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 20,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 6,
+    "reliability": 1.1,
+    "supply_use": 0,
+    "build_cost": 2.7,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "light_tank_destroyer_chassis"
+  },
+  "light_tank_destroyer_chassis_3": {
+    "archetype": "light_tank_destroyer_chassis",
+    "year": 1942,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 25,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 7,
+    "reliability": 1.3,
+    "supply_use": 0,
+    "build_cost": 3.0,
+    "resources": {
+      "steel": 2
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "light_tank_destroyer_chassis"
+  },
+  "light_tank_amphibious_chassis_0": {
+    "archetype": "light_tank_amphibious_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 10,
+    "piercing": 0,
+    "hardness": 0.55,
+    "max_speed": 4,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 2.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "light_tank_amphibious_chassis"
+  },
+  "light_tank_amphibious_chassis_1": {
+    "archetype": "light_tank_amphibious_chassis",
+    "year": 1934,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 15,
+    "piercing": 0,
+    "hardness": 0.55,
+    "max_speed": 5,
+    "reliability": 0.95,
+    "supply_use": 0,
+    "build_cost": 2.35,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "light_tank_amphibious_chassis"
+  },
+  "light_tank_amphibious_chassis_2": {
+    "archetype": "light_tank_amphibious_chassis",
+    "year": 1936,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 20,
+    "piercing": 0,
+    "hardness": 0.55,
+    "max_speed": 6,
+    "reliability": 1.1,
+    "supply_use": 0,
+    "build_cost": 2.7,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "light_tank_amphibious_chassis"
+  },
+  "light_tank_amphibious_chassis_3": {
+    "archetype": "light_tank_amphibious_chassis",
+    "year": 1942,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 25,
+    "piercing": 0,
+    "hardness": 0.55,
+    "max_speed": 7,
+    "reliability": 1.3,
+    "supply_use": 0,
+    "build_cost": 3.0,
+    "resources": {
+      "steel": 2
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "light_tank_amphibious_chassis"
+  },
+  "light_tank_flame_chassis_0": {
+    "archetype": "light_tank_flame_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 10,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 4,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 2.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "light_tank_flame_chassis"
+  },
+  "light_tank_flame_chassis_1": {
+    "archetype": "light_tank_flame_chassis",
+    "year": 1934,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 15,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 0.95,
+    "supply_use": 0,
+    "build_cost": 2.35,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "light_tank_flame_chassis"
+  },
+  "light_tank_flame_chassis_2": {
+    "archetype": "light_tank_flame_chassis",
+    "year": 1936,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 20,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 6,
+    "reliability": 1.1,
+    "supply_use": 0,
+    "build_cost": 2.7,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "light_tank_flame_chassis"
+  },
+  "light_tank_flame_chassis_3": {
+    "archetype": "light_tank_flame_chassis",
+    "year": 1942,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 25,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 7,
+    "reliability": 1.3,
+    "supply_use": 0,
+    "build_cost": 3.0,
+    "resources": {
+      "steel": 2
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "light_tank_flame_chassis"
+  },
+  "medium_tank_aa_chassis_0": {
+    "archetype": "medium_tank_aa_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 20,
+    "piercing": 0,
+    "hardness": 0.65,
+    "max_speed": 4,
+    "reliability": 0.75,
+    "supply_use": 0,
+    "build_cost": 3.5,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_aa_chassis"
+  },
+  "medium_tank_aa_chassis_1": {
+    "archetype": "medium_tank_aa_chassis",
+    "year": 1936,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 30,
+    "piercing": 0,
+    "hardness": 0.65,
+    "max_speed": 5,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 3.75,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_aa_chassis"
+  },
+  "medium_tank_aa_chassis_2": {
+    "archetype": "medium_tank_aa_chassis",
+    "year": 1940,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 40,
+    "piercing": 0,
+    "hardness": 0.65,
+    "max_speed": 6,
+    "reliability": 1,
+    "supply_use": 0,
+    "build_cost": 4.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_aa_chassis"
+  },
+  "medium_tank_aa_chassis_3": {
+    "archetype": "medium_tank_aa_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 50,
+    "piercing": 0,
+    "hardness": 0.65,
+    "max_speed": 6,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 4.25,
+    "resources": {
+      "steel": 2
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_aa_chassis"
+  },
+  "medium_tank_artillery_chassis_0": {
+    "archetype": "medium_tank_artillery_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 20,
+    "piercing": 0,
+    "hardness": 0.65,
+    "max_speed": 4,
+    "reliability": 0.75,
+    "supply_use": 0,
+    "build_cost": 3.5,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_artillery_chassis"
+  },
+  "medium_tank_artillery_chassis_1": {
+    "archetype": "medium_tank_artillery_chassis",
+    "year": 1936,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 30,
+    "piercing": 0,
+    "hardness": 0.65,
+    "max_speed": 5,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 3.75,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_artillery_chassis"
+  },
+  "medium_tank_artillery_chassis_2": {
+    "archetype": "medium_tank_artillery_chassis",
+    "year": 1940,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 40,
+    "piercing": 0,
+    "hardness": 0.65,
+    "max_speed": 6,
+    "reliability": 1,
+    "supply_use": 0,
+    "build_cost": 4.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_artillery_chassis"
+  },
+  "medium_tank_artillery_chassis_3": {
+    "archetype": "medium_tank_artillery_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 50,
+    "piercing": 0,
+    "hardness": 0.65,
+    "max_speed": 6,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 4.25,
+    "resources": {
+      "steel": 2
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_artillery_chassis"
+  },
+  "medium_tank_destroyer_chassis_0": {
+    "archetype": "medium_tank_destroyer_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 20,
+    "piercing": 0,
+    "hardness": 0.85,
+    "max_speed": 4,
+    "reliability": 0.75,
+    "supply_use": 0,
+    "build_cost": 3.5,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_destroyer_chassis"
+  },
+  "medium_tank_destroyer_chassis_1": {
+    "archetype": "medium_tank_destroyer_chassis",
+    "year": 1936,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 30,
+    "piercing": 0,
+    "hardness": 0.85,
+    "max_speed": 5,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 3.75,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_destroyer_chassis"
+  },
+  "medium_tank_destroyer_chassis_2": {
+    "archetype": "medium_tank_destroyer_chassis",
+    "year": 1940,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 40,
+    "piercing": 0,
+    "hardness": 0.85,
+    "max_speed": 6,
+    "reliability": 1,
+    "supply_use": 0,
+    "build_cost": 4.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_destroyer_chassis"
+  },
+  "medium_tank_destroyer_chassis_3": {
+    "archetype": "medium_tank_destroyer_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 50,
+    "piercing": 0,
+    "hardness": 0.85,
+    "max_speed": 6,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 4.25,
+    "resources": {
+      "steel": 2
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_destroyer_chassis"
+  },
+  "medium_tank_amphibious_chassis_0": {
+    "archetype": "medium_tank_amphibious_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 20,
+    "piercing": 0,
+    "hardness": 0.7,
+    "max_speed": 4,
+    "reliability": 0.75,
+    "supply_use": 0,
+    "build_cost": 3.5,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_amphibious_chassis"
+  },
+  "medium_tank_amphibious_chassis_1": {
+    "archetype": "medium_tank_amphibious_chassis",
+    "year": 1936,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 30,
+    "piercing": 0,
+    "hardness": 0.7,
+    "max_speed": 5,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 3.75,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_amphibious_chassis"
+  },
+  "medium_tank_amphibious_chassis_2": {
+    "archetype": "medium_tank_amphibious_chassis",
+    "year": 1940,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 40,
+    "piercing": 0,
+    "hardness": 0.7,
+    "max_speed": 6,
+    "reliability": 1,
+    "supply_use": 0,
+    "build_cost": 4.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_amphibious_chassis"
+  },
+  "medium_tank_amphibious_chassis_3": {
+    "archetype": "medium_tank_amphibious_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 50,
+    "piercing": 0,
+    "hardness": 0.7,
+    "max_speed": 6,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 4.25,
+    "resources": {
+      "steel": 2
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_amphibious_chassis"
+  },
+  "medium_tank_flame_chassis_0": {
+    "archetype": "medium_tank_flame_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 20,
+    "piercing": 0,
+    "hardness": 0.85,
+    "max_speed": 4,
+    "reliability": 0.75,
+    "supply_use": 0,
+    "build_cost": 3.5,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_flame_chassis"
+  },
+  "medium_tank_flame_chassis_1": {
+    "archetype": "medium_tank_flame_chassis",
+    "year": 1936,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 30,
+    "piercing": 0,
+    "hardness": 0.85,
+    "max_speed": 5,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 3.75,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_flame_chassis"
+  },
+  "medium_tank_flame_chassis_2": {
+    "archetype": "medium_tank_flame_chassis",
+    "year": 1940,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 40,
+    "piercing": 0,
+    "hardness": 0.85,
+    "max_speed": 6,
+    "reliability": 1,
+    "supply_use": 0,
+    "build_cost": 4.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_flame_chassis"
+  },
+  "medium_tank_flame_chassis_3": {
+    "archetype": "medium_tank_flame_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 50,
+    "piercing": 0,
+    "hardness": 0.85,
+    "max_speed": 6,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 4.25,
+    "resources": {
+      "steel": 2
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "medium_tank_flame_chassis"
+  },
+  "heavy_tank_aa_chassis_0": {
+    "archetype": "heavy_tank_aa_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 35,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 3,
+    "reliability": 0.75,
+    "supply_use": 0,
+    "build_cost": 9.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_aa_chassis"
+  },
+  "heavy_tank_aa_chassis_1": {
+    "archetype": "heavy_tank_aa_chassis",
+    "year": 1934,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 55,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 10.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_aa_chassis"
+  },
+  "heavy_tank_aa_chassis_2": {
+    "archetype": "heavy_tank_aa_chassis",
+    "year": 1940,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 60,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 1.1,
+    "supply_use": 0,
+    "build_cost": 11.0,
+    "resources": {
+      "steel": 1,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_aa_chassis"
+  },
+  "heavy_tank_aa_chassis_3": {
+    "archetype": "heavy_tank_aa_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 75,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 12.0,
+    "resources": {
+      "steel": 2,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_aa_chassis"
+  },
+  "heavy_tank_artillery_chassis_0": {
+    "archetype": "heavy_tank_artillery_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 35,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 3,
+    "reliability": 0.75,
+    "supply_use": 0,
+    "build_cost": 9.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_artillery_chassis"
+  },
+  "heavy_tank_artillery_chassis_1": {
+    "archetype": "heavy_tank_artillery_chassis",
+    "year": 1934,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 55,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 10.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_artillery_chassis"
+  },
+  "heavy_tank_artillery_chassis_2": {
+    "archetype": "heavy_tank_artillery_chassis",
+    "year": 1940,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 60,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 1.1,
+    "supply_use": 0,
+    "build_cost": 11.0,
+    "resources": {
+      "steel": 1,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_artillery_chassis"
+  },
+  "heavy_tank_artillery_chassis_3": {
+    "archetype": "heavy_tank_artillery_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 75,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 12.0,
+    "resources": {
+      "steel": 2,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_artillery_chassis"
+  },
+  "heavy_tank_destroyer_chassis_0": {
+    "archetype": "heavy_tank_destroyer_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 35,
+    "piercing": 0,
+    "hardness": 0.95,
+    "max_speed": 3,
+    "reliability": 0.75,
+    "supply_use": 0,
+    "build_cost": 9.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_destroyer_chassis"
+  },
+  "heavy_tank_destroyer_chassis_1": {
+    "archetype": "heavy_tank_destroyer_chassis",
+    "year": 1934,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 55,
+    "piercing": 0,
+    "hardness": 0.95,
+    "max_speed": 5,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 10.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_destroyer_chassis"
+  },
+  "heavy_tank_destroyer_chassis_2": {
+    "archetype": "heavy_tank_destroyer_chassis",
+    "year": 1940,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 60,
+    "piercing": 0,
+    "hardness": 0.95,
+    "max_speed": 5,
+    "reliability": 1.1,
+    "supply_use": 0,
+    "build_cost": 11.0,
+    "resources": {
+      "steel": 1,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_destroyer_chassis"
+  },
+  "heavy_tank_destroyer_chassis_3": {
+    "archetype": "heavy_tank_destroyer_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 75,
+    "piercing": 0,
+    "hardness": 0.95,
+    "max_speed": 5,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 12.0,
+    "resources": {
+      "steel": 2,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_destroyer_chassis"
+  },
+  "heavy_tank_amphibious_chassis_0": {
+    "archetype": "heavy_tank_amphibious_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 35,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 3,
+    "reliability": 0.75,
+    "supply_use": 0,
+    "build_cost": 9.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_amphibious_chassis"
+  },
+  "heavy_tank_amphibious_chassis_1": {
+    "archetype": "heavy_tank_amphibious_chassis",
+    "year": 1934,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 55,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 10.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_amphibious_chassis"
+  },
+  "heavy_tank_amphibious_chassis_2": {
+    "archetype": "heavy_tank_amphibious_chassis",
+    "year": 1940,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 60,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 1.1,
+    "supply_use": 0,
+    "build_cost": 11.0,
+    "resources": {
+      "steel": 1,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_amphibious_chassis"
+  },
+  "heavy_tank_amphibious_chassis_3": {
+    "archetype": "heavy_tank_amphibious_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 75,
+    "piercing": 0,
+    "hardness": 0.8,
+    "max_speed": 5,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 12.0,
+    "resources": {
+      "steel": 2,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "amphibious"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_amphibious_chassis"
+  },
+  "heavy_tank_flame_chassis_0": {
+    "archetype": "heavy_tank_flame_chassis",
+    "year": 1922,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 35,
+    "piercing": 0,
+    "hardness": 0.95,
+    "max_speed": 3,
+    "reliability": 0.75,
+    "supply_use": 0,
+    "build_cost": 9.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_flame_chassis"
+  },
+  "heavy_tank_flame_chassis_1": {
+    "archetype": "heavy_tank_flame_chassis",
+    "year": 1934,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 55,
+    "piercing": 0,
+    "hardness": 0.95,
+    "max_speed": 5,
+    "reliability": 0.8,
+    "supply_use": 0,
+    "build_cost": 10.0,
+    "resources": {
+      "steel": 1
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_flame_chassis"
+  },
+  "heavy_tank_flame_chassis_2": {
+    "archetype": "heavy_tank_flame_chassis",
+    "year": 1940,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 60,
+    "piercing": 0,
+    "hardness": 0.95,
+    "max_speed": 5,
+    "reliability": 1.1,
+    "supply_use": 0,
+    "build_cost": 11.0,
+    "resources": {
+      "steel": 1,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_flame_chassis"
+  },
+  "heavy_tank_flame_chassis_3": {
+    "archetype": "heavy_tank_flame_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 75,
+    "piercing": 0,
+    "hardness": 0.95,
+    "max_speed": 5,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 12.0,
+    "resources": {
+      "steel": 2,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "flame"
+    ],
+    "group": "archetype",
+    "family": "heavy_tank_flame_chassis"
+  },
+  "super_heavy_tank_aa_chassis_1": {
+    "archetype": "super_heavy_tank_aa_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 90,
+    "piercing": 0,
+    "hardness": 0.9,
+    "max_speed": 4,
+    "reliability": 1,
+    "supply_use": 0,
+    "build_cost": 28.0,
+    "resources": {
+      "steel": 3,
+      "chromium": 2
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "super_heavy_tank_aa_chassis"
+  },
+  "super_heavy_tank_artillery_chassis_1": {
+    "archetype": "super_heavy_tank_artillery_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 90,
+    "piercing": 0,
+    "hardness": 0.9,
+    "max_speed": 4,
+    "reliability": 1,
+    "supply_use": 0,
+    "build_cost": 28.0,
+    "resources": {
+      "steel": 3,
+      "chromium": 2
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "super_heavy_tank_artillery_chassis"
+  },
+  "super_heavy_tank_destroyer_chassis_1": {
+    "archetype": "super_heavy_tank_destroyer_chassis",
+    "year": 1943,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 90,
+    "piercing": 0,
+    "hardness": 0,
+    "max_speed": 4,
+    "reliability": 1,
+    "supply_use": 0,
+    "build_cost": 28.0,
+    "resources": {
+      "steel": 3,
+      "chromium": 2
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "super_heavy_tank_destroyer_chassis"
+  },
+  "modern_tank_aa_chassis_1": {
+    "archetype": "modern_tank_aa_chassis",
+    "year": 1948,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 65,
+    "piercing": 0,
+    "hardness": 0.85,
+    "max_speed": 7,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 6.0,
+    "resources": {
+      "steel": 2,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "anti_air"
+    ],
+    "group": "archetype",
+    "family": "modern_tank_aa_chassis"
+  },
+  "modern_tank_artillery_chassis_1": {
+    "archetype": "modern_tank_artillery_chassis",
+    "year": 1948,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 65,
+    "piercing": 0,
+    "hardness": 0.85,
+    "max_speed": 7,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 6.0,
+    "resources": {
+      "steel": 2,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "artillery"
+    ],
+    "group": "archetype",
+    "family": "modern_tank_artillery_chassis"
+  },
+  "modern_tank_destroyer_chassis_1": {
+    "archetype": "modern_tank_destroyer_chassis",
+    "year": 1948,
+    "soft_attack": 0,
+    "hard_attack": 0,
+    "defense": 0,
+    "breakthrough": 0,
+    "armor": 65,
+    "piercing": 0,
+    "hardness": 0.95,
+    "max_speed": 7,
+    "reliability": 1.2,
+    "supply_use": 0,
+    "build_cost": 6.0,
+    "resources": {
+      "steel": 2,
+      "chromium": 1
+    },
+    "categories": [
+      "armor",
+      "anti_tank"
+    ],
+    "group": "archetype",
+    "family": "modern_tank_destroyer_chassis"
   }
 }

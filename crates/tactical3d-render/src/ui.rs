@@ -10,6 +10,7 @@ use tactical_core::unit::{Side, UnitState};
 use tactical_core::{compute_command_links, in_command};
 use tactical_sync::BattlePhase;
 
+use crate::automation::{TurnAutomation, CLOSE_SECS_MAX, CLOSE_SECS_MIN};
 use crate::board::hex_world;
 use crate::game::{DivOrderPick, GameController, PendingCommands, PlayerCommand};
 use crate::icons::{IconId, IconSet};
@@ -202,6 +203,7 @@ pub fn draw_panels(
     colors: Res<SideColors>,
     mut toggles: ResMut<UiToggles>,
     mut ui_win: ResMut<UiWindows>,
+    mut automation: ResMut<TurnAutomation>,
     mut reset: ResMut<crate::camera::CameraResetReq>,
     loc: Res<LocaleRes>,
     icons: Res<IconSet>,
@@ -229,6 +231,7 @@ pub fn draw_panels(
         &mut pending,
         &mut toggles,
         &mut ui_win,
+        &mut automation,
         &mut reset,
         &loc,
         &icons,
@@ -361,6 +364,7 @@ fn draw_command_panel(
     pending: &mut PendingCommands,
     toggles: &mut UiToggles,
     ui_win: &mut UiWindows,
+    automation: &mut TurnAutomation,
     reset: &mut crate::camera::CameraResetReq,
     loc: &LocaleRes,
     icons: &IconSet,
@@ -370,6 +374,12 @@ fn draw_command_panel(
         .default_width(190.0)
         .frame(hoi4_frame())
         .show(ctx, |ui| {
+            // Tall content (tactic card + flag board + the automation
+            // section) must never clip the panel's bottom rows on short
+            // windows — the whole body scrolls when it outgrows the view.
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
             hoi4_heading(ui, loc.tr("app.title").as_ref());
             let turn = game.session.turn_number.to_string();
             let clock = game.session.battle_clock();
@@ -639,6 +649,9 @@ fn draw_command_panel(
                     });
                 }
             }
+            // Session-scoped turn automation (auto-skip / auto-close /
+            // auto-sync), always in the same slot under the action button.
+            draw_automation_panel(ui, automation, game.session.phase, loc);
             ui.separator();
 
             // Auxiliary slots (fixed positions as well).
@@ -719,7 +732,67 @@ fn draw_command_panel(
                     .small()
                     .weak(),
             );
+            });
         });
+}
+
+/// Session-scoped turn automation (DESIGN §6.2/§8.2): auto-advance quiet
+/// rounds, auto-close combat reports / sync summaries, auto-sync at the hour
+/// boundary. Lives under the main action slot; the toggles belong to the
+/// battle window only (never persisted, reset at battle start). Each
+/// auto-close consumer has its own delay slider, armed while its toggle is
+/// on. Inert during Deployment — that phase resets the toggles at Begin
+/// Battle.
+fn draw_automation_panel(ui: &mut egui::Ui, auto: &mut TurnAutomation, phase: BattlePhase, loc: &LocaleRes) {
+    hoi4_heading(ui, loc.tr("battle.auto.title").as_ref());
+    let active = matches!(
+        phase,
+        BattlePhase::TacticalActive | BattlePhase::ReadyToSync | BattlePhase::ReadyToEnd
+    );
+    ui.add_enabled_ui(active, |ui| {
+        tip(
+            ui.checkbox(&mut auto.skip_quiet_turns, loc.tr("battle.auto.skip_quiet").as_ref()),
+            loc.tr("battle.tooltip.auto.skip_quiet"),
+        );
+        tip(
+            ui.checkbox(&mut auto.skip_reports, loc.tr("battle.auto.skip_reports").as_ref()),
+            loc.tr("battle.tooltip.auto.skip_reports"),
+        );
+        ui.add_enabled_ui(auto.skip_reports, |ui| {
+            ui.label(
+                egui::RichText::new(loc.tr("battle.auto.report_close_label").as_ref())
+                    .small()
+                    .weak(),
+            );
+            tip(
+                ui.add(
+                    egui::Slider::new(&mut auto.report_close_secs, CLOSE_SECS_MIN..=CLOSE_SECS_MAX)
+                        .fixed_decimals(1)
+                        .suffix(" s"),
+                ),
+                loc.tr("battle.tooltip.auto.report_close_secs"),
+            );
+        });
+        tip(
+            ui.checkbox(&mut auto.auto_sync, loc.tr("battle.auto.auto_sync").as_ref()),
+            loc.tr("battle.tooltip.auto.auto_sync"),
+        );
+        ui.add_enabled_ui(auto.auto_sync, |ui| {
+            ui.label(
+                egui::RichText::new(loc.tr("battle.auto.sync_close_label").as_ref())
+                    .small()
+                    .weak(),
+            );
+            tip(
+                ui.add(
+                    egui::Slider::new(&mut auto.sync_close_secs, CLOSE_SECS_MIN..=CLOSE_SECS_MAX)
+                        .fixed_decimals(1)
+                        .suffix(" s"),
+                ),
+                loc.tr("battle.tooltip.auto.sync_close_secs"),
+            );
+        });
+    });
 }
 
 /// Localized hover tooltip on a button response — attached to
@@ -3373,10 +3446,13 @@ fn draw_battle_report(
     mut contexts: EguiContexts,
     mut tour: ResMut<BattleTour>,
     state: Option<Res<TacticalState>>,
+    game: Option<Res<GameController>>,
+    automation: Option<Res<TurnAutomation>>,
     loc: Res<LocaleRes>,
     time: Res<Time>,
     mut detail: ResMut<DetailWindow>,
     mut anchor: Local<CenterAnchor>,
+    mut auto_at: Local<Option<(usize, f32)>>,
 ) {
     // Window-close frame guard (see ui_pointer_guard).
     let Some(ctx) = contexts.try_ctx_mut() else {
@@ -3385,6 +3461,12 @@ fn draw_battle_report(
     // The window opens when the camera glide LANDS (the arrival
     // pulse sets `focused` to the index) — not while the camera is moving.
     if !tour.active || tour.index >= tour.queue.len() || tour.focused != Some(tour.index) {
+        // Queue exhausted or torn down: the auto-close countdown has no
+        // subject — drop a stale base so a FUTURE report queue starts its
+        // own clock (a new tour can begin at index 0 again).
+        if !tour.active || tour.index >= tour.queue.len() {
+            *auto_at = None;
+        }
         return;
     }
     let total = tour.queue.len();
@@ -3519,6 +3601,31 @@ fn draw_battle_report(
     anchor.update(resp.as_ref().map(|r| r.response.rect), ctx.pixels_per_point());
     if let Some(v) = open_detail {
         detail.0 = Some(v);
+    }
+    // Auto-close (automation box 2): a report left on screen for its
+    // configured delay advances itself exactly like [Continue]. The countdown
+    // starts when THIS report becomes visible (keyed by index — the camera
+    // glide between reports resets it). Never auto-dismisses battle-end
+    // reports: once the battle resolved, every report stays for the player.
+    let auto_closeable = match (automation.as_deref(), game.as_ref()) {
+        (Some(a), Some(g)) => {
+            a.skip_reports
+                && matches!(
+                    g.session.phase,
+                    BattlePhase::TacticalActive | BattlePhase::ReadyToSync
+                )
+        }
+        _ => false,
+    };
+    if !advance && auto_closeable {
+        match auto_at.as_mut() {
+            Some((i, at)) if *i == tour.index => {
+                if time.elapsed_secs() - *at >= automation.as_ref().unwrap().report_close_secs {
+                    advance = true;
+                }
+            }
+            _ => *auto_at = Some((tour.index, time.elapsed_secs())),
+        }
     }
     if advance {
         // When this report carries a deferred consequence

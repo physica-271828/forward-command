@@ -1,6 +1,7 @@
 //! Loaders for the pre-extracted JSON data tables (DESIGN.md §5.4):
 //! `equipment_stats.json`, `unit_templates.json`, `doctrine_bonuses.json`,
-//! `modifiers.json`.
+//! `modifiers.json`, plus the tank-designer tables `tank_modules.json` /
+//! `tank_upgrades.json` feeding [`design_stats`].
 //!
 //! The loaders match the REAL shapes found in `data/` (which differ slightly
 //! from the illustrative snippets in §5.4):
@@ -20,6 +21,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use tactical_core::{TerrainAdjusters, UnitType};
 
+use crate::model::EquipmentDesign;
 use crate::SaveError;
 
 fn read_json(path: &Path) -> Result<String, SaveError> {
@@ -174,6 +176,244 @@ impl EquipmentTable {
         self.resolve(key)
             .map(|e| e.archetype.clone().unwrap_or_else(|| key.to_string()))
     }
+}
+
+// ---------------------------------------------------------------------------
+// tank_modules.json / tank_upgrades.json (§5.4) — designer stat tables
+// ---------------------------------------------------------------------------
+
+/// One combat-stat block of a tank module or upgrade row, keyed by HOI4
+/// stat name. Only the stats the tactical side models are extracted; every
+/// field defaults to 0.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+pub struct StatBlock {
+    #[serde(default)]
+    pub soft_attack: f32,
+    #[serde(default)]
+    pub hard_attack: f32,
+    /// Armor-piercing — HOI4's `ap_attack` (the equipment table's
+    /// `piercing`).
+    #[serde(default)]
+    pub ap_attack: f32,
+    /// HOI4's `armor_value` (the equipment table's `armor`).
+    #[serde(default)]
+    pub armor_value: f32,
+    #[serde(default)]
+    pub hardness: f32,
+    #[serde(default)]
+    pub defense: f32,
+    #[serde(default)]
+    pub breakthrough: f32,
+}
+
+impl StatBlock {
+    fn accumulate(&mut self, other: &StatBlock, times: f32) {
+        self.soft_attack += other.soft_attack * times;
+        self.hard_attack += other.hard_attack * times;
+        self.ap_attack += other.ap_attack * times;
+        self.armor_value += other.armor_value * times;
+        self.hardness += other.hardness * times;
+        self.defense += other.defense * times;
+        self.breakthrough += other.breakthrough * times;
+    }
+}
+
+/// One tank module row from `tank_modules.json`: flat `add_stats` plus the
+/// `multiply_stats` zone.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct TankModuleStats {
+    #[serde(default)]
+    pub add: StatBlock,
+    #[serde(default)]
+    pub mult: StatBlock,
+}
+
+/// Tank module table (`extractor/extract_equipment.py`). Carries every
+/// vanilla module token, including stat-less ones, so lookups can tell a
+/// known-but-inert module from an unknown (modded) token.
+#[derive(Debug, Clone, Default)]
+pub struct TankModuleTable {
+    modules: HashMap<String, TankModuleStats>,
+}
+
+impl TankModuleTable {
+    /// Load from a `tank_modules.json` file. A missing or malformed file
+    /// degrades to an empty table, never an error — design stat computation
+    /// then treats every module as unknown (warns and contributes 0).
+    pub fn load(path: impl AsRef<Path>) -> Self {
+        let Ok(text) = std::fs::read_to_string(path.as_ref()) else {
+            return Self::default();
+        };
+        Self::from_str(&text).unwrap_or_default()
+    }
+
+    /// Parse from an in-memory JSON string.
+    pub fn from_str(text: &str) -> Result<Self, SaveError> {
+        let modules: HashMap<String, TankModuleStats> =
+            serde_json::from_str(text).map_err(|e| json_err("<tank_modules>", e))?;
+        Ok(TankModuleTable { modules })
+    }
+
+    pub fn get(&self, token: &str) -> Option<&TankModuleStats> {
+        self.modules.get(token)
+    }
+
+    pub fn len(&self) -> usize {
+        self.modules.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.modules.is_empty()
+    }
+}
+
+/// One tank upgrade row from `tank_upgrades.json`: the PER-LEVEL flat adds.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+struct TankUpgradeRow {
+    #[serde(default)]
+    add: StatBlock,
+}
+
+/// Tank upgrade table: upgrade token → per-level add block. Only the
+/// add_stats (flat per-level) upgrade form is extracted — designer tank
+/// upgrades (`tank_nsb_engine_upgrade` / `tank_nsb_armor_upgrade`); the
+/// legacy factor-per-level upgrades apply to non-designer fixed equipment.
+#[derive(Debug, Clone, Default)]
+pub struct TankUpgradeTable {
+    upgrades: HashMap<String, TankUpgradeRow>,
+}
+
+impl TankUpgradeTable {
+    /// Same degrade-silent contract as [`TankModuleTable::load`].
+    pub fn load(path: impl AsRef<Path>) -> Self {
+        let Ok(text) = std::fs::read_to_string(path.as_ref()) else {
+            return Self::default();
+        };
+        Self::from_str(&text).unwrap_or_default()
+    }
+
+    /// Parse from an in-memory JSON string.
+    pub fn from_str(text: &str) -> Result<Self, SaveError> {
+        let upgrades: HashMap<String, TankUpgradeRow> =
+            serde_json::from_str(text).map_err(|e| json_err("<tank_upgrades>", e))?;
+        Ok(TankUpgradeTable { upgrades })
+    }
+
+    /// Per-level adds of an upgrade token.
+    pub fn get(&self, token: &str) -> Option<&StatBlock> {
+        self.upgrades.get(token).map(|row| &row.add)
+    }
+
+    pub fn len(&self) -> usize {
+        self.upgrades.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.upgrades.is_empty()
+    }
+}
+
+/// The module/upgrade tables the design-aware assembly needs, loaded once
+/// per battle alongside the equipment table.
+#[derive(Debug, Clone, Default)]
+pub struct DesignTables {
+    pub modules: TankModuleTable,
+    pub upgrades: TankUpgradeTable,
+}
+
+impl DesignTables {
+    /// Load both designer tables from the runtime data dir (each degrades
+    /// silently like the modifier table).
+    pub fn load(data_dir: &Path) -> Self {
+        DesignTables {
+            modules: TankModuleTable::load(data_dir.join("tank_modules.json")),
+            upgrades: TankUpgradeTable::load(data_dir.join("tank_upgrades.json")),
+        }
+    }
+}
+
+/// Multiply-zone base semantics for designer stats. HOI4 tank modules carry
+/// a few `multiply_stats` entries (cast/welded armor +30%, squeezebore
+/// +10% ap, wheeled/half-track hardness penalties); the in-game designer
+/// applies them to the displayed TOTAL (chassis base + module adds +
+/// upgrade levels), so `false` is the calibrated default — flip to `true`
+/// (multiply the chassis base alone, then add) if a recalibration against
+/// the designer disagrees.
+pub const MULTIPLY_ON_CHASSIS_BASE: bool = false;
+
+/// Computed combat stats of one save equipment design (§5.3 designer
+/// path): the five fields the battalion assembly takes from the design
+/// (attack triple + armor/hardness bases); defense/breakthrough keep the
+/// static equipment row values.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DesignStats {
+    pub soft_attack: f32,
+    pub hard_attack: f32,
+    pub piercing: f32,
+    pub armor: f32,
+    pub hardness: f32,
+}
+
+/// Compute a design's combat stats from the save's module picks and upgrade
+/// levels (§5.3):
+///
+/// ```text
+/// final[S] = (chassis[S] + Σ module add[S] + Σ upgrade level × add[S])
+///            × (1 + Σ module mult[S])           # MULTIPLY_ON_CHASSIS_BASE = false
+/// ```
+///
+/// (`MULTIPLY_ON_CHASSIS_BASE = true` multiplies the chassis base alone,
+/// then adds.) Tank chassis rows carry no attack stats — the whole attack
+/// triple comes from module adds. Unknown module/upgrade tokens (modded
+/// content) push a warning and contribute 0; the design still resolves.
+/// Only a design whose chassis token is missing from the equipment table
+/// returns `None` — the caller then falls back to the static equipment row
+/// path.
+pub fn design_stats(
+    design: &EquipmentDesign,
+    equipment: &EquipmentTable,
+    tables: &DesignTables,
+    warnings: &mut Vec<String>,
+) -> Option<DesignStats> {
+    let chassis = equipment.resolve(&design.token)?;
+    let label = design.name.as_deref().unwrap_or(&design.token);
+    let mut add = StatBlock::default();
+    let mut mult = StatBlock::default();
+    for (slot, token) in &design.modules {
+        match tables.modules.get(token) {
+            Some(m) => {
+                add.accumulate(&m.add, 1.0);
+                mult.accumulate(&m.mult, 1.0);
+            }
+            None => warnings.push(format!(
+                "design \"{label}\" ({}): unknown module {token} in {slot} — counted as 0",
+                design.token
+            )),
+        }
+    }
+    for (token, level) in &design.upgrades {
+        match tables.upgrades.get(token) {
+            Some(per_level) => add.accumulate(per_level, *level as f32),
+            None => warnings.push(format!(
+                "design \"{label}\" ({}): unknown upgrade {token} — counted as 0",
+                design.token
+            )),
+        }
+    }
+    let combine = |base: f32, a: f32, m: f32| {
+        if MULTIPLY_ON_CHASSIS_BASE {
+            base * (1.0 + m) + a
+        } else {
+            (base + a) * (1.0 + m)
+        }
+    };
+    Some(DesignStats {
+        soft_attack: combine(chassis.soft_attack, add.soft_attack, mult.soft_attack),
+        hard_attack: combine(chassis.hard_attack, add.hard_attack, mult.hard_attack),
+        piercing: combine(chassis.piercing, add.ap_attack, mult.ap_attack),
+        armor: combine(chassis.armor, add.armor_value, mult.armor_value),
+        hardness: combine(chassis.hardness, add.hardness, mult.hardness),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -774,5 +1014,207 @@ mod tests {
         // Malformed file → same neutral fallback (load swallows).
         let bad = ModifierTable::from_str("{ not json");
         assert!(bad.is_err()); // from_str reports; only load() swallows
+    }
+
+    // -----------------------------------------------------------------------
+    // design_stats — anchored to the literal vanilla values of
+    // common/units/equipment/{tank_chassis.txt, modules/00_tank_modules.txt,
+    // upgrades/land_upgrades.txt} (the JSON snippets below carry the
+    // extractor-filtered shapes: only the 7 modeled combat stats survive).
+    // -----------------------------------------------------------------------
+
+    /// Chassis rows as extracted: designer-era chassis carry armor/hardness/
+    /// speed but ZERO attack (the gun is a module pick).
+    const DESIGN_EQUIPMENT_JSON: &str = r#"{
+        "light_tank_chassis_2": {"archetype": "light_tank_chassis", "year": 1936,
+            "soft_attack": 0, "hard_attack": 0, "defense": 0, "breakthrough": 0,
+            "armor": 20.0, "piercing": 0, "hardness": 0.8, "max_speed": 6.0},
+        "medium_tank_chassis_0": {"archetype": "medium_tank_chassis", "year": 1922,
+            "soft_attack": 0, "hard_attack": 0, "defense": 0, "breakthrough": 0,
+            "armor": 20.0, "piercing": 0, "hardness": 0.85, "max_speed": 4.0}
+    }"#;
+
+    /// Vanilla module values after the extractor's stat-key filter:
+    /// tank_heavy_machine_gun 8/2/6, tank_close_support_gun 22/5/10,
+    /// additional_machine_guns +1 soft (+2 defense), one-man light turret
+    /// +7 breakthrough, medium two-man turret +16, riveted +2/+2,
+    /// welded +4/+4 & armor ×1.3, armor_skirts +3 armor, squeezebore ap
+    /// ×1.1; engines/bogie contribute nothing to the modeled stats.
+    const DESIGN_MODULES_JSON: &str = r#"{
+        "tank_heavy_machine_gun": {"add": {"soft_attack": 8, "hard_attack": 2, "ap_attack": 6}, "mult": {}},
+        "tank_close_support_gun": {"add": {"soft_attack": 22, "hard_attack": 5, "ap_attack": 10}, "mult": {}},
+        "additional_machine_guns": {"add": {"soft_attack": 1, "defense": 2}, "mult": {}},
+        "tank_light_one_man_tank_turret": {"add": {"breakthrough": 7}, "mult": {}},
+        "tank_medium_two_man_tank_turret": {"add": {"breakthrough": 16}, "mult": {}},
+        "tank_riveted_armor": {"add": {"defense": 2, "breakthrough": 2}, "mult": {}},
+        "tank_welded_armor": {"add": {"defense": 4, "breakthrough": 4}, "mult": {"armor_value": 0.3}},
+        "armor_skirts": {"add": {"armor_value": 3, "breakthrough": 3}, "mult": {}},
+        "squeezebore_adaptor": {"add": {}, "mult": {"ap_attack": 0.1}},
+        "tank_gasoline_engine": {"add": {}, "mult": {}},
+        "tank_diesel_engine": {"add": {}, "mult": {}},
+        "tank_bogie_suspension": {"add": {}, "mult": {}}
+    }"#;
+
+    /// land_upgrades.txt per-level adds: engine upgrade touches no modeled
+    /// stat (speed/cost only — still a known token), armor upgrade gives
+    /// +2.5 armor and +1.25 breakthrough per level.
+    const DESIGN_UPGRADES_JSON: &str = r#"{
+        "tank_nsb_engine_upgrade": {"add": {}},
+        "tank_nsb_armor_upgrade": {"add": {"breakthrough": 1.25, "armor_value": 2.5}}
+    }"#;
+
+    fn design_fixtures() -> (EquipmentTable, DesignTables) {
+        let eq = EquipmentTable::from_str(DESIGN_EQUIPMENT_JSON).unwrap();
+        let tables = DesignTables {
+            modules: TankModuleTable::from_str(DESIGN_MODULES_JSON).unwrap(),
+            upgrades: TankUpgradeTable::from_str(DESIGN_UPGRADES_JSON).unwrap(),
+        };
+        (eq, tables)
+    }
+
+    fn design(
+        token: &str,
+        modules: &[(&str, &str)],
+        upgrades: &[(&str, u32)],
+    ) -> EquipmentDesign {
+        EquipmentDesign {
+            token: token.to_string(),
+            name: Some("Test".to_string()),
+            is_frame: false,
+            modules: modules
+                .iter()
+                .map(|(s, m)| (s.to_string(), m.to_string()))
+                .collect(),
+            upgrades: upgrades
+                .iter()
+                .map(|(t, l)| (t.to_string(), *l))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn design_stats_light_tank_hmg() {
+        // The Ha-Go shape: light_tank_chassis_2 + heavy MG + one-man turret
+        // + bogie + riveted + gasoline, no upgrade levels.
+        let (eq, tables) = design_fixtures();
+        let d = design(
+            "light_tank_chassis_2",
+            &[
+                ("main_armament_slot", "tank_heavy_machine_gun"),
+                ("engine_type_slot", "tank_gasoline_engine"),
+                ("turret_type_slot", "tank_light_one_man_tank_turret"),
+                ("suspension_type_slot", "tank_bogie_suspension"),
+                ("armor_type_slot", "tank_riveted_armor"),
+            ],
+            &[("tank_nsb_engine_upgrade", 0), ("tank_nsb_armor_upgrade", 0)],
+        );
+        let mut warnings = Vec::new();
+        let s = design_stats(&d, &eq, &tables, &mut warnings).unwrap();
+        assert_eq!(warnings, Vec::<String>::new());
+        assert!((s.soft_attack - 8.0).abs() < 1e-6, "soft={}", s.soft_attack);
+        assert!((s.hard_attack - 2.0).abs() < 1e-6, "hard={}", s.hard_attack);
+        assert!((s.piercing - 6.0).abs() < 1e-6, "pierce={}", s.piercing);
+        assert!((s.armor - 20.0).abs() < 1e-6, "armor={}", s.armor);
+        assert!((s.hardness - 0.8).abs() < 1e-6, "hardness={}", s.hardness);
+    }
+
+    #[test]
+    fn design_stats_medium_close_support_with_mgs() {
+        // The I-Go shape: medium_tank_chassis_0 + close support gun +
+        // additional MGs + two-man turret + diesel, engine upgrade level 4
+        // (touches no modeled stat).
+        let (eq, tables) = design_fixtures();
+        let d = design(
+            "medium_tank_chassis_0",
+            &[
+                ("main_armament_slot", "tank_close_support_gun"),
+                ("engine_type_slot", "tank_diesel_engine"),
+                ("special_type_slot_1", "additional_machine_guns"),
+                ("turret_type_slot", "tank_medium_two_man_tank_turret"),
+                ("suspension_type_slot", "tank_bogie_suspension"),
+                ("armor_type_slot", "tank_riveted_armor"),
+            ],
+            &[("tank_nsb_engine_upgrade", 4), ("tank_nsb_armor_upgrade", 0)],
+        );
+        let mut warnings = Vec::new();
+        let s = design_stats(&d, &eq, &tables, &mut warnings).unwrap();
+        assert_eq!(warnings, Vec::<String>::new());
+        assert!((s.soft_attack - 23.0).abs() < 1e-6, "soft={}", s.soft_attack);
+        assert!((s.hard_attack - 5.0).abs() < 1e-6, "hard={}", s.hard_attack);
+        assert!((s.piercing - 10.0).abs() < 1e-6, "pierce={}", s.piercing);
+        assert!((s.armor - 20.0).abs() < 1e-6, "armor={}", s.armor);
+        assert!((s.hardness - 0.85).abs() < 1e-6, "hardness={}", s.hardness);
+    }
+
+    #[test]
+    fn design_stats_armor_upgrade_levels_add_per_level() {
+        // Armor upgrade level 5: chassis 20 + 5 × 2.5 = 32.5.
+        let (eq, tables) = design_fixtures();
+        let d = design(
+            "medium_tank_chassis_0",
+            &[("main_armament_slot", "tank_close_support_gun")],
+            &[("tank_nsb_armor_upgrade", 5)],
+        );
+        let mut warnings = Vec::new();
+        let s = design_stats(&d, &eq, &tables, &mut warnings).unwrap();
+        assert!((s.armor - 32.5).abs() < 1e-6, "armor={}", s.armor);
+    }
+
+    #[test]
+    fn design_stats_multiply_zones() {
+        // Welded armor ×1.3 rides the total (chassis 20 + armor_skirts 3)
+        // — (20 + 3) × 1.3 = 29.9. Squeezebore multiplies piercing:
+        // (0 + 10) × 1.1 = 11.
+        let (eq, tables) = design_fixtures();
+        let d = design(
+            "medium_tank_chassis_0",
+            &[
+                ("main_armament_slot", "tank_close_support_gun"),
+                ("armor_type_slot", "tank_welded_armor"),
+                ("special_type_slot_1", "armor_skirts"),
+                ("special_type_slot_2", "squeezebore_adaptor"),
+            ],
+            &[],
+        );
+        let mut warnings = Vec::new();
+        let s = design_stats(&d, &eq, &tables, &mut warnings).unwrap();
+        assert!((s.armor - 29.9).abs() < 1e-4, "armor={}", s.armor);
+        assert!((s.piercing - 11.0).abs() < 1e-6, "pierce={}", s.piercing);
+        assert!((s.soft_attack - 22.0).abs() < 1e-6, "soft={}", s.soft_attack);
+    }
+
+    #[test]
+    fn design_stats_degradation_paths() {
+        let (eq, tables) = design_fixtures();
+        let mut warnings = Vec::new();
+
+        // A design without a modules block (frame / legacy entry) resolves
+        // to the chassis row untouched — attack stays 0, no warnings.
+        let bare = design("light_tank_chassis_2", &[], &[]);
+        let s = design_stats(&bare, &eq, &tables, &mut warnings).unwrap();
+        assert!((s.soft_attack - 0.0).abs() < 1e-6);
+        assert!((s.armor - 20.0).abs() < 1e-6);
+        assert!(warnings.is_empty());
+
+        // Unknown module/upgrade tokens (modded content) warn and count 0;
+        // the design still resolves with the known modules summed.
+        let modded = design(
+            "light_tank_chassis_2",
+            &[
+                ("main_armament_slot", "tank_heavy_machine_gun"),
+                ("special_type_slot_1", "some_mod_module"),
+            ],
+            &[("some_mod_upgrade", 3)],
+        );
+        let s = design_stats(&modded, &eq, &tables, &mut warnings).unwrap();
+        assert!((s.soft_attack - 8.0).abs() < 1e-6, "soft={}", s.soft_attack);
+        assert_eq!(warnings.len(), 2, "warnings: {warnings:?}");
+        assert!(warnings[0].contains("some_mod_module") || warnings[1].contains("some_mod_module"));
+        assert!(warnings[0].contains("some_mod_upgrade") || warnings[1].contains("some_mod_upgrade"));
+
+        // A chassis token missing from the equipment table is the ONLY
+        // unparseable case → None (caller falls back to the static path).
+        let ghost = design("plasma_tank_chassis_9", &[], &[]);
+        assert!(design_stats(&ghost, &eq, &tables, &mut warnings).is_none());
     }
 }

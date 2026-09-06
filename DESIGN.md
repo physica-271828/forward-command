@@ -473,11 +473,12 @@ pole-to-pole model were removed with this revision.
 Save File (.hoi4)              Pre-extracted JSON            External Program
 ═══════════════                ═════════════════             ════════════════
 division_template               equipment_stats.json
-  regiments → types+counts  ─┐                              ┌─ Battalion base
-division.equipment → counts ─┤  merge ───────────────────▶  │   attributes
-technologies → tech_level  ──┘   [1]                        ├─ Per-battalion
-active_ideas → modifiers         [1]                        │   stats
-doctrine → bonuses               [2]                        └─ equipment_ratio
+  regiments → types+counts  ─┐  tank_modules.json           ┌─ Battalion base
+division.equipment → counts ─┤  tank_upgrades.json          │   attributes
+equipments registry → ───────┤  merge ───────────────────▶  ├─ Per-battalion
+  designs (modules/upgrades) │   [1]                        │   stats
+technologies → tech_level  ──┤                              └─ equipment_ratio
+active_ideas → modifiers         [1]
 leader → traits+skills             [3]
 division → org, str, exp
 ```
@@ -508,7 +509,8 @@ Pipeline status:
 | Section | Fields Extracted |
 |---------|-----------------|
 | `division_template` | `regiments` (subunit type + x/y), `support`; `need` is **not parsed** — equipment requirements come from `unit_templates.json` `needs` instead |
-| `division` | `division_template` name + `division_template_id`, `location` (province), `organization`, `strength`, `experience`, `equipment` (counts), `entrenchment`, `supply_status`; auto-name token pair `division_name={type,name_order}` + the template's `division_names_group` (resolved live against `common/units/names_divisions/*.txt` at assembly — `%d` decimal / `%s` Roman, `ordered[N]` else `fallback_name`; player `override` renames win; `type` is always 0 in 1.19.2) |
+| `division` | `division_template` name + `division_template_id`, `location` (province), `organization`, `strength`, `experience`, `equipment` (counts — both the legacy `token = count` form and the 1.19 `equipment = { id, amount }` id form, the latter kept per-id as the division's design breakdown), `entrenchment`, `supply_status`; auto-name token pair `division_name={type,name_order}` + the template's `division_names_group` (resolved live against `common/units/names_divisions/*.txt` at assembly — `%d` decimal / `%s` Roman, `ordered[N]` else `fallback_name`; player `override` renames win; `type` is always 0 in 1.19.2) |
+| `equipments` (root registry) | Every equipment item by its globally unique id: token, design `name`, `is_frame`, designer `modules` (slot → module token) and `upgrades` levels (token → level). The same token appears once per country/design — matching is by id. Designer-era tank chassis tokens carry no attack stats of their own (the gun is a module pick), so the module/upgrade fields are what make live tank stats computable (§5.3 designer path) |
 | `technologies` | List of researched tech tokens (parsed; doctrine progress tokens are mixed into this same list) |
 | `active_ideas` | Active national spirit tokens (parsed; no consumer yet) |
 | `doctrine` | Doctrine progress appears as tokens inside `technologies`; consumed via `DoctrineTable::researched` |
@@ -559,12 +561,43 @@ battalion.speed = battalion-type speed table (tactical-core/src/unit.rs,
                   table only; the equipment-speed statistic is not computed).
 ```
 
+**Designer path (tank designs).** Since 1.11 a save's tank
+equipment is a bare chassis token (`light_tank_chassis_2`, …) whose vanilla
+row carries no attack stats — the gun is a module pick — and the
+TD/SPG/SPAA/flame/amphibious family chassis (`light_tank_destroyer_chassis_1`,
+…) exist only as runtime `duplicate_archetypes` clones of the base chassis
+(hardness overridden per family: AA/SPG 0.5/0.65/0.8/0.9/0.85 by weight,
+amphibious 0.55–0.8, TD/flame keep the source value). The extractor
+therefore emits `tank_modules.json` + `tank_upgrades.json` and synthesizes
+the family chassis rows into `equipment_stats.json` (which alone restores
+those battalions' equipment fill). At assembly, equipment held by registry
+id computes its design stats from the save's module picks and upgrade
+levels:
+
+```
+design[S] = (chassis[S] + Σ module add_stats[S] + Σ upgrade level × per-level add[S])
+            × (1 + Σ module multiply_stats[S])
+```
+
+soft/hard/piercing are pure module sums (no vanilla module multiplies
+them); multiply zones touch armor/defense/breakthrough/speed/piercing
+(`tactical-save::MULTIPLY_ON_CHASSIS_BASE` selects whether multipliers
+ride the chassis base alone or base+adds — the in-game designer applies
+them to the total). Of the design stats the battalion takes the attack
+triple and the armor/hardness bases (armor keeps the max rule, hardness
+the count-weighted average); defense/breakthrough keep the static row
+values. Unknown module/upgrade tokens (modded content) log a warning and
+count 0 without failing the design; a design whose chassis token is
+missing from the equipment table falls back to the static equipment row,
+and saves without the registry (legacy formats) run the token-count path
+unchanged.
+
 **Tactical buffs** (generated in-wargame only): entrenchment, terrain cover, encirclement attrition, supply degradation, support company adjacency buffs, commander effects after promotion in battle. (The flank damage bonus was retired, §6.4.)
 
 ### 5.4 Pre-Extracted Data Tables (revised)
 
 #### equipment_stats.json
-Complete extraction from `common/units/equipment/*.txt`, `dlc/*/common/units/equipment/*.txt` (276 entries). Each entry carries a plural `categories` list plus `group` and `active` fields:
+Complete extraction from `common/units/equipment/*.txt`, `dlc/*/common/units/equipment/*.txt` (342 entries, including the 66 tank variant-family chassis rows synthesized from `duplicate_archetypes` — see §5.3 designer path; those rows copy their source chassis tier and carry `family` + the family's `categories`/hardness override). Each entry carries a plural `categories` list plus `group` and `active` fields:
 
 ```json
 {
@@ -690,6 +723,57 @@ border accents:
 ```json
 {
   "GER": […], "FRA": […], "SOV": […], ...
+}
+```
+
+#### tank_modules.json
+From `common/units/equipment/modules/00_tank_modules.txt` (both
+`equipment_modules` blocks; 102 module tokens). Each entry keeps the
+extractor-filtered `add_stats` / `multiply_stats` combat subset
+(soft/hard/piercing/armor/hardness/defense/breakthrough only); stat-less
+tokens are kept so the runtime can tell known-inert modules from unknown
+(modded) ones:
+
+```json
+{
+  "tank_heavy_machine_gun": {
+    "add": {"soft_attack": 8, "hard_attack": 2, "ap_attack": 6}, "mult": {}
+  },
+  "tank_welded_armor": {
+    "add": {"defense": 4, "breakthrough": 4}, "mult": {"armor_value": 0.3}
+  }
+}
+```
+
+#### tank_upgrades.json
+From `common/units/equipment/upgrades/land_upgrades.txt` — the designer
+tank upgrades' PER-LEVEL flat adds (`tank_nsb_engine_upgrade` touches no
+modeled combat stat; `tank_nsb_armor_upgrade` gives +2.5 armor / +1.25
+breakthrough per level). Legacy factor-per-level upgrades apply to
+non-designer fixed equipment and are not extracted:
+
+```json
+{
+  "tank_nsb_engine_upgrade": {"add": {}},
+  "tank_nsb_armor_upgrade": {"add": {"breakthrough": 1.25, "armor_value": 2.5}}
+}
+```
+
+#### tank_families.json
+Reference dump of the `duplicate_archetypes` expansion (21 families):
+family → source archetype, HOI4 `type` list, hardness override (when the
+family sets one) and the synthesized variant→source map. Not loaded by the
+exe — the runtime consumes the synthesized `equipment_stats.json` rows;
+this table documents where they came from:
+
+```json
+{
+  "light_tank_aa_chassis": {
+    "archetype": "light_tank_chassis",
+    "type": ["armor", "anti_air"],
+    "hardness": 0.5,
+    "variants": {"light_tank_aa_chassis_1": "light_tank_chassis_1", ...}
+  }
 }
 ```
 
@@ -2328,6 +2412,26 @@ if = {
 grep). The listener substitutes the real game hour from the log line's
 `[yyyy.mm.dd.hh]` prefix (`tactical-listen::game_hour_prefix`, §3.1). The
 heartbeat is liveness-only, so the daily pulse suffices.
+
+**Watchdog (same daily pulse).** The freeze (§8.4) is applied the moment
+the entry decision is taken, while its lift rides exe injection — a
+player who never started the exe would otherwise hold a frozen battle
+until reload. The hourly sync receiver `d_tac_sync_hourly` doubles as the
+liveness mailbox (`set_country_flag = tac_alive`; every exe version
+injects that line, so the protocol is untouched). Each daily pulse under
+`tac_mode_active`: ack present → clear mailbox and the grace marker; ack
+absent → first miss only sets `tac_watchdog_warned` (grace: a battle
+picked minutes before midnight has not synced its first hour), second
+consecutive miss → `country_event tac_watchdog.1` — a visible popup
+explaining the exe requirement while `d_tac_clear_tactical` releases the
+freeze and resets every flag.
+
+**Boot notice (same file, on_startup).** `on_startup` runs once per new
+game's first day and never on save load (vanilla's only boot hook; the
+load path does not fire it). Scoped to human countries it fires
+`tac_notice.1` immediately (no delay) — the popup is already up on the
+still-paused first frame, telling the player to start the exe first. The decision-CATEGORY description carries the same
+warning permanently; the per-decision descriptions stay clean.
 
 ### 10.6 Message Coverage Notes (revised)
 

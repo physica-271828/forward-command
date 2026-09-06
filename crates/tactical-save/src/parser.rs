@@ -8,9 +8,10 @@
 //!   `division_template` blocks are merged as a fallback.
 //! - Divisions may reference their template by name (`division_template =
 //!   "Name"`) or by id (`division_template_id = { id = N ... }`).
-//! - Division equipment is read as `token = count` scalars; nested
-//!   `equipment = { id = ... amount = ... }` entries (unresolvable without an
-//!   id→type table) are skipped gracefully.
+//! - Division equipment comes in two forms: legacy `token = count` scalars
+//!   and the 1.19 id-reference form (`equipment = { id = … amount = … }`),
+//!   resolved through the root `equipments` registry — which also carries
+//!   each item's designer module picks and upgrade levels (§5.2).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -20,8 +21,8 @@ use jomini::Windows1252Encoding;
 
 use crate::mapping::map_unit_class;
 use crate::model::{
-    ArmyData, BattalionInfo, CountryData, DivisionData, LandCombatData, LandCombatSideData,
-    LeaderData, SaveGame, TemplateData,
+    ArmyData, BattalionInfo, CountryData, DivisionData, EquipmentDesign, LandCombatData,
+    LandCombatSideData, LeaderData, SaveGame, TemplateData,
 };
 use crate::SaveError;
 
@@ -67,9 +68,16 @@ impl SaveParser {
 
         // Pass 1.5: the root `equipments` registry — 1.19 stores
         // division equipment as `id = N` references, and this block maps
-        // each id to its token: `infantry_equipment_1 = { id = { id = 1326
-        // type = 70 } ... }`.
-        let mut equip_ids: HashMap<u64, String> = HashMap::new();
+        // each id to its full record:
+        // `light_tank_chassis_2 = { id = { id = 2203 type = 70 }
+        //   name = "Type 95 Ha-Go" is_frame = no upgrades = { upgrades = {
+        //   { tank_nsb_engine_upgrade 0 } { tank_nsb_armor_upgrade 0 } } }
+        //   modules = { main_armament_slot = tank_heavy_machine_gun … } }`.
+        // The token alone only fixes the CHASSIS row (designer-era tank
+        // chassis carry no attack stats — the gun is a module pick), so the
+        // module/upgrade fields are parsed too; the design-aware assembly
+        // (§5.3) computes real combat stats from them.
+        let mut designs: HashMap<u64, EquipmentDesign> = HashMap::new();
         for (key, group) in root.field_groups() {
             if key.read_str() != "equipments" {
                 continue;
@@ -85,12 +93,52 @@ impl SaveParser {
                         let Ok(entry_obj) = tv.read_object() else {
                             continue;
                         };
+                        let mut design = EquipmentDesign {
+                            token: token_key.read_str().to_string(),
+                            ..Default::default()
+                        };
+                        let mut entry_id: Option<u64> = None;
                         for (k, g) in entry_obj.field_groups() {
-                            if k.read_str() == "id" {
-                                if let Some(id) = read_id_object(&g) {
-                                    equip_ids.insert(id, token_key.read_str().to_string());
+                            match k.read_str().as_ref() {
+                                "id" => entry_id = read_id_object(&g),
+                                "name" => {
+                                    for (_op, v) in g.values() {
+                                        let text = read_text(&v);
+                                        if !text.is_empty() {
+                                            design.name = Some(text);
+                                        }
+                                    }
                                 }
+                                "is_frame" => {
+                                    for (_op, v) in g.values() {
+                                        design.is_frame = read_text(&v) == "yes";
+                                    }
+                                }
+                                "modules" => {
+                                    for (_op, v) in g.values() {
+                                        let Ok(mods_obj) = v.read_object() else {
+                                            continue;
+                                        };
+                                        for (slot_key, slot_group) in mods_obj.field_groups() {
+                                            for (_op, sv) in slot_group.values() {
+                                                let module = read_text(&sv);
+                                                if !module.is_empty() && module != "empty" {
+                                                    design
+                                                        .modules
+                                                        .insert(slot_key.read_str().to_string(), module);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                "upgrades" => {
+                                    parse_design_upgrades(&g, &mut design.upgrades);
+                                }
+                                _ => {}
                             }
+                        }
+                        if let Some(id) = entry_id {
+                            designs.insert(id, design);
                         }
                     }
                 }
@@ -167,7 +215,7 @@ impl SaveParser {
                         // A single malformed country must not abort the parse
                         // (§11.3); skip it and keep going.
                         if let Ok(mut country) =
-                            parse_country(&tag, &tag_group, &templates, &equip_ids, &advisor_roles)
+                            parse_country(&tag, &tag_group, &templates, &designs, &advisor_roles)
                         {
                             // Pass-1.6 leader traits ride on the tag.
                             country.leader_traits = leader_traits.remove(&tag).unwrap_or_default();
@@ -298,6 +346,7 @@ impl SaveParser {
             picked_states,
             leaders,
             armies,
+            designs,
         })
     }
 }
@@ -627,7 +676,7 @@ fn parse_country(
     tag: &str,
     group: &GroupEntry<'_, '_, Encoding>,
     root_templates: &[TemplateData],
-    equip_ids: &HashMap<u64, String>,
+    designs: &HashMap<u64, EquipmentDesign>,
     advisor_roles: &HashMap<u64, Vec<(String, String)>>,
 ) -> Result<CountryData, SaveError> {
     // Pass 1: local templates, technologies, ideas, dynamic modifiers,
@@ -705,7 +754,7 @@ fn parse_country(
                     for (_op, div_value) in unit_group.values() {
                         // Skip malformed divisions individually (§11.3).
                         if let Ok(div) =
-                            parse_division(&div_value, &by_name, &id_to_name, &id_to_group, equip_ids)
+                            parse_division(&div_value, &by_name, &id_to_name, &id_to_group, designs)
                         {
                             divisions.push(div);
                         }
@@ -1129,7 +1178,7 @@ fn parse_division(
     by_name: &HashMap<String, (Vec<BattalionInfo>, Vec<BattalionInfo>)>,
     id_to_name: &HashMap<u64, String>,
     id_to_group: &HashMap<u64, Option<String>>,
-    equip_ids: &HashMap<u64, String>,
+    designs: &HashMap<u64, EquipmentDesign>,
 ) -> Result<DivisionData, SaveError> {
     let obj = value
         .read_object()
@@ -1155,6 +1204,7 @@ fn parse_division(
     let mut entrenchment: f32 = 0.0;
     let mut supply_status: Option<f32> = None;
     let mut equipment: HashMap<String, f32> = HashMap::new();
+    let mut equipment_ids: Vec<(u64, f32)> = Vec::new();
 
     for (field_key, field_group) in obj.field_groups() {
         match field_key.read_str().as_ref() {
@@ -1255,7 +1305,9 @@ fn parse_division(
                 // id-reference form `equipment = { id = { id = N type = 70 }
                 // amount = M }` resolved through the root `equipments`
                 // registry (without it every division parsed
-                // with EMPTY equipment and stats collapsed to zero).
+                // with EMPTY equipment and stats collapsed to zero). The
+                // id form ALSO accumulates per-id counts — the design-aware
+                // assembly (§5.3) reads each design's own module picks.
                 for (_op, v) in field_group.values() {
                     if let Ok(eq_obj) = v.read_object() {
                         for (eq_key, eq_group) in eq_obj.field_groups() {
@@ -1284,8 +1336,12 @@ fn parse_division(
                                             _ => {}
                                         }
                                     }
-                                    if let Some(token) = eid.and_then(|i| equip_ids.get(&i)) {
-                                        *equipment.entry(token.clone()).or_insert(0.0) += amount;
+                                    if let Some((id, design)) =
+                                        eid.and_then(|i| designs.get(&i).map(|d| (i, d)))
+                                    {
+                                        *equipment.entry(design.token.clone()).or_insert(0.0) +=
+                                            amount;
+                                        equipment_ids.push((id, amount));
                                     }
                                 }
                             }
@@ -1351,6 +1407,7 @@ fn parse_division(
         entrenchment,
         supply_status,
         equipment,
+        equipment_ids,
         battalions,
         support_companies,
     })
@@ -1390,6 +1447,46 @@ fn read_text(v: &ValueReader<'_, '_, Encoding>) -> String {
         s.to_string()
     } else {
         String::new()
+    }
+}
+
+/// A registry entry's `upgrades = { upgrades = { { token level } … } }`:
+/// the inner block is an anonymous array of (token, level) rows. Missing or
+/// oddly-shaped fields simply yield no entries (§11.3).
+fn parse_design_upgrades(group: &GroupEntry<'_, '_, Encoding>, out: &mut HashMap<String, u32>) {
+    for (_op, v) in group.values() {
+        let Ok(obj) = v.read_object() else {
+            continue;
+        };
+        for (k, g) in obj.field_groups() {
+            if k.read_str() != "upgrades" {
+                continue;
+            }
+            for (_op, uv) in g.values() {
+                let Ok(rows) = uv.read_array() else {
+                    continue;
+                };
+                for row in rows.values() {
+                    let Ok(cols) = row.read_array() else {
+                        continue;
+                    };
+                    let mut token = String::new();
+                    let mut level: u32 = 0;
+                    for cv in cols.values() {
+                        if let Ok(scalar) = cv.read_scalar() {
+                            if let Ok(n) = scalar.to_u64() {
+                                level = n as u32;
+                            } else {
+                                token = read_text(&cv);
+                            }
+                        }
+                    }
+                    if !token.is_empty() {
+                        out.insert(token, level);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1750,6 +1847,113 @@ countries = {
         assert_eq!(div.equipment.get("support_equipment_1"), Some(&30.0));
         // Unknown registry ids are ignored gracefully (§11.3).
         assert_eq!(div.equipment.len(), 2);
+    }
+
+    #[test]
+    fn registry_entries_carry_design_modules_and_upgrades() {
+        // 1.19.2 real-save registry shape: designer variants carry name /
+        // is_frame / module picks / upgrade levels under the token key;
+        // divisions reference them by id.
+        let text = r#"
+equipments = {
+    light_tank_chassis_2 = {
+        id = { id = 2180 type = 70 }
+        max_version = 1
+        is_frame = yes
+        creator = "GER"
+        modules = {
+            engine_type_slot = tank_gasoline_engine
+            turret_type_slot = tank_light_one_man_tank_turret
+        }
+        upgrades = {
+            upgrades = {
+                { tank_nsb_engine_upgrade 0 }
+                { tank_nsb_armor_upgrade 0 }
+            }
+        }
+    }
+    light_tank_chassis_2 = {
+        id = { id = 2203 type = 70 }
+        name = "Type 95 Ha-Go"
+        is_frame = no
+        creator = "JAP"
+        parent_id = { id = 2180 type = 70 }
+        modules = {
+            main_armament_slot = tank_heavy_machine_gun
+            engine_type_slot = tank_gasoline_engine
+            special_type_slot_1 = empty
+            turret_type_slot = tank_light_one_man_tank_turret
+        }
+        upgrades = {
+            upgrades = {
+                { tank_nsb_engine_upgrade 3 }
+                { tank_nsb_armor_upgrade 2 }
+            }
+        }
+    }
+    infantry_equipment_1 = {
+        id = { id = 1326 type = 70 }
+        is_frame = no
+        creator = "ITA"
+    }
+}
+countries = {
+    JAP = {
+        units = {
+            division = {
+                id = { id = 1118 type = 51 }
+                location = 13250
+                organization = 0.9
+                strength = 0.95
+                equipment = {
+                    equipment = { id = { id = 2203 type = 70 } amount = 59.5 }
+                    equipment = { id = { id = 1326 type = 70 } amount = 910 }
+                }
+            }
+        }
+    }
+}
+"#;
+        let save = SaveParser::parse_save_from_str(text).unwrap();
+        // Same token, two ids: the frame and the named design coexist.
+        let frame = &save.designs[&2180];
+        assert!(frame.is_frame);
+        assert_eq!(frame.name, None);
+        assert_eq!(
+            frame.modules.get("engine_type_slot").map(String::as_str),
+            Some("tank_gasoline_engine")
+        );
+        let ha_go = &save.designs[&2203];
+        assert!(!ha_go.is_frame);
+        assert_eq!(ha_go.name.as_deref(), Some("Type 95 Ha-Go"));
+        assert_eq!(ha_go.token, "light_tank_chassis_2");
+        assert_eq!(
+            ha_go.modules.get("main_armament_slot").map(String::as_str),
+            Some("tank_heavy_machine_gun")
+        );
+        // `empty` slot markers are not module picks.
+        assert!(!ha_go.modules.contains_key("special_type_slot_1"));
+        assert_eq!(ha_go.upgrades.get("tank_nsb_engine_upgrade"), Some(&3));
+        assert_eq!(ha_go.upgrades.get("tank_nsb_armor_upgrade"), Some(&2));
+        // Plain equipment entries parse with empty designer fields.
+        let rifle = &save.designs[&1326];
+        assert_eq!(rifle.token, "infantry_equipment_1");
+        assert!(rifle.modules.is_empty() && rifle.upgrades.is_empty());
+
+        // The division keeps both the aggregated token map and the per-id
+        // breakdown (fractional amounts preserved).
+        let div = &save.countries["JAP"].divisions[0];
+        assert_eq!(div.equipment.get("light_tank_chassis_2"), Some(&59.5));
+        assert_eq!(div.equipment.get("infantry_equipment_1"), Some(&910.0));
+        assert_eq!(div.equipment_ids.len(), 2);
+        assert!(div.equipment_ids.contains(&(2203, 59.5)));
+        assert!(div.equipment_ids.contains(&(1326, 910.0)));
+
+        // No registry at all → empty designs, empty id breakdown (legacy
+        // scalar-form saves keep the token path).
+        let legacy = SaveParser::parse_save_from_str(SYNTH_SAVE).unwrap();
+        assert!(legacy.designs.is_empty());
+        assert!(legacy.countries["GER"].divisions[0].equipment_ids.is_empty());
     }
 
     #[test]

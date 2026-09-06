@@ -1,6 +1,7 @@
 //! tactical3d-render — Bevy 0.15 3D renderer for Forward Command.
 //! Pixel/blocky art: merged vertex-colored meshes, RTS camera, egui overlay.
 
+pub mod automation;
 pub mod board;
 pub mod camera;
 pub mod fonts;

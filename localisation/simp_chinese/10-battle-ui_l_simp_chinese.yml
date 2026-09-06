@@ -212,6 +212,20 @@ battle.desync.continue:0 "不同步继续"
 battle.desync.status:0 "已去同步 — 不同步模式（战果不再回写 HOI4）"
 battle.tooltip.sync_disabled:0 "同步已禁用：本场战斗与 HOI4 已去同步。可结束战斗，或不同步继续战斗 — 退出时只会清理 HOI4 的冻结状态。"
 
+# ── 战斗自动化（局内生效的战斗窗口开关，DESIGN §6.2/§8.2）──
+battle.auto.title:0 "自动化"
+battle.auto.skip_quiet:0 "自动跳过无战斗回合"
+battle.auto.skip_reports:0 "自动关闭战报"
+battle.auto.auto_sync:0 "整点自动同步"
+battle.auto.report_close_label:0 "战报自动关闭延时"
+battle.auto.sync_close_label:0 "同步摘要自动关闭延时"
+battle.tooltip.auto.skip_quiet:0 "无火力/突击结算的回合自动结束 — 纯行军与无动作回合照常推进。有战斗结算的回合会暂停自动推进（本勾选保持）：手动点一次\"结束回合\"即恢复跳过。连续 12 个回合零移动且零战斗（僵持）时自动停止并提示。"
+battle.tooltip.auto.skip_reports:0 "回合战报弹窗显示下方延时后自动关闭，无需点继续。终局战报不受影响，始终等待手动关闭。"
+battle.tooltip.auto.auto_sync:0 "到整点自动执行同步；同步摘要弹窗按下方延时自动关闭（勾选自动跳过后，摘要关闭即恢复自动推进）。"
+battle.tooltip.auto.report_close_secs:0 "回合战报在屏幕上停留这么久后自动关闭。"
+battle.tooltip.auto.sync_close_secs:0 "同步摘要在屏幕上停留这么久后自动关闭。"
+battle.notice.auto.fuse:0 "连续 {n} 个回合零移动且零战斗 — 自动推进已停止"
+
 # ── 师级命令 (DESIGN §7.4) ──
 div_order.advance:0 "推进"
 div_order.seize:0 "占领"

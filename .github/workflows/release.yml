@@ -79,7 +79,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$pkg\data\battles", "$pkg\assets\fonts" | Out-Null
           Copy-Item "target\release\forward-command.exe" $pkg
           foreach ($f in @("equipment_stats.json", "unit_templates.json", "doctrine_bonuses.json",
-                           "modifiers.json", "country_colors.json")) {
+                           "modifiers.json", "country_colors.json",
+                           "tank_modules.json", "tank_upgrades.json")) {
             Copy-Item "data\$f" "$pkg\data"
           }
           Copy-Item "data\battles\*.json" "$pkg\data\battles"

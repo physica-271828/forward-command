@@ -1,4 +1,7 @@
-# Hourly sync receiver (DESIGN §10.2).
+# Hourly sync receiver (DESIGN §10.2). Doubles as the exe liveness
+# mailbox for the daily watchdog (§10.5): every exe version injects this
+# effect each sync hour, so the flag re-arms regardless of exe version.
 d_tac_sync_hourly = {
+	set_country_flag = tac_alive
 	country_event = { id = tac_sync.1 hours = 0 }
 }

@@ -12,6 +12,39 @@ on_actions = {
 			if = {
 				limit = { has_country_flag = tac_mode_active }
 				log = "{\"type\":\"tac_heartbeat\",\"hour\":0}"
+
+				# Watchdog (§10.5): the exe re-arms the tac_alive mailbox at
+				# every hourly sync. One missed day is grace (a battle picked
+				# minutes before the pulse has not synced its first hour
+				# yet); two consecutive misses mean the exe is absent or
+				# dead — rescue with an explanatory popup (tac_watchdog.1)
+				# and the shared cleanup.
+				if = {
+					limit = { has_country_flag = tac_alive }
+					clr_country_flag = tac_alive
+					clr_country_flag = tac_watchdog_warned
+				}
+				else_if = {
+					limit = { has_country_flag = tac_watchdog_warned }
+					country_event = { id = tac_watchdog.1 hours = 0 }
+				}
+				else = {
+					set_country_flag = tac_watchdog_warned
+				}
+			}
+		}
+	}
+
+	# One-time boot notice (DESIGN §10.6): on_startup runs once per NEW game
+	# on its first day and never on save load; human players get the notice
+	# event once per campaign. Vanilla has no ROOT here (global scope) —
+	# scope to human countries explicitly. Immediate fire (no days=): the
+	# popup is already up on the still-paused first frame.
+	on_startup = {
+		effect = {
+			every_country = {
+				limit = { is_ai = no }
+				country_event = { id = tac_notice.1 }
 			}
 		}
 	}

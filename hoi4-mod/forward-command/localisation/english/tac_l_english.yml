@@ -1,6 +1,6 @@
 ﻿l_english:
  forward_command_decisions: "Forward Command"
- forward_command_decisions_desc: "Take direct tactical command of frontier engagements. Click 'Enter Tactical Battle', then click a highlighted frontier state on the map (ESC to cancel the selection); the battle is resolved battalion by battalion in the external wargame program."
+ forward_command_decisions_desc: "Take direct tactical command of frontier engagements. Click 'Enter Tactical Battle', then click a highlighted frontier state on the map (ESC to cancel the selection); the battle is resolved battalion by battalion in the external wargame program.\n\n§RNOTE: start the external program forward-command.exe BEFORE using these decisions, or the battle stays frozen.§!"
  tactical_command_entry: "Enter Tactical Battle in §Y[FROM.GetName]§!"
  tactical_command_entry_desc: "Pick a frontier state (yours or the enemy's) and take direct tactical command of the battle there. An external wargame program will open and resolve the engagement battalion by battalion (Forward Command)."
  tactical_force_exit: "Force Exit Tactical Mode"
@@ -15,3 +15,10 @@
  tac_complete.99.d: "The tactical battle has ended."
  tac_complete.99.o: "OK"
  tac_freeze: "Tactical Battle in Progress"
+ tac_watchdog.1.t: "Tactical Mode Auto-Reset"
+ tac_watchdog.1.d: "No sync acknowledgement from the external program (forward-command.exe) was detected, so the frozen battle has been released and reset.\n\nThis mod works together with the external program: start forward-command.exe BEFORE using the Tactical Command decision. See the Workshop page for the download."
+ tac_watchdog.1.o: "OK"
+
+ tac_notice.1.t: "Forward Command Active"
+ tac_notice.1.d: "This mod works together with the external program forward-command.exe — start it before you play (see the package or the Workshop page for details).\n\nWhen divisions engage in a frontier state, use the Tactical Command decisions to fight the battle on a hex-grid board."
+ tac_notice.1.o: "Understood"

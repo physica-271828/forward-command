@@ -214,6 +214,20 @@ battle.desync.continue:0 "Continue Unsynced"
 battle.desync.status:0 "DESYNCED — unsynced mode (results no longer written to HOI4)"
 battle.tooltip.sync_disabled:0 "Sync disabled: this battle is desynced from HOI4. End the battle or keep fighting unsynced — exits will only clean up HOI4's frozen state."
 
+# ── Turn automation (session-scoped battle-window toggles, DESIGN §6.2/§8.2) ──
+battle.auto.title:0 "Automation"
+battle.auto.skip_quiet:0 "Auto-skip quiet turns"
+battle.auto.skip_reports:0 "Auto-close reports"
+battle.auto.auto_sync:0 "Auto-sync at hour end"
+battle.auto.report_close_label:0 "Report auto-close delay"
+battle.auto.sync_close_label:0 "Sync summary auto-close delay"
+battle.tooltip.auto.skip_quiet:0 "Rounds with no fire/assault settlement end themselves — pure marching and no-action turns roll on. A round that saw combat pauses the advance here (this toggle stays on); end that turn by hand once and the skipping resumes. Halts with a notice after 12 rounds with no movement and no combat."
+battle.tooltip.auto.skip_reports:0 "Each round's combat-report window closes itself after the delay below, no Continue needed. Battle-end reports always wait for manual closing."
+battle.tooltip.auto.auto_sync:0 "The hour-boundary Sync runs by itself; the summary closes after its own delay (with auto-advance on, closing it resumes the skipping)."
+battle.tooltip.auto.report_close_secs:0 "How long a combat report stays on screen before closing itself."
+battle.tooltip.auto.sync_close_secs:0 "How long the sync summary stays up before closing itself."
+battle.notice.auto.fuse:0 "{n} rounds with no movement and no combat — auto-advance halted"
+
 # ── Division orders (DESIGN §7.4) ──
 div_order.advance:0 "Advance"
 div_order.seize:0 "Seize"

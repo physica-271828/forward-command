@@ -14,12 +14,25 @@ use tactical_core::unit::{BattalionUnit, Side, UnitType};
 use tactical_map::MapGenerator;
 use tactical_save::{
     create_tactical_units_named, leader_bonus, CountryCombatModifier, CountryOrgModifier,
-    DoctrineTable, EquipmentTable, ModifierTable, SaveParser, UnitNaming, UnitTemplateTable,
+    DesignTables, DoctrineTable, EquipmentTable, ModifierTable, SaveParser, UnitNaming,
+    UnitTemplateTable,
 };
 
 use crate::demo::{arena_grid, arena_zones};
 use crate::script;
 use crate::settings::AppSettings;
+
+/// Design-stat lookup warnings collected during battalion assembly —
+/// logged deduped so unknown (e.g. modded) module tokens surface instead
+/// of silently contributing 0.
+fn log_design_warnings(warnings: &[String]) {
+    let mut unique: Vec<&str> = warnings.iter().map(String::as_str).collect();
+    unique.sort_unstable();
+    unique.dedup();
+    for w in unique {
+        eprintln!("design stats: {w}");
+    }
+}
 
 /// Enemy tactics offered in the debug form (same list as the CLI builder).
 /// The full 16-card library. Index order is contractual: 1-9 are the
@@ -374,6 +387,10 @@ pub fn assemble(sc: &Scenario, settings: &AppSettings) -> Result<BattleSpec, Str
         // (a fidelity refinement, not a hard dependency).
         let doctrine_table =
             DoctrineTable::load(data_dir.join("doctrine_bonuses.json")).unwrap_or_default();
+        // Tank-designer module/upgrade tables for the design-aware assembly
+        // (§5.3) — same degrade-silent contract.
+        let design_tables = DesignTables::load(&data_dir);
+        let mut design_warnings: Vec<String> = Vec::new();
         // Generated battalion names in the session language.
         let naming = crate::naming::localized_unit_naming(&tactical_locale::Locale::load(
             settings.language(),
@@ -450,6 +467,9 @@ pub fn assemble(sc: &Scenario, settings: &AppSettings) -> Result<BattleSpec, Str
                             &leader,
                             next_id,
                             &naming,
+                            &save_game.designs,
+                            &design_tables,
+                            &mut design_warnings,
                         );
                         // Advance the GLOBAL id counter by this division's
                         // size — `made.len()` is force-local and collided
@@ -462,6 +482,7 @@ pub fn assemble(sc: &Scenario, settings: &AppSettings) -> Result<BattleSpec, Str
                 }
             }
         }
+        log_design_warnings(&design_warnings);
     } else {
         // Canonical-key terrain adjusters for preset battalions
         // (a missing table degrades to zero adjusters, §5.3 fallback).
@@ -1251,6 +1272,10 @@ pub fn assemble_live(
     // Doctrine combat factors — same degrade-silent contract.
     let doctrine_table =
         DoctrineTable::load(data_dir.join("doctrine_bonuses.json")).unwrap_or_default();
+    // Tank-designer module/upgrade tables (§5.3 designer path) — same
+    // degrade-silent contract.
+    let design_tables = DesignTables::load(&data_dir);
+    let mut design_warnings: Vec<String> = Vec::new();
 
     // Forces: the land_combat's unit-id lists when present —
     // the ATTACKER's divisions are NOT in the contested province (they sit
@@ -1468,6 +1493,9 @@ pub fn assemble_live(
             &leader,
             next_id,
             &naming,
+            &save_game.designs,
+            &design_tables,
+            &mut design_warnings,
         );
         next_id += us.len();
         // Country-tagged base plates: an allied contingent reads as its own
@@ -1500,6 +1528,9 @@ pub fn assemble_live(
             &leader,
             next_id,
             &naming,
+            &save_game.designs,
+            &design_tables,
+            &mut design_warnings,
         );
         next_id += us.len();
         for u in &mut us {
@@ -1515,6 +1546,7 @@ pub fn assemble_live(
         ));
         units.extend(us);
     }
+    log_design_warnings(&design_warnings);
     if units.is_empty() {
         return Err("save produced no battalions".into());
     }
@@ -1905,10 +1937,13 @@ pub struct DivisionTables {
     pub templates: UnitTemplateTable,
     pub modifiers: ModifierTable,
     pub doctrines: DoctrineTable,
+    /// Tank-designer module/upgrade tables for the design-aware assembly
+    /// (§5.3 designer path).
+    pub design: DesignTables,
 }
 
 impl DivisionTables {
-    /// Load the four runtime tables from `<runtime root>/data` (same files
+    /// Load the runtime tables from `<runtime root>/data` (same files
     /// and degrade-silent contracts as the live assembly).
     pub fn load_runtime() -> Result<Self, String> {
         let data_dir = crate::dirs::runtime_root().join("data");
@@ -1920,6 +1955,7 @@ impl DivisionTables {
             modifiers: ModifierTable::load(data_dir.join("modifiers.json")),
             doctrines: DoctrineTable::load(data_dir.join("doctrine_bonuses.json"))
                 .unwrap_or_default(),
+            design: DesignTables::load(&data_dir),
         })
     }
 }
@@ -2023,6 +2059,7 @@ pub fn apply_roster_sync(
 
     // 2. Joiners: assemble from the fresh save, place at the approach edge.
     let mut next_id = units.iter().map(|u| u.id).max().map_or(0, |m| m + 1);
+    let mut design_warnings: Vec<String> = Vec::new();
     for (division_id, side) in &diff.joined {
         let found = save.countries.iter().find_map(|(t, c)| {
             c.divisions
@@ -2053,6 +2090,9 @@ pub fn apply_roster_sync(
             &leader,
             next_id,
             naming,
+            &save.designs,
+            &tables.design,
+            &mut design_warnings,
         );
         next_id += us.len();
         // Same country-tagged base plates as the battle-start assembly.
@@ -2094,6 +2134,7 @@ pub fn apply_roster_sync(
     // 4. Re-derive the damage-ratio pools from the updated roster.
     recompute_pools(session, save, tables);
 
+    log_design_warnings(&design_warnings);
     report
 }
 
@@ -2839,6 +2880,7 @@ mod tests {
             entrenchment: 0.0,
             supply_status: None,
             equipment: std::collections::HashMap::new(),
+            equipment_ids: Vec::new(),
             battalions: vec![inf()],
             support_companies: Vec::new(),
         };
@@ -2967,6 +3009,7 @@ mod tests {
             entrenchment: 0.0,
             supply_status: None,
             equipment: std::collections::HashMap::new(),
+            equipment_ids: Vec::new(),
             battalions: Vec::new(),
             support_companies: Vec::new(),
         };
@@ -3082,6 +3125,7 @@ mod tests {
             entrenchment: 0.0,
             supply_status: None,
             equipment: std::collections::HashMap::new(),
+            equipment_ids: Vec::new(),
             battalions: Vec::new(),
             support_companies: Vec::new(),
         };
@@ -3133,6 +3177,7 @@ mod tests {
             entrenchment: 0.0,
             supply_status: None,
             equipment: std::collections::HashMap::new(),
+            equipment_ids: Vec::new(),
             battalions: vec![inf()],
             support_companies: Vec::new(),
         };
@@ -3242,6 +3287,7 @@ mod tests {
             entrenchment: 0.0,
             supply_status: None,
             equipment: std::collections::HashMap::new(),
+            equipment_ids: Vec::new(),
             battalions: vec![inf()],
             support_companies: Vec::new(),
         };
@@ -3310,6 +3356,9 @@ mod tests {
                 &tactical_save::LeaderBonus::default(),
                 next_id,
                 &naming,
+                &save.designs,
+                &DesignTables::default(),
+                &mut Vec::new(),
             );
             next_id += us.len();
             entries.push(roster_entry(d, tag, side, &us, &templates, neutral));
@@ -3354,6 +3403,7 @@ mod tests {
                 templates,
                 modifiers: ModifierTable::default(),
                 doctrines: DoctrineTable::default(),
+                design: DesignTables::default(),
             },
         }
     }

@@ -1,0 +1,11 @@
+{
+  "tank_nsb_engine_upgrade": {
+    "add": {}
+  },
+  "tank_nsb_armor_upgrade": {
+    "add": {
+      "breakthrough": 1.25,
+      "armor_value": 2.5
+    }
+  }
+}

@@ -26,14 +26,16 @@ mod units;
 
 pub use mapping::{map_unit_class, map_unit_type, unit_type_abbrev, UnitClass, UnitNaming};
 pub use model::{
-    ArmyData, BattalionInfo, CountryData, DivisionData, LandCombatData, LandCombatSideData,
-    LeaderData, SaveGame, TemplateData, COMBAT_TACTIC_IDS,
+    ArmyData, BattalionInfo, CountryData, DivisionData, EquipmentDesign, LandCombatData,
+    LandCombatSideData, LeaderData, SaveGame, TemplateData, COMBAT_TACTIC_IDS,
 };
 pub use names::{NameGroup, NameGroups};
 pub use parser::{find_divisions_in_province, SaveParser};
 pub use tables::{
-    CountryColorTable, DoctrineFactors, DoctrineTable, EquipmentStats, EquipmentTable,
-    IdeaModifiers, ModifierTable, UnitTemplateStats, UnitTemplateTable,
+    design_stats, CountryColorTable, DesignStats, DesignTables, DoctrineFactors, DoctrineTable,
+    EquipmentStats, EquipmentTable, IdeaModifiers, ModifierTable, StatBlock, TankModuleStats,
+    TankModuleTable, TankUpgradeTable, UnitTemplateStats, UnitTemplateTable,
+    MULTIPLY_ON_CHASSIS_BASE,
 };
 pub use units::{
     create_tactical_units, create_tactical_units_named, division_maxima, experience_attack_factor,

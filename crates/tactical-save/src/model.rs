@@ -44,6 +44,35 @@ pub struct SaveGame {
     /// `leader` (general) → the group listing that army in `child_armies`
     /// → its `leader` (field marshal).
     pub armies: Vec<ArmyData>,
+    /// The root `equipments` registry: equipment item id → its record
+    /// (token + designer module picks / upgrade levels). Divisions reference
+    /// their on-hand equipment by these ids (§5.2). Empty when the save
+    /// carries no registry (older formats) — assembly then runs on the
+    /// per-token counts alone.
+    pub designs: HashMap<u64, EquipmentDesign>,
+}
+
+/// One entry of the save's root `equipments` registry (§5.2): an equipment
+/// item, keyed by its globally unique id (`id = { id = N type = 70 }`). The
+/// same token appears once per country/design — matching is by id, never by
+/// token. Designer-created variants (tank chassis, airframes, ship hulls)
+/// carry their module picks and upgrade levels; plain equipment entries
+/// (and frames) parse with empty maps.
+#[derive(Debug, Clone, Default)]
+pub struct EquipmentDesign {
+    /// Registry token — the equipment row key (e.g. "light_tank_chassis_2",
+    /// "infantry_equipment_1").
+    pub token: String,
+    /// Design name (`name = "Type 95 Ha-Go"`); frames and plain equipment
+    /// carry none.
+    pub name: Option<String>,
+    /// `is_frame = yes`: the base chassis/airframe/hull entry itself.
+    pub is_frame: bool,
+    /// Designer module picks: slot token → module token
+    /// (`main_armament_slot = tank_heavy_machine_gun`).
+    pub modules: HashMap<String, String>,
+    /// Designer upgrade levels (`tank_nsb_armor_upgrade = 4`).
+    pub upgrades: HashMap<String, u32>,
 }
 
 /// A unit leader (division commander) extracted from the character database:
@@ -246,6 +275,12 @@ pub struct DivisionData {
     pub supply_status: Option<f32>,
     /// Actual equipment on hand: equipment key → count (§5.2).
     pub equipment: HashMap<String, f32>,
+    /// The same on-hand equipment in the save's 1.19 id-reference form:
+    /// (registry id, count) pairs resolving into the root `equipments`
+    /// registry (§5.2). This is the per-DESIGN breakdown — two ids may
+    /// share a token while carrying different designer module picks.
+    /// Empty for legacy scalar-form saves and synthetic fixtures.
+    pub equipment_ids: Vec<(u64, f32)>,
     /// Line battalions resolved from the division template's regiments.
     pub battalions: Vec<BattalionInfo>,
     /// Support companies resolved from the division template's support.
