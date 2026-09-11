@@ -1,7 +1,10 @@
 # Hourly sync receiver (DESIGN §10.2). Doubles as the exe liveness
 # mailbox for the daily watchdog (§10.5): every exe version injects this
 # effect each sync hour, so the flag re-arms regardless of exe version.
+# The sync receipt is also the handshake's chance to catch a stale
+# program (§3.3) — see d_tac_ver_check.
 d_tac_sync_hourly = {
 	set_country_flag = tac_alive
+	d_tac_ver_check = yes
 	country_event = { id = tac_sync.1 hours = 0 }
 }

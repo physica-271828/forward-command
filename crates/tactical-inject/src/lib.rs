@@ -299,7 +299,12 @@ impl Injector {
     /// is appended).
     pub fn write_batch_file(&self, commands: &[String]) -> io::Result<PathBuf> {
         let content = format!("{}\n", commands.join("\n"));
-        std::fs::write(&self.batch_file_path, content)?;
+        // Keep the failing path in the error text: the one env-specific
+        // failure mode seen in the wild was a dangling Documents redirect,
+        // and "os error 3" alone gave no hint which path was missing.
+        std::fs::write(&self.batch_file_path, &content).map_err(|e| {
+            io::Error::new(e.kind(), format!("{}: {e}", self.batch_file_path.display()))
+        })?;
         Ok(self.batch_file_path.clone())
     }
 
@@ -1117,6 +1122,24 @@ mod tests {
         assert!(a.starts_with(&head));
         assert!(a.ends_with('"'));
         assert!(b.starts_with(&head));
+    }
+
+    #[test]
+    fn write_batch_file_error_names_the_failing_path() {
+        // Diagnostics: a missing parent dir must surface the full path, so
+        // env-specific failures (e.g. a dangling Documents redirect) are
+        // identifiable from the error text alone.
+        let missing = std::env::temp_dir().join(format!(
+            "tac_no_such_dir_{}/sub/batch.txt",
+            std::process::id()
+        ));
+        let inj = Injector::with_paths(missing.clone(), None);
+        let err = inj.write_batch_file(&["rem".to_string()]).unwrap_err();
+        let shown = format!("{err}");
+        assert!(
+            shown.contains(&missing.display().to_string()),
+            "error must name the failing path: {shown}"
+        );
     }
 
     #[test]

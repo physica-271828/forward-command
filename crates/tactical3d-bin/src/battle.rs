@@ -25,6 +25,9 @@ pub struct LiveCtx {
     pub tag: String,
     /// Dry-run: write batch files only, no SendInput keystrokes.
     pub dry: bool,
+    /// The version the mod advertised in `tac_start` (§3.3) — `None` for a
+    /// pre-handshake mod, which then receives no verdict line at all.
+    pub mod_ver: Option<String>,
 }
 
 /// Standalone battle (debug form / CLI / demo-style): no HOI4 injection.
@@ -51,6 +54,13 @@ fn run_inner(spec: BattleSpec, live: Option<LiveCtx>, autoplay: bool) {
     let settings = AppSettings::load();
     let loc = Locale::load(settings.language());
     let title = loc.trf("window.title.battle", &[("location", &spec.location)]);
+    // Version handshake (§3.3): the mod's advertised version decides the one
+    // verdict line every injected batch carries, plus this window's own
+    // warning when the mod sits below the compatibility floor.
+    let own_ver = env!("CARGO_PKG_VERSION");
+    let mod_ver = live.as_ref().and_then(|c| c.mod_ver.clone());
+    let verdict = crate::version::verdict(own_ver, mod_ver.as_deref());
+    let notice = crate::version::notice_text(&loc, &verdict, own_ver, mod_ver.as_deref());
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
@@ -93,20 +103,26 @@ fn run_inner(spec: BattleSpec, live: Option<LiveCtx>, autoplay: bool) {
         // assembly passes a varying seed (M6).
         spec.seed.unwrap_or(7),
     );
+    // §7.4 settings policy: keep manually commanded battalions manual
+    // after their command completes (default: auto hand-back). Checkpoint
+    // snapshots are taken below, so the flag rides them from the start.
+    game.keep_manual_override = settings.keep_manual_override;
     game.location = spec.location.clone();
     if let Some(p) = spec.province {
         game.province = p;
     }
     game.template = spec.template.clone();
     // §7.5: the script's allied AI contingents + division→tag
-    // registry (empty outside script battles — the player commands her
-    // whole side). Checkpoint snapshots carry these, so Restart keeps them.
+    // registry (outside script battles the registry is empty and the allied
+    // split rides `spec.allies` — a live battle's allied countries).
     game.allies = spec.allies.clone();
-    // Per-country base-plate colors — every tag the battle's
-    // division→tag table fields (script battles; empty = side colors only).
+    // Per-country base-plate colors — every tag the battle fields for its
+    // divisions (the script's division→tag table; the allied contingents,
+    // which live battles use instead) plus both side tags.
     let tags: std::collections::HashSet<String> = spec
         .division_tags
         .values()
+        .chain(spec.allies.iter().map(|a| &a.tag))
         .chain(std::iter::once(&spec.atk_tag))
         .chain(std::iter::once(&spec.def_tag))
         .cloned()
@@ -146,6 +162,15 @@ fn run_inner(spec: BattleSpec, live: Option<LiveCtx>, autoplay: bool) {
             ctx.tag.clone()
         };
     }
+    // Version handshake (§3.3): the verdict line rides at the FRONT of
+    // every injected batch, scoped to the SESSION's resolved country tag
+    // (ctx.tag can be empty — the batch scope is what HOI4 receives).
+    let version_line = crate::version::verdict_line(&game.session.country_tag, &verdict);
+    if let Some(text) = &notice {
+        // The battle window's own surfaces carry the warning for a stale
+        // MOD (never an in-game popup — the mod already acks that case).
+        game.log_line_icon(None, text.clone());
+    }
     // HOI4 battle context + damage writeback mode for the
     // sync/end batches (None for non-live battles → no damage
     // lines, and no injector is armed anyway).
@@ -181,6 +206,14 @@ fn run_inner(spec: BattleSpec, live: Option<LiveCtx>, autoplay: bool) {
     app.insert_resource(crate::theme::side_colors(&spec.atk_tag, &spec.def_tag));
     app.insert_resource(tactical3d_render::fx::VpLabel(spec.vp_label));
     app.insert_resource(state);
+    if let Some(text) = notice {
+        // Same text as the battle-log line, as a top-bar flash (the log
+        // window only opens on demand).
+        app.insert_resource(NoticeBar {
+            flash: Some(FlashNotice::plain(text, 12.0)),
+            pending: None,
+        });
+    }
     if let Some(ctx) = live {
         // The battle window watches game.log itself for the
         // mod's tac_abort (Force Exit) — the parent listener (menu / --live)
@@ -219,7 +252,20 @@ fn run_inner(spec: BattleSpec, live: Option<LiveCtx>, autoplay: bool) {
             dry: ctx.dry,
             batch_path,
             saves_dir: settings.saves_dir(),
+            version_line,
         });
+        // The live flow's own trail (release builds have no console): the
+        // verdict, the versions it was computed from, and — for a stale-mod
+        // warning — the floor row that raised it.
+        let floor = match &verdict {
+            crate::version::Verdict::ModStale { .. } => crate::version::floor_reason(own_ver)
+                .map(|r| format!(" floor_reason={r}"))
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        inject_log_line(&format!(
+            "version handshake: verdict={verdict:?} mod={mod_ver:?} exe={own_ver}{floor}"
+        ));
         // The mid-battle reinforcement path assembles divisions
         // from the sync snapshots — same data tables as the assembly.
         match crate::scenario::DivisionTables::load_runtime() {
@@ -248,6 +294,9 @@ struct LiveInjector {
     /// HOI4 "save games" dir — the post-sync battle-alive check
     /// drops its `tac_check.hoi4` snapshots here.
     saves_dir: Option<std::path::PathBuf>,
+    /// The handshake verdict line (§3.3), prepended to every injected batch.
+    /// None = the mod predates the handshake: inject nothing, never guess.
+    version_line: Option<String>,
 }
 
 /// Division-assembly tables for the mid-battle roster sync
@@ -268,6 +317,23 @@ struct FinalRetry {
     /// timer forever (every 1.5 s, masked only by the 3 s exit timer). Once
     /// armed, no re-arm — a second failure leaves only the inject.log trail.
     spent: bool,
+}
+
+/// Prepend the handshake verdict to one batch (DESIGN §3.3). Every batch the
+/// battle injects carries the verdict exactly ONCE, at the front; the
+/// clock-probe / snapshot single-liners go through the injector directly and
+/// stay untouched. An EMPTY batch stays empty: nothing is injected for it at
+/// all, and a lone verdict line would turn it into a real synchronization.
+fn with_version_line(version_line: &Option<String>, batch: &[String]) -> Vec<String> {
+    match (batch.is_empty(), version_line) {
+        (false, Some(line)) => {
+            let mut out = Vec::with_capacity(batch.len() + 1);
+            out.push(line.clone());
+            out.extend_from_slice(batch);
+            out
+        }
+        _ => batch.to_vec(),
+    }
 }
 
 /// Append one line to %TEMP%\fc_inject.log — post-mortem evidence for a
@@ -728,15 +794,7 @@ fn roster_sync_now(
         );
     }
     // A selected unit that just left the board must not dangle.
-    if let Some(sel) = state.selected_unit {
-        if !state
-            .units
-            .iter()
-            .any(|u| u.id == sel && u.position != tactical_core::BattalionUnit::OFFBOARD)
-        {
-            state.selected_unit = None;
-        }
-    }
+    state.prune_selection();
     state.units_dirty = true;
     if let Some(notice) = notice.as_mut() {
         let joined = report.joined.len().to_string();
@@ -1049,10 +1107,11 @@ fn drain_injections(
     } else {
         None
     };
+    let batch1 = with_version_line(&live.version_line, &req.batch);
     let phase1 = if req.batch.is_empty() {
         Ok(())
     } else {
-        live.injector.inject_commands(&req.batch, None, live.dry)
+        live.injector.inject_commands(&batch1, None, live.dry)
     };
     match phase1 {
         Ok(()) => {
@@ -1062,15 +1121,16 @@ fn drain_injections(
                 req.is_final
             );
             // The sent values land in fc_inject.log for
-            // reconciliation (empty phase 1 injected nothing).
-            if !req.batch.is_empty() && !live.dry {
+            // reconciliation (empty phase 1 injected nothing). The batch
+            // logged is the one SENT — verdict line included.
+            if !batch1.is_empty() && !live.dry {
                 inject_batch_log(
                     if req.is_final {
                         "final phase 1"
                     } else {
                         "hourly sync"
                     },
-                    &req.batch,
+                    &batch1,
                 );
             }
             if let Some(prev) = prev_prefix {
@@ -1144,11 +1204,12 @@ fn drain_injections(
             // FinalRetry covers phase 1 only; the inject.log trail is the
             // post-mortem.
             if let Some(phase2) = &req.phase2 {
-                match live.injector.inject_commands(phase2, None, live.dry) {
+                let batch2 = with_version_line(&live.version_line, phase2);
+                match live.injector.inject_commands(&batch2, None, live.dry) {
                     Ok(()) => {
                         info!("injected final phase 2 ({} commands)", phase2.len());
-                        if !phase2.is_empty() && !live.dry {
-                            inject_batch_log("final phase 2", phase2);
+                        if !batch2.is_empty() && !live.dry {
+                            inject_batch_log("final phase 2", &batch2);
                         }
                     }
                     Err(e) => inject_failure_log(&live, &format!("final phase 2: {e}"), true),
@@ -1200,5 +1261,29 @@ fn exit_when_ended(
         if *t <= 0.0 {
             exit.send(bevy::app::AppExit::Success);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_line_is_prepended_to_non_empty_batches_only() {
+        let line = Some("eval_effect GER = { d_tac_ver_ok = yes }".to_string());
+        let batch = vec!["eval_effect ITA = { d_tac_sync_hourly = yes }".to_string()];
+        assert_eq!(
+            with_version_line(&line, &batch),
+            vec![
+                "eval_effect GER = { d_tac_ver_ok = yes }".to_string(),
+                "eval_effect ITA = { d_tac_sync_hourly = yes }".to_string(),
+            ]
+        );
+        // An empty batch injects nothing at all — a lone verdict line would
+        // turn a no-op batch into a real synchronization.
+        assert!(with_version_line(&line, &[]).is_empty());
+        // A pre-handshake mod (no verdict) leaves every batch untouched.
+        assert_eq!(with_version_line(&None, &batch), batch);
+        assert!(with_version_line(&None, &[]).is_empty());
     }
 }

@@ -364,6 +364,7 @@ pub fn ai_deploy(
     tactic: CombatTactic,
     pre_used: &HashSet<(i32, i32)>,
     only_division: Option<&str>,
+    only_tag: Option<&str>,
 ) {
     ai_deploy_impl(
         grid,
@@ -374,6 +375,7 @@ pub fn ai_deploy(
         tactic,
         pre_used,
         only_division,
+        only_tag,
         None,
         false, // the AI/whole-side flow — `only_undeployed` is the player knob
     )
@@ -388,6 +390,10 @@ pub fn ai_deploy(
 /// `only_division` (sector deployment): when Some, only that
 /// division's battalions are arranged — the OOB "deploy to sector" flow
 /// hands one division at a time to a player-drawn rectangle.
+/// `only_tag`: the division's OWNER country, paired with
+/// `only_division` — a battle can field same-name divisions under several
+/// nations (§7.5), so a name-only filter would hand a foreign battalion to
+/// this deploy call too. `None` = no tag filter.
 /// `sector_divisions`: the ordered list of divisions
 /// that will share the zone, used for the sector partition when deploying
 /// division-by-division (allied contingents / headless splits). None =
@@ -408,6 +414,7 @@ pub fn ai_deploy_impl(
     tactic: CombatTactic,
     pre_used: &HashSet<(i32, i32)>,
     only_division: Option<&str>,
+    only_tag: Option<&str>,
     sector_divisions: Option<&[String]>,
     only_undeployed: bool,
 ) {
@@ -415,8 +422,10 @@ pub fn ai_deploy_impl(
         return;
     }
     let defending = enemy == Side::Defender;
-    let in_division =
-        |u: &BattalionUnit| -> bool { only_division.map(|d| u.division == d).unwrap_or(true) };
+    let in_division = |u: &BattalionUnit| -> bool {
+        only_division.map(|d| u.division == d).unwrap_or(true)
+            && only_tag.map(|t| u.tag == t).unwrap_or(true)
+    };
     // Auto Deploy fills only the OOB waiters — a hand-placed unit
     // is sacred (its hex is also covered by `pre_used`). Pass-3's member
     // anchor below deliberately does NOT filter: a placed battalion is a
@@ -1567,6 +1576,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         for u in &units {
             assert!(
@@ -1604,6 +1614,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         assert_eq!(
             units[0].position,
@@ -1631,6 +1642,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
         );
         let front = units[0].position;
@@ -1666,6 +1678,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
         );
         let hq = units[2].position;
@@ -1704,6 +1717,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
         );
         let rows: HashSet<i32> = units.iter().map(|u| u.position.r).collect();
@@ -1754,6 +1768,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         // The six anchors must spread around the ring — the old easternmost
         // tie-break would leave every unit at (7,4) (rows = 1, cols = 1).
@@ -1794,6 +1809,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         assert!(
             units.iter().any(|u| u.position.q == 9),
@@ -1829,6 +1845,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         assert!(
             units.iter().all(|u| u.position.q < 12),
@@ -1863,6 +1880,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
         );
         let in_city = units
@@ -1904,6 +1922,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         let cols: HashSet<i32> = units.iter().map(|u| u.position.q).collect();
         assert!(
@@ -1935,6 +1954,7 @@ mod tests {
             Side::Defender,
             CombatTactic::UrbanDefense,
             &HashSet::new(),
+            None,
             None,
         );
         let positions = units.iter().map(|u| u.position).collect::<Vec<_>>();
@@ -1969,6 +1989,7 @@ mod tests {
             CombatTactic::Ambush,
             &HashSet::new(),
             None,
+            None,
         );
         let positions = units.iter().map(|u| u.position).collect::<Vec<_>>();
         assert!(
@@ -2001,6 +2022,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &pre,
+            None,
             None,
         );
         for u in &units {
@@ -2044,6 +2066,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             Some("A Div"),
+            None,
         );
         for (i, u) in units.iter().enumerate() {
             if u.division == "B Div" {
@@ -2066,6 +2089,48 @@ mod tests {
             .map(|u| (u.position.q, u.position.r))
             .collect();
         assert_eq!(pos.len(), 3);
+    }
+
+    /// `only_tag` + `only_division` are the command identity (§7.5): a battle
+    /// may field same-name divisions under several nations, and only the
+    /// named owner's battalions may be arranged by a tag-scoped call.
+    #[test]
+    fn only_tag_keeps_a_same_name_foreign_division_out() {
+        let g = HexGrid::new(16, 8, Terrain::Plains);
+        let p_zone: Vec<HexCoord> = (0..8).map(|r| HexCoord::new(0, r)).collect();
+        let e_zone: Vec<HexCoord> = (0..8)
+            .flat_map(|r| (7..=13).map(move |q| HexCoord::new(q, r)))
+            .collect();
+        let mut units: Vec<BattalionUnit> = (1..=6)
+            .map(|i| {
+                let mut u = unit(i, UnitType::Infantry, Side::Defender, 1);
+                u.division = "A Div".to_string();
+                u.tag = if i % 2 == 0 { "FRA" } else { "GER" }.to_string();
+                u
+            })
+            .collect();
+        let before: Vec<HexCoord> = units.iter().map(|u| u.position).collect();
+        ai_deploy(
+            &g,
+            &mut units,
+            &e_zone,
+            &p_zone,
+            Side::Defender,
+            CombatTactic::Default,
+            &HashSet::new(),
+            Some("A Div"),
+            Some("FRA"),
+        );
+        for (i, u) in units.iter().enumerate() {
+            if u.tag == "GER" {
+                assert_eq!(u.position, before[i], "the GER copy must stay untouched");
+            } else {
+                assert_ne!(
+                    u.position, before[i],
+                    "the FRA battalion is the one this call deploys"
+                );
+            }
+        }
     }
 
     /// A division deploys
@@ -2096,6 +2161,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
         );
         let diameter = |name: &str| {
@@ -2157,6 +2223,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         for i in [6usize, 7] {
             let div = units[i].division.clone();
@@ -2216,6 +2283,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         for name in ["Div 1", "Div 2", "Div 3"] {
             let pos: Vec<HexCoord> = units
@@ -2268,6 +2336,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
         );
         for u in &units {
@@ -2324,6 +2393,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         for name in ["Div 1", "Div 2", "Div 3"] {
             let line: Vec<HexCoord> = units
@@ -2379,6 +2449,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         let params = tactical_core::CombatParams::default();
         let links = tactical_core::compute_command_links(&units, &params);
@@ -2433,6 +2504,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
         );
         // Arc parameter: the band runs along r (the boundary is vertical).
@@ -2506,6 +2578,7 @@ mod tests {
             CombatTactic::Blitz,
             &HashSet::new(),
             None,
+            None,
         );
         for d in 1..=6 {
             let name = format!("Div {d}");
@@ -2554,6 +2627,7 @@ mod tests {
             CombatTactic::Encirclement,
             &HashSet::new(),
             None,
+            None,
         );
         assert!(
             units2.iter().all(|u| u.position != BattalionUnit::OFFBOARD),
@@ -2590,6 +2664,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             Some("Div 2"),
+            None,
             Some(&order),
             false,
         );
@@ -2635,6 +2710,7 @@ mod tests {
             CombatTactic::ElasticDefense,
             &HashSet::new(),
             None,
+            None,
         );
         let front_rank: Vec<i32> = units.iter().map(|u| u.position.q).collect();
         let min_q = *front_rank.iter().min().unwrap();
@@ -2676,6 +2752,7 @@ mod tests {
             CombatTactic::TacticalWithdrawal,
             &HashSet::new(),
             None,
+            None,
         );
         let qs: Vec<i32> = units.iter().map(|u| u.position.q).collect();
         let min_q = *qs.iter().min().unwrap();
@@ -2710,6 +2787,7 @@ mod tests {
             Side::Attacker,
             CombatTactic::Blitz,
             &HashSet::new(),
+            None,
             None,
         );
         let rs: Vec<i32> = units.iter().map(|u| u.position.r).collect();
@@ -2759,6 +2837,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         let weak_in_city = units
             .iter()
@@ -2797,6 +2876,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         let front = |h: HexCoord| p_zone.iter().map(|p| h.distance(*p)).min().unwrap();
         let inf_f = front(units[0].position);
@@ -2834,6 +2914,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
         );
         let front = |h: HexCoord| p_zone.iter().map(|p| h.distance(*p)).min().unwrap();
@@ -2882,6 +2963,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         // The line's centre of mass along the front (the r axis).
         let line_rc = units[..8].iter().map(|u| u.position.r as f32).sum::<f32>() / 8.0;
@@ -2929,6 +3011,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         let line_rc = units[..8].iter().map(|u| u.position.r as f32).sum::<f32>() / 8.0;
         let max_off = [8usize, 9, 10]
@@ -2974,6 +3057,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
         );
         let mean_r = |name: &str| {
@@ -3037,6 +3121,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             None,
+            None,
         );
         let on_slope = units.iter().filter(|u| u.position.q == 6).count();
         assert!(
@@ -3084,6 +3169,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
         );
         // Quota = 8/8 = 1 post; the weakest unit stands ON the crest (q5),
@@ -3134,6 +3220,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &pre_used,
+            None,
             None,
             None,
             true,

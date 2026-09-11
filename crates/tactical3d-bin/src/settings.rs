@@ -87,6 +87,14 @@ pub struct AppSettings {
     /// runtime); the menu is never scaled.
     #[serde(default)]
     pub render_scale: Option<u32>,
+    /// Manual-command retention (DESIGN §7.4): what happens to a
+    /// manually commanded battalion once its command completes.
+    /// `false` (default) = the override expires and the battalion returns
+    /// to its division order; `true` = the battalion stays manual until
+    /// the player stands it by (right-click). Read by each battle child
+    /// at startup from settings.json.
+    #[serde(default)]
+    pub keep_manual_override: bool,
 }
 
 fn default_msaa() -> u32 {
@@ -135,8 +143,15 @@ pub fn settings_file_exists() -> bool {
 
 impl AppSettings {
     /// Load from settings.json; missing file/fields fall back to
-    /// auto-detected defaults (so a fresh install "just works").
+    /// auto-detected defaults (so a fresh install "just works"). A
+    /// MISSING file (true first launch) also picks the interface
+    /// language from the OS — Chinese systems get Simplified Chinese,
+    /// everything else English — instead of shipping every new player
+    /// into the Chinese UI. An existing file keeps its stored language
+    /// untouched (older files without the key still fall back to
+    /// Simplified Chinese via [`Self::language`]).
     pub fn load() -> Self {
+        let fresh = !settings_file_exists();
         let mut s: AppSettings = std::fs::read_to_string(settings_path())
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
@@ -156,7 +171,24 @@ impl AppSettings {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default();
         }
+        if fresh {
+            s.language = detect_first_run_language().settings_tag().to_string();
+        }
         s
+    }
+
+    /// Store a chosen interface language's settings tag (pure field
+    /// write — unit-testable without touching settings.json).
+    pub fn set_language_tag(&mut self, lang: tactical_locale::Language) {
+        self.language = lang.settings_tag().to_string();
+    }
+
+    /// Commit a chosen interface language: store its tag and persist
+    /// immediately. Shared by the first-launch picker's confirm and the
+    /// settings row — one write path.
+    pub fn commit_language(&mut self, lang: tactical_locale::Language) -> Result<(), String> {
+        self.set_language_tag(lang);
+        self.save()
     }
 
     /// Persist to settings.json (pretty JSON, UTF-8) — atomically: write a
@@ -436,6 +468,61 @@ fn default_saves_dir() -> Option<PathBuf> {
     )
 }
 
+// ---------------------------------------------------------------------------
+// First-launch interface language (§12.1): no settings.json exists yet, so
+// the OS UI language decides instead of defaulting everyone to Chinese.
+// ---------------------------------------------------------------------------
+
+/// The Win32 LANGID's primary language field (low ten bits) — Chinese is
+/// 0x04 in every sublanguage (Simplified, Traditional, Hong Kong…).
+const LANG_PRIMARY_MASK: u16 = 0x3FF;
+const LANG_CHINESE: u16 = 0x04;
+
+/// Interface language for a first launch: the OS UI language when it can
+/// be read, Simplified Chinese otherwise (the historical fallback — and
+/// the only shipped Chinese table, so every Chinese sublanguage maps
+/// here). Non-Chinese systems get English.
+pub fn detect_first_run_language() -> tactical_locale::Language {
+    first_run_language(os_ui_language())
+}
+
+/// Pure mapping (unit-tested): an optional OS LANGID → interface
+/// language. Chinese in any sublanguage → Simplified Chinese; any other
+/// readable language → English; `None` (detection failed) → Simplified
+/// Chinese, the historical default.
+fn first_run_language(langid: Option<u16>) -> tactical_locale::Language {
+    match langid {
+        Some(id) if id & LANG_PRIMARY_MASK == LANG_CHINESE => {
+            tactical_locale::Language::SimpChinese
+        }
+        Some(_) => tactical_locale::Language::English,
+        None => tactical_locale::Language::SimpChinese,
+    }
+}
+
+/// Best-effort OS UI language, LANGID form: the per-user UI language,
+/// then the system UI language, then the user locale. Each API returns 0
+/// when the value is unavailable/unsupported — treat it as "unknown" and
+/// fall through. The Win32 calls are isolated in this thin shell so the
+/// mapping above stays unit-testable without a Windows API surface.
+fn os_ui_language() -> Option<u16> {
+    unsafe {
+        let user = windows::Win32::Globalization::GetUserDefaultUILanguage();
+        if user != 0 {
+            return Some(user);
+        }
+        let system = windows::Win32::Globalization::GetSystemDefaultUILanguage();
+        if system != 0 {
+            return Some(system);
+        }
+        let locale = windows::Win32::Globalization::GetUserDefaultLangID();
+        if locale != 0 {
+            return Some(locale);
+        }
+    }
+    None
+}
+
 /// Newest `.hoi4` file in the configured saves dir (shared by live mode and
 /// the from-save scenario source).
 pub fn newest_save_in(saves_dir: &Path) -> Option<PathBuf> {
@@ -493,6 +580,7 @@ mod tests {
             low_power: false,
             writeback: "org_str".into(),
             render_scale: Some(70),
+            keep_manual_override: true,
         };
         let text = serde_json::to_string(&s).unwrap();
         let back: AppSettings = serde_json::from_str(&text).unwrap();
@@ -508,6 +596,7 @@ mod tests {
         assert_eq!(back.writeback, "org_str");
         assert_eq!(back.render_scale_pct(), 70);
         assert_eq!(back.writeback_mode(), tactical_sync::WritebackMode::OrgStr);
+        assert!(back.keep_manual_override, "roundtrip keeps the flag");
         // The retired "org_only" token maps to the
         // default OrgStr mode (the org-only mode was removed).
         let legacy: AppSettings =
@@ -545,6 +634,11 @@ mod tests {
         assert_eq!(partial.menu_shadow_map_size(), 1024);
         // Missing/invalid render scale → 100 (native, no offscreen).
         assert_eq!(partial.render_scale_pct(), 100);
+        // Missing keep_manual_override → false (the default hand-back).
+        assert!(!partial.keep_manual_override);
+        let keep: AppSettings =
+            serde_json::from_str(r#"{"keep_manual_override":true}"#).unwrap();
+        assert!(keep.keep_manual_override);
         let scaled: AppSettings = serde_json::from_str(r#"{"render_scale":85}"#).unwrap();
         assert_eq!(scaled.render_scale_pct(), 85);
         let bad_scale: AppSettings = serde_json::from_str(r#"{"render_scale":73}"#).unwrap();
@@ -580,6 +674,7 @@ mod tests {
         assert_eq!(s.language(), tactical_locale::Language::SimpChinese);
         assert_eq!(s.writeback_mode(), tactical_sync::WritebackMode::OrgStr);
         assert_eq!(s.render_scale_pct(), 100);
+        assert!(!s.keep_manual_override, "fresh install hands commands back");
     }
 
     #[test]
@@ -653,5 +748,39 @@ mod tests {
         let p = temp_settings_txt("probe2", "a=1\n");
         assert_eq!(read_save_as_binary(&p), None);
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn first_run_language_mapping_covers_os_langids() {
+        use tactical_locale::Language;
+        // Any Chinese sublanguage → Simplified Chinese (zh-CN 0x0804,
+        // zh-TW 0x0404, zh-HK 0x0c04 — primary 0x04 throughout).
+        assert_eq!(first_run_language(Some(0x0804)), Language::SimpChinese);
+        assert_eq!(first_run_language(Some(0x0404)), Language::SimpChinese);
+        assert_eq!(first_run_language(Some(0x0c04)), Language::SimpChinese);
+        // Every non-Chinese system → English (en-US 0x0409, ja-JP 0x0411,
+        // de-DE 0x0407, ru-RU 0x0419).
+        assert_eq!(first_run_language(Some(0x0409)), Language::English);
+        assert_eq!(first_run_language(Some(0x0411)), Language::English);
+        assert_eq!(first_run_language(Some(0x0407)), Language::English);
+        assert_eq!(first_run_language(Some(0x0419)), Language::English);
+        // Detection failure → Simplified Chinese (the historical default).
+        assert_eq!(first_run_language(None), Language::SimpChinese);
+    }
+
+    #[test]
+    fn language_tag_write_roundtrips_the_chosen_language() {
+        // The picker bug: choosing English in the dropdown must stick —
+        // the confirm path writes the tag and the accessor reads it back.
+        // (Pure field path only — commit_language's save() targets the
+        // real runtime settings.json and must never run in tests.)
+        use tactical_locale::Language;
+        let mut s = AppSettings::default();
+        s.set_language_tag(Language::English);
+        assert_eq!(s.language, "en");
+        assert_eq!(s.language(), Language::English);
+        s.set_language_tag(Language::SimpChinese);
+        assert_eq!(s.language(), Language::SimpChinese);
+        assert_eq!(s.language(), Language::from_code(&s.language));
     }
 }

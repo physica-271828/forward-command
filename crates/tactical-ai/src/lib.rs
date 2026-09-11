@@ -814,6 +814,146 @@ mod tests {
         }
     }
 
+    // 16a ─ BUG-0099: blind bombardment never lands on a zone holding own
+    //      troops — the area mission splashes the whole weighted circle
+    //      (aim hex + ring 1). Control: the same battery on a clean zone
+    //      still shells the intel goal.
+    #[test]
+    fn blind_fire_avoids_zone_holding_own_troops() {
+        let g = grid(20, 12);
+        let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Blitz, 7);
+        let mut arty = unit(1, UnitType::ArtilleryBrigade, Side::Attacker, 4, 4);
+        arty.is_emplaced = true;
+        let intel = vec![HexCoord::new(9, 4)];
+
+        // Our infantry stands ON the intel goal (the siege line holds the
+        // city) — an area shot would rain on our own heads.
+        let own = vec![arty.clone(), unit(2, UnitType::Infantry, Side::Attacker, 9, 4)];
+        let actions = ai.plan_turn_zone(&g, &own, &[], Some(&intel));
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, AiAction::FireSupport { attacker_id: 1, .. })),
+            "blind fire must not land on a zone holding own troops: {actions:?}"
+        );
+
+        // Control: the clean intel goal is still shelled (siege bleeds).
+        let actions = ai.plan_turn_zone(&g, &[arty], &[], Some(&intel));
+        match action_for(&actions, 1) {
+            AiAction::FireSupport { target_hex, .. } => {
+                assert_eq!(
+                    *target_hex,
+                    HexCoord::new(9, 4),
+                    "a clean intel zone must still be blind-fired"
+                );
+            }
+            other => panic!("emplaced battery on a clean zone must blind-fire, got {other:?}"),
+        }
+    }
+
+    // 16b ─ BUG-0099: a commanded division's gun never blind-shells its
+    //      own seized point — once our infantry stands on the Seize hex
+    //      (hold phase) the order goal is not friend-free and the gun
+    //      holds. Control: an empty point is still shelled.
+    #[test]
+    fn blind_fire_skips_order_goal_while_own_troops_hold_the_point() {
+        let g = grid(20, 12);
+        let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Blitz, 7);
+        let order = DivOrderTarget::Seize {
+            hex: HexCoord::new(9, 4),
+        };
+
+        // Hold phase: the seized point is occupied by our infantry — the
+        // emplaced gun would blind-shell the order goal were it clean.
+        let mut arty = unit(1, UnitType::ArtilleryBrigade, Side::Attacker, 4, 4);
+        arty.is_emplaced = true;
+        let own = vec![arty.clone(), unit(2, UnitType::Infantry, Side::Attacker, 9, 4)];
+        let actions = ai.plan_turn_div_order(&g, &own, &[], None, None, Some(order));
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, AiAction::FireSupport { attacker_id: 1, .. })),
+            "a gun must not shell its own seized point: {actions:?}"
+        );
+
+        // Control: nobody on the point yet — the order goal is shelled.
+        let own = vec![arty];
+        let actions = ai.plan_turn_div_order(&g, &own, &[], None, None, Some(order));
+        match action_for(&actions, 1) {
+            AiAction::FireSupport { target_hex, .. } => {
+                assert_eq!(
+                    *target_hex,
+                    HexCoord::new(9, 4),
+                    "an empty Seize point must be blind-fired"
+                );
+            }
+            other => panic!("gun with a clean order goal must blind-fire, got {other:?}"),
+        }
+    }
+
+    // 16c ─ BUG-0099: a non-combat-effective enemy (retreating) is an
+    //      AREA-only shot, so the zone gate applies to it too — a tube
+    //      battery refuses while a friendly sits in the blast circle, and
+    //      a rocket launcher switches to the clean target instead.
+    #[test]
+    fn area_fire_avoids_friend_adjacent_to_a_retreating_target() {
+        let g = grid(20, 12);
+        // Case A: tube battery; the only enemy is retreating one hex from
+        // our infantry — no precise shot exists, the area shot would
+        // splash the friend, so the gun holds.
+        let mut arty = unit(1, UnitType::ArtilleryBrigade, Side::Attacker, 4, 4);
+        arty.is_emplaced = true;
+        let own = vec![arty.clone(), unit(2, UnitType::Infantry, Side::Attacker, 8, 4)];
+        let mut foe = unit(10, UnitType::Infantry, Side::Defender, 9, 4);
+        foe.state = UnitState::Retreating;
+        let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Blitz, 7);
+        let actions = ai.plan_turn(&g, &own, &[foe]);
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, AiAction::FireSupport { attacker_id: 1, .. })),
+            "an area shot near a friendly must be refused: {actions:?}"
+        );
+
+        // Control: the same retreating enemy alone on a clean zone is
+        // still fired at (a leaver is a free damage window).
+        let mut foe = unit(11, UnitType::Infantry, Side::Defender, 9, 4);
+        foe.state = UnitState::Retreating;
+        let actions = ai.plan_turn(&g, &[arty], &[foe]);
+        match action_for(&actions, 1) {
+            AiAction::FireSupport { target_hex, .. } => {
+                assert_eq!(
+                    *target_hex,
+                    HexCoord::new(9, 4),
+                    "a retreating enemy on a clean zone is still an area target"
+                );
+            }
+            other => panic!("battery must fire the clean retreating enemy, got {other:?}"),
+        }
+
+        // Case B: rocket launcher (always area). The retreating enemy at
+        // (9,4) sits adjacent to our infantry — the rocket must pick the
+        // clean target at (4,8) instead.
+        let mut rkt = unit(1, UnitType::RocketArtillery, Side::Attacker, 4, 4);
+        rkt.is_emplaced = true;
+        let own = vec![rkt.clone(), unit(2, UnitType::Infantry, Side::Attacker, 8, 4)];
+        let mut dirty = unit(12, UnitType::Infantry, Side::Defender, 9, 4);
+        dirty.state = UnitState::Retreating;
+        let clean = unit(13, UnitType::Infantry, Side::Defender, 4, 8);
+        let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Blitz, 7);
+        let actions = ai.plan_turn(&g, &own, &[dirty, clean]);
+        match action_for(&actions, 1) {
+            AiAction::FireSupport { target_hex, .. } => {
+                assert_eq!(
+                    *target_hex,
+                    HexCoord::new(4, 8),
+                    "the rocket must switch to the friend-free target"
+                );
+            }
+            other => panic!("rocket with one clean target must fire, got {other:?}"),
+        }
+    }
+
     // 17 ─ Urban storm rule: the besieger may assault an urban garrison
     //      beaten below 40% org or locally outnumbered ≥3:1 despite the
     //      hopeless-trade math — the 26 Sep Warsaw general assault after
@@ -1553,6 +1693,7 @@ mod tests {
         hq.move_order = Some(tactical_core::MoveOrder {
             path: vec![HexCoord::new(3, 3), HexCoord::new(4, 4)],
             hours: 0.1,
+            queue: Default::default(),
         });
         let own = vec![inf, hq];
         let enemy = vec![unit(10, UnitType::Infantry, Side::Attacker, 12, 12)];
@@ -1994,6 +2135,7 @@ mod tests {
         u1.move_order = Some(tactical_core::unit::MoveOrder {
             path: vec![HexCoord::new(5, 4), kept],
             hours: 0.15,
+            queue: Default::default(),
         });
         let own = vec![u1];
         let enemy: Vec<BattalionUnit> = Vec::new();
@@ -2023,6 +2165,7 @@ mod tests {
         u1.move_order = Some(tactical_core::unit::MoveOrder {
             path: vec![HexCoord::new(5, 4), HexCoord::new(12, 9)],
             hours: 0.15,
+            queue: Default::default(),
         });
         // A friend already holds the standing destination.
         let own = vec![u1, unit(2, UnitType::Infantry, Side::Attacker, 12, 9)];
@@ -2676,6 +2819,7 @@ mod tests {
                                         Some(tactical_core::unit::MoveOrder {
                                             path: path.clone(),
                                             hours: 0.0,
+                                            queue: Default::default(),
                                         })
                                 }
                             }
@@ -2766,6 +2910,7 @@ mod tests {
                                 u.move_order = Some(tactical_core::unit::MoveOrder {
                                     path: path.clone(),
                                     hours: 0.0,
+                                    queue: Default::default(),
                                 })
                             }
                         }
@@ -2864,6 +3009,7 @@ mod tests {
         own[0].move_order = Some(tactical_core::unit::MoveOrder {
             path: vec![HexCoord::new(8, 9), HexCoord::new(8, 10)],
             hours: 0.1,
+            queue: Default::default(),
         });
         let intel = vec![HexCoord::new(8, 12), HexCoord::new(9, 12), HexCoord::new(7, 13)];
         let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Assault, 1);

@@ -47,6 +47,12 @@ pub enum LogMessage {
     /// scenario::assemble_live). `is_player_attacker` is currently a
     /// constant `true` in the mod; missing (old logs) defaults to `true`
     /// for backward compatibility.
+    ///
+    /// `ver` is the mod's own version, advertised for the version
+    /// handshake (DESIGN.md §3.3): the external program compares it with
+    /// its own and injects the verdict at the front of every batch. A mod
+    /// from before the handshake logs no `ver` at all → `None` (never
+    /// guessed — an unknown version injects nothing).
     TacStart {
         ts: String,
         province: u32,
@@ -54,6 +60,7 @@ pub enum LogMessage {
         leader_id: u64,
         attack_dirs: Vec<String>,
         is_player_attacker: bool,
+        ver: Option<String>,
     },
     /// `tac_abort` — player used the "Force Exit Tactical Mode" decision
     /// (DESIGN.md §3.1, §10.4).
@@ -124,6 +131,8 @@ pub fn parse_log_line(line: &str) -> Option<LogMessage> {
                 .get("is_player_attacker")
                 .and_then(|b| b.as_bool())
                 .unwrap_or(true),
+            // Version handshake (DESIGN.md §3.3): absent on old mods.
+            ver: v.get("ver").and_then(|s| s.as_str()).map(str::to_owned),
         }),
         "tac_abort" => Some(LogMessage::TacAbort {
             ts: real_ts(&v, &prefix_date),
@@ -502,6 +511,8 @@ mod tests {
                 attack_dirs: vec!["NW".to_owned(), "W".to_owned()],
                 // Field absent (old logs without it) → backward-compatible default true.
                 is_player_attacker: true,
+                // Pre-handshake line: no version advertised.
+                ver: None,
             })
         );
     }
@@ -518,6 +529,7 @@ mod tests {
                 leader_id: 0,
                 attack_dirs: vec!["W".to_owned(), "NW".to_owned()],
                 is_player_attacker: false,
+                ver: None,
             })
         );
     }
@@ -631,6 +643,7 @@ mod tests {
                 leader_id: 3,
                 attack_dirs: vec!["NW".to_owned(), "W".to_owned()],
                 is_player_attacker: true,
+                ver: None,
             })
         );
     }
@@ -754,7 +767,74 @@ mod tests {
                 // …and dirs fall back to the mod's old placeholder pair.
                 attack_dirs: vec!["W".to_owned(), "NW".to_owned()],
                 is_player_attacker: true,
+                // The pre-handshake mod logs no version at all.
+                ver: None,
             })
+        );
+    }
+
+    #[test]
+    fn tac_start_version_field_is_parsed_for_the_handshake() {
+        // The handshake shape (DESIGN.md §3.3): the mod advertises its own
+        // version alongside the other tac_start fields.
+        let line = r#"[13:58:58][1936.01.01.13][effectbase.cpp:1783]: {"type":"tac_start","province":0,"leader_id":0,"is_player_attacker":true,"ver":"0.3.2-beta.3"}"#;
+        assert_eq!(
+            parse_log_line(line),
+            Some(LogMessage::TacStart {
+                ts: "1936.01.01.13".to_owned(),
+                province: 0,
+                tag: String::new(),
+                leader_id: 0,
+                attack_dirs: vec!["W".to_owned(), "NW".to_owned()],
+                is_player_attacker: true,
+                ver: Some("0.3.2-beta.3".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn tac_start_without_version_is_tolerated_as_none() {
+        // Old-mod tolerance: the field's absence must never reject the
+        // tac_start (the handshake then injects nothing).
+        let line = r#"{"type":"tac_start","province":0,"leader_id":0,"is_player_attacker":true}"#;
+        match parse_log_line(line) {
+            Some(LogMessage::TacStart { ver, .. }) => assert_eq!(ver, None),
+            other => panic!("expected a TacStart, got {other:?}"),
+        }
+        // A wrongly-typed ver is equally "unknown" — but the line still
+        // parses: the version never gates the message itself.
+        let badly_typed = r#"{"type":"tac_start","province":0,"leader_id":0,"ver":7}"#;
+        match parse_log_line(badly_typed) {
+            Some(LogMessage::TacStart { ver, .. }) => assert_eq!(ver, None),
+            other => panic!("expected a TacStart, got {other:?}"),
+        }
+    }
+
+    /// The mod-side version advertisement must equal this build's version:
+    /// the handshake compares the two, so a package shipping a mod that
+    /// advertises a different version would warn (or stay silent) wrongly.
+    /// The release scripts bump both in one step — this test fails on a
+    /// one-sided bump, the same way the descriptor.mod check does.
+    #[test]
+    fn mod_version_advertisement_matches_the_workspace_version() {
+        const ENTRY: &str =
+            include_str!("../../../hoi4-mod/forward-command/common/decisions/tac_entry.txt");
+        const MARKER: &str = r#"\"ver\":\""#;
+        // Exactly one advertisement: a second literal could shadow the first.
+        assert_eq!(
+            ENTRY.matches(MARKER).count(),
+            1,
+            "tac_entry.txt must carry exactly one escaped-quote ver field"
+        );
+        let start = ENTRY.find(MARKER).unwrap() + MARKER.len();
+        let rest = &ENTRY[start..];
+        let end = rest
+            .find("\\\"")
+            .expect("tac_entry.txt: unterminated \"ver\" value");
+        assert_eq!(
+            &rest[..end],
+            env!("CARGO_PKG_VERSION"),
+            "the mod advertises a different version than this build"
         );
     }
 

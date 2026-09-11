@@ -810,14 +810,11 @@ impl BattleSession {
     }
 
     /// §6.11: the defender collapse fired and its org-zeroing injection has
-    /// not been sent yet — the next sync/end batch must carry it.
+    /// not been sent yet — the next sync/end batch must carry it. Cleared by
+    /// the `take_*` batch takers, and only when the batch that went out
+    /// actually contained the lines.
     pub fn flag_collapse_pending(&self) -> bool {
         self.flags.as_ref().map(|f| f.collapsed).unwrap_or(false) && !self.collapse_injected
-    }
-
-    /// Mark the collapse as injected (called once the batch went out).
-    pub fn mark_collapse_injected(&mut self) {
-        self.collapse_injected = true;
     }
 
     /// §6.11 collapse lines, prepended to the next sync/end batch: org-zero
@@ -994,6 +991,55 @@ impl BattleSession {
             self.country_tag
         )];
         EndBatches { phase1, phase2 }
+    }
+
+    // ── latch-guarded batch takers (§3.2/§6.11) ─────────────────────────────
+
+    /// The hourly Sync as the GUI issues it: build the batch, advance the
+    /// session, and clear the pending-collapse latch ONLY when the batch
+    /// that is about to go out carried its lines.
+    ///
+    /// The builders above stay pure reads (a batch is built before its
+    /// transition so a failed transition injects nothing), so the "did this
+    /// batch carry the collapse" fact has to travel with the take. Clearing
+    /// the latch blind is what once killed every flag-capture write-back: a
+    /// capture forces [`BattlePhase::ReadyToEnd`] on the very turn it fires,
+    /// so the collapse can only ever ride an END batch — an earlier sync
+    /// that cleared the latch dropped the org-zeroing for good and left the
+    /// defender's org (and the strategic battle) untouched.
+    pub fn take_sync_batch(&mut self) -> Result<InjectionBatch, TransitionError> {
+        let collapse_riding = self.flag_collapse_pending();
+        let batch = self.build_sync_batch();
+        self.start_sync().and_then(|_| self.complete_sync())?;
+        if collapse_riding {
+            self.collapse_injected = true;
+        }
+        Ok(batch)
+    }
+
+    /// [Apply & Exit] (§3.2): the end batches under the same latch rule as
+    /// [`BattleSession::take_sync_batch`].
+    pub fn take_end_batch(&mut self) -> Result<EndBatches, TransitionError> {
+        let collapse_riding = self.flag_collapse_pending();
+        let batches = self.build_end_batch();
+        self.complete_end().and_then(|_| self.finish())?;
+        if collapse_riding {
+            self.collapse_injected = true;
+        }
+        Ok(batches)
+    }
+
+    /// [End Tactic]'s early exit (§8.3) under the same latch rule —
+    /// `carry = false` (abandon) sends no lines at all, so the latch stays
+    /// untouched by construction.
+    pub fn take_early_exit_batch(&mut self, carry: bool) -> Result<EndBatches, TransitionError> {
+        let collapse_riding = carry && self.flag_collapse_pending();
+        let batches = self.build_early_exit_batch(carry);
+        self.complete_end().and_then(|_| self.finish())?;
+        if collapse_riding {
+            self.collapse_injected = true;
+        }
+        Ok(batches)
     }
 
     // ── display helpers ─────────────────────────────────────────────────────
@@ -1998,16 +2044,61 @@ mod tests {
         // The hourly payload follows unchanged (no damage recorded here).
         assert_eq!(sync[1], "eval_effect ITA = { d_tac_sync_hourly = yes }");
         assert_eq!(sync[2], "pause_in_hours 1");
-        // Same ride on the end batch's phase 1 (0 unsynced turns here →
-        // no clock line follows the collapse).
-        let end = s.build_end_batch();
+        // The end batch's phase 1 rides it (0 unsynced turns here → no
+        // clock line follows the collapse) and clears the latch with it.
+        s.ready_to_end().unwrap();
+        let end = s.take_end_batch().unwrap();
         assert_eq!(end.phase1, vec![collapse.to_string()]);
-        // Once marked injected, later batches are clean again.
-        s.mark_collapse_injected();
         assert!(!s.flag_collapse_pending());
         let sync2 = s.build_sync_batch();
         assert_eq!(sync2[0], "eval_effect ITA = { d_tac_sync_hourly = yes }");
         assert!(!sync2.contains(&collapse.to_string()));
+    }
+
+    #[test]
+    fn a_sync_that_carried_the_collapse_clears_the_latch() {
+        use tactical_core::FlagState;
+        let mut s = active_session();
+        s.country_tag = "ITA".to_string();
+        s.battle_ctx = Some(live_ctx());
+        s.set_flags(Some(FlagState::default()));
+        s.flags_mut().unwrap().collapsed = true;
+        run_full_turns(&mut s, 6);
+        assert_eq!(s.phase, BattlePhase::ReadyToSync);
+        let sync = s.take_sync_batch().unwrap();
+        assert!(sync[0].contains("org_damage = 1.000"));
+        assert!(!s.flag_collapse_pending());
+    }
+
+    #[test]
+    fn a_sync_before_the_capture_does_not_eat_the_collapse() {
+        // The live failure this guards: the hourly syncs land long before
+        // any capture can (first sync at turn 6, capture earliest at turn
+        // 12), so a sync path that cleared the latch blind killed the
+        // org-zeroing for the whole battle — the defender kept its org and
+        // the strategic layer never resolved the retreat, i.e. "captured
+        // the flag without fighting and nothing happened".
+        use tactical_core::FlagState;
+        let mut s = active_session();
+        s.country_tag = "ITA".to_string();
+        s.battle_ctx = Some(live_ctx());
+        s.set_flags(Some(FlagState::default()));
+        // Hour one completes and the player syncs — no capture yet.
+        run_full_turns(&mut s, 6);
+        assert_eq!(s.phase, BattlePhase::ReadyToSync);
+        let sync = s.take_sync_batch().unwrap();
+        assert!(!sync.iter().any(|l| l.contains("org_damage = 1.000")));
+        // The capture fires later (§6.11 collapse): the end batch must still
+        // carry the org-zero line.
+        s.flags_mut().unwrap().collapsed = true;
+        s.ready_to_end().unwrap();
+        let end = s.take_end_batch().unwrap();
+        assert_eq!(
+            end.phase1,
+            vec![
+                "eval_effect damage_units = { province = 13237 limit = { tag = ETH } org_damage = 1.000 ratio = yes army = yes }".to_string()
+            ]
+        );
     }
 
     #[test]

@@ -62,11 +62,11 @@ pub fn apply_render_scale(app: &mut App, pct: u32) {
     app.insert_resource(tactical3d_render::render_scale::RenderScaleState::new(pct));
 }
 
-/// In-battle Settings window (Esc menu → Settings): insert the
-/// live `BattleSettings` mirror the render crate hot-applies
-/// (settings.rs::apply_battle_settings), and register the persistence half —
-/// edits save back to settings.json immediately, the same contract as the
-/// menu Settings page.
+/// In-battle settings (Esc menu → Settings + the End Turn area
+/// checkboxes): insert the live `BattleSettings` mirror the render crate
+/// hot-applies (settings.rs::apply_battle_settings), and register the
+/// persistence half — edits save back to settings.json immediately, the
+/// same contract as the menu Settings page.
 pub fn init_battle_settings(app: &mut App, s: &crate::settings::AppSettings) {
     app.insert_resource(tactical3d_render::settings::BattleSettings {
         msaa: s.msaa_samples(),
@@ -74,12 +74,13 @@ pub fn init_battle_settings(app: &mut App, s: &crate::settings::AppSettings) {
         render_scale: s.render_scale_pct(),
         max_fps: s.max_fps(),
         low_power: s.low_power,
+        keep_manual_override: s.keep_manual_override,
     });
     app.add_systems(Update, persist_battle_settings);
 }
 
 /// Persist Settings-window edits: reload settings.json (a concurrent menu
-/// edit is never clobbered), patch the five render keys, save (atomic
+/// edit is never clobbered), patch the settings keys, save (atomic
 /// write-rename). The insertion frame is skipped — nothing edited yet.
 fn persist_battle_settings(s: Option<Res<tactical3d_render::settings::BattleSettings>>) {
     let Some(s) = s else { return };
@@ -92,6 +93,7 @@ fn persist_battle_settings(s: Option<Res<tactical3d_render::settings::BattleSett
     cfg.render_scale = Some(s.render_scale);
     cfg.max_fps = s.max_fps;
     cfg.low_power = s.low_power;
+    cfg.keep_manual_override = s.keep_manual_override;
     if let Err(e) = cfg.save() {
         warn!("battle settings: failed to save settings.json: {e}");
     }

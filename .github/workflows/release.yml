@@ -92,6 +92,8 @@ jobs:
           # Player-facing docs at the package root (the announcement points new
           # players at the manual + disclaimer). Wildcard copy: no CJK literals.
           Copy-Item "docs\*.md" $pkg
+          # GPL-3.0 text must travel with every package (repo-root LICENSE).
+          Copy-Item "LICENSE" $pkg
           if ($env:GITHUB_REF_TYPE -eq "tag") {
             $name = "ForwardCommand_$($env:GITHUB_REF_NAME).zip"
           } else {

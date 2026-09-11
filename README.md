@@ -45,7 +45,7 @@ The injection channel automates the HOI4 console with synthesized keystrokes —
 that is the whole trick, and exactly why the source is public: you can read
 every line of it. The program never touches the network, never reads anything
 outside the HOI4 directories and its own folder, and does nothing beyond the
-interactions documented in `docs/免责声明.md`.
+interactions documented in `docs/免责声明 - Disclaimer.md`.
 
 ## Requirements
 
@@ -56,6 +56,8 @@ interactions documented in `docs/免责声明.md`.
 - Ironman and multiplayer are not supported
 
 ## Installation (players)
+
+Full guide (install / update / troubleshooting): **`docs/Player Manual.md`**.
 
 Pick **ONE** mod channel — never enable both (two same-name mods break the
 game):
@@ -71,7 +73,7 @@ game):
 4. Run `forward-command.exe`, leave it listening, and play HOI4. When a battle
    starts, pick it from the in-game decision to take tactical command.
 
-The full player manual (Chinese): `docs/玩家说明书.md`.
+Player manual: `docs/Player Manual.md` (English) / `docs/玩家说明书.md` (中文).
 
 ## Building from source
 
@@ -93,9 +95,10 @@ cargo build --release --workspace
 
 - `DESIGN.md` — full design specification (architecture, protocol, map
   generation, combat model, AI, time model, UI, mod, settings)
-- `docs/玩家说明书.md` — player manual (Chinese)
-- `docs/免责声明.md` — disclaimer (Chinese; mechanics disclosure, antivirus
-  guidance, risk statement)
+- `docs/Player Manual.md` — player manual (English) / `docs/玩家说明书.md` (中文)
+- `docs/免责声明 - Disclaimer.md` — disclaimer, bilingual (mechanics
+  disclosure, antivirus guidance, risk statement)
+- `docs/更新日志 - Changelog.md` — release changelog, bilingual
 - `HOI4_UNITS.md` — HOI4 land-unit inventory → internal unit mapping
 
 ## Third-party assets
@@ -123,7 +126,8 @@ This is an unofficial fan project and is **not affiliated with or endorsed by
 Paradox Interactive**. Hearts of Iron IV and all related assets are the
 property of Paradox Interactive AB. The program modifies game state through
 console automation; although cleanup paths are tested, **back up saves you
-care about**. Use at your own risk — see `docs/免责声明.md` for the full text.
+care about**. Use at your own risk — see `docs/免责声明 - Disclaimer.md` for
+the full text.
 
 ## Support
 

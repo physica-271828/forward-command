@@ -17,20 +17,20 @@ use tactical_core::movement::{
 };
 use tactical_core::params::CombatParams;
 use tactical_core::pathfinding::find_path;
-use tactical_core::unit::{BattalionUnit, MoveOrder, Side, UnitState};
+use tactical_core::unit::{BattalionUnit, MoveLeg, MoveOrder, Side, UnitState};
 use tactical_locale::Locale;
 use tactical_sync::{BattlePhase, BattleSession, VictoryOutcome};
 
-use crate::board::hex_world;
+use crate::board::{hex_world, route_chain_polyline};
 use crate::camera::MapRightClick;
 use crate::fx::{FloaterKind, FxEvent, FxQueue};
 use crate::icons::IconId;
 use crate::locale::LocaleRes;
 use crate::picking::{cursor_hex, unit_y_on_grid};
 use crate::state::{
-    BattleReport, BattleTour, CommandMode, DesyncAlert, DivPickKind, EngagementDetailView,
-    FlashNotice, HighlightKind, NoticeBar, PendingUnitVisual, ReportLane, SyncStall, TacticalState,
-    UiWindows,
+    BattleReport, BattleTour, BoxSelect, CommandMode, DesyncAlert, DivPickKind,
+    EngagementDetailView, FlashNotice, HighlightKind, NoticeBar, PendingUnitVisual, ReportLane,
+    SyncStall, TacticalState, UiWindows, BOX_SELECT_PX,
 };
 use crate::units::MoveAnims;
 
@@ -80,8 +80,10 @@ pub enum PlayerCommand {
     /// Recall EVERY player battalion back to the OOB queue
     /// (deployment phase; confirmation lives in the UI layer).
     RecallAll,
-    /// Recall one division's battalions to the OOB queue.
-    RecallDivision(String),
+    /// Recall one division's battalions to the OOB queue. The pair is the
+    /// (owner tag, division name) command identity — an ally fielding a
+    /// same-name division is never pulled back with it.
+    RecallDivision { tag: String, division: String },
     EndTurn,
     Sync,
     ApplyAndExit,
@@ -106,22 +108,34 @@ pub enum PlayerCommand {
     /// (`build_early_exit_batch(false)` — the same cleanup-only batch every
     /// desync-mode exit sends). Non-live: plain exit.
     AbortLiveExit,
-    /// Issue (or replace) a division order for `division` —
-    /// issued from the HQ radial bar (Advance directly; Seize/Engage after
-    /// the player picked the target on the map).
+    /// Issue (or replace) a division order — issued from the HQ radial
+    /// bar (Advance directly; Seize/Engage after the player picked the
+    /// target on the map). `tag` + `division` are the commanded division's
+    /// (owner country, name) identity (§7.5): a same-name division under
+    /// another nation is a different division and is never driven by it.
     DivOrder {
+        tag: String,
         division: String,
         pick: DivOrderPick,
     },
     /// Arm the map target pick for a division order (Seize hex /
-    /// Engage unit) from the HQ command bar.
+    /// Engage unit) from the HQ command bar. Same identity as
+    /// [`Self::DivOrder`].
     DivPick {
+        tag: String,
         division: String,
         kind: DivPickKind,
     },
-    /// Cancel `division`'s standing order (OOB header button or
-    /// the HQ radial bar).
-    CancelDivOrder(String),
+    /// Cancel the standing order of the `(tag, division)` group (OOB header
+    /// button or the HQ radial bar).
+    CancelDivOrder { tag: String, division: String },
+    /// §7.4 rule toggle from the End Turn area checkbox: keep manually
+    /// commanded battalions manual after their command completes
+    /// (`true`), or hand them back when done (`false`, the default).
+    /// Written into the game controller (applies at the next full-turn
+    /// refresh) and mirrored into `BattleSettings` so the bin crate
+    /// persists it to settings.json.
+    SetManualKeep(bool),
 }
 
 /// A division-order target pick — the player's intent, resolved
@@ -195,6 +209,9 @@ impl DivisionOrder {
 /// divisions are planned by their own TacticalAi each player
 /// turn; the player may still issue division orders to its HQs (which
 /// suspends the division from the allied slice while the order stands).
+/// `tag` is the contingent's OWNER country: together with a division name it
+/// is the command identity ([`GameController::allied_division_of`]), because
+/// a battle can field same-name divisions under several nations.
 #[derive(Debug, Clone)]
 pub struct AllyContingent {
     pub tag: String,
@@ -258,7 +275,8 @@ impl BattleSnapshot {
         state.fog = self.fog;
         state.deployment_zones = self.deployment_zones;
         state.turn = game.session.turn_number;
-        state.selected_unit = None;
+        state.clear_selection();
+        state.box_select = None;
         state.hover_hex = None;
         state.command_mode = CommandMode::Select;
         state.deploy_drag = None;
@@ -297,6 +315,17 @@ pub struct LogLine {
     pub detail: Option<Box<EngagementDetailView>>,
 }
 
+/// Whether the (owner tag, division name) pair holds a standing division
+/// order — the shared implementation behind
+/// [`GameController::div_ordered`] and the callers that hold the bare map.
+fn has_div_order(
+    orders: &HashMap<(String, String), DivisionOrder>,
+    tag: &str,
+    division: &str,
+) -> bool {
+    orders.keys().any(|(t, d)| t == tag && d == division)
+}
+
 /// Top-level game controller resource.
 /// Clone: checkpoint snapshots (restart/rollback).
 #[derive(Resource, Clone)]
@@ -308,22 +337,27 @@ pub struct GameController {
     /// Battle seed: the division-order planners derive their own
     /// per-division, per-turn seeds from it, so replays are deterministic.
     pub seed: u64,
-    /// Standing division orders, keyed by division name. Also
-    /// checkpointed — a rollback restores the orders as of that moment.
-    pub div_orders: HashMap<String, DivisionOrder>,
+    /// Standing division orders, keyed by the (owner tag, division name)
+    /// command identity (§7.5). Also checkpointed — a rollback restores the
+    /// orders as of that moment. Reach them through [`Self::div_order`] /
+    /// [`Self::div_ordered`].
+    pub div_orders: HashMap<(String, String), DivisionOrder>,
     /// The turn number the division orders were last planned for
     /// (turn-start planning runs once per turn; order issue / cancel /
     /// completion re-arms or marks it).
     pub div_planned_turn: u32,
-    /// The player side's AI-controlled allied contingents (§7.5,
-    /// script battles). Empty = the player commands her whole side.
+    /// The player side's AI-controlled allied contingents (§7.5) —
+    /// a script battle's `control: ai` divisions, a live battle's allied
+    /// countries. Empty = the player commands her whole side.
     pub allies: Vec<AllyContingent>,
     /// Every division name → its country tag (both sides; the
     /// side tag for undeclared divisions). Empty for non-script battles.
     pub division_tags: HashMap<String, String>,
     /// Player-drawn deployment suggestion rectangles for allied
-    /// divisions (division name → anchor/release hex), consumed at BeginBattle.
-    pub allied_sectors: HashMap<String, (HexCoord, HexCoord)>,
+    /// divisions, keyed by the (owner tag, division name) command identity,
+    /// consumed at BeginBattle. Reach them through [`Self::ally_sector`] /
+    /// [`Self::set_ally_sector`] / [`Self::clear_ally_sector`].
+    pub allied_sectors: HashMap<(String, String), (HexCoord, HexCoord)>,
     /// Injection batch context (live mode): HOI4 state/province + template.
     pub province: u32,
     pub template: String,
@@ -338,6 +372,13 @@ pub struct GameController {
     pub last_results: Vec<tactical_combat::CombatResult>,
     /// Battle event log lines (newest last).
     pub log: Vec<LogLine>,
+    /// Manual-override retention policy (settings
+    /// `keep_manual_override`, §7.4): when true a player-issued battalion
+    /// command is NOT released once it completes — the unit stays manual
+    /// until the player stands it by (right-click). Set by the bin
+    /// assembly from settings.json; checkpoint snapshots carry it, so a
+    /// Restart keeps the policy.
+    pub keep_manual_override: bool,
 }
 
 impl GameController {
@@ -361,19 +402,72 @@ impl GameController {
             last_sync_summary: None,
             last_results: Vec::new(),
             log: Vec::new(),
+            keep_manual_override: false,
         }
     }
 
-    /// The allied contingent owning `division`, if any.
-    pub fn allied_division(&self, division: &str) -> Option<&AllyContingent> {
+    /// The allied contingent that owns the division `tag`'s country fields
+    /// under `division` — the (owner tag, division name) identity. A battle
+    /// can field same-name divisions under several nations (a live one
+    /// routinely can), so the tag is what keeps an ally from claiming a
+    /// player-owned division.
+    pub fn allied_division_of(&self, tag: &str, division: &str) -> Option<&AllyContingent> {
         self.allies
             .iter()
-            .find(|a| a.divisions.iter().any(|d| d == division))
+            .find(|a| a.tag == tag && a.divisions.iter().any(|d| d == division))
     }
 
-    /// Same-side unit commanded by an allied nation's AI.
+    /// The stored deployment suggestion for one contingent division — the
+    /// same (owner tag, division name) identity as
+    /// [`Self::allied_division_of`].
+    pub fn ally_sector(&self, tag: &str, division: &str) -> Option<(HexCoord, HexCoord)> {
+        self.allied_sectors
+            .iter()
+            .find(|((t, d), _)| t == tag && d == division)
+            .map(|(_, rect)| *rect)
+    }
+
+    /// Store (or overwrite) the deployment suggestion for one contingent
+    /// division.
+    pub fn set_ally_sector(&mut self, tag: &str, division: &str, rect: (HexCoord, HexCoord)) {
+        self.allied_sectors
+            .insert((tag.to_string(), division.to_string()), rect);
+    }
+
+    /// Drop the stored suggestion for that pair; true when one was there.
+    pub fn clear_ally_sector(&mut self, tag: &str, division: &str) -> bool {
+        let key = self
+            .allied_sectors
+            .keys()
+            .find(|(t, d)| t == tag && d == division)
+            .cloned();
+        key.is_some_and(|k| self.allied_sectors.remove(&k).is_some())
+    }
+
+    /// The standing order of the division `tag`'s country fields under
+    /// `division` — the same (owner tag, division name) identity. A
+    /// player-issued order must never be read back onto a same-name
+    /// division of another nation.
+    pub fn div_order(&self, tag: &str, division: &str) -> Option<&DivisionOrder> {
+        self.div_orders
+            .iter()
+            .find(|((t, d), _)| t == tag && d == division)
+            .map(|(_, o)| o)
+    }
+
+    /// Whether that division has a standing order.
+    pub fn div_ordered(&self, tag: &str, division: &str) -> bool {
+        has_div_order(&self.div_orders, tag, division)
+    }
+
+    /// Same-side unit commanded by an allied nation's AI. Matched on the
+    /// unit's OWNER TAG + division name: every assembly path that registers
+    /// contingents stamps `u.tag` (live: the save's owning country; script:
+    /// the division→tag table, HQs included), so the pair identifies the
+    /// division even when its name is not unique across nations.
     pub fn is_allied(&self, u: &BattalionUnit) -> bool {
-        u.side == self.session.player_side && self.allied_division(&u.division).is_some()
+        u.side == self.session.player_side
+            && self.allied_division_of(&u.tag, &u.division).is_some()
     }
 
     /// THE commandability predicate — same side and NOT
@@ -426,9 +520,12 @@ impl Plugin for GameLoopPlugin {
                 Update,
                 (
                     debug_fog_toggle,
+                    prune_selection_upkeep,
                     handle_ui_commands,
                     tick_sector_preview,
                     handle_deploy_drag,
+                    track_box_select,
+                    handle_selection_keys,
                     handle_map_clicks,
                     run_ai_turn,
                     tick_division_orders,
@@ -484,6 +581,7 @@ fn handle_ui_commands(
     time: Res<Time>,
     loc: Res<LocaleRes>,
     mut exit: EventWriter<AppExit>,
+    mut battle_settings: Option<ResMut<crate::settings::BattleSettings>>,
 ) {
     // ExitGame is handled even without a battle (menu must always work).
     if pending
@@ -514,6 +612,14 @@ fn handle_ui_commands(
                 if game.session.strategic_hour == 0 {
                     if let Some(snap) = checkpoints.battle_start.clone() {
                         snap.restore(game, &mut state);
+                        // §7.4: the manual-retention rule is a persistent
+                        // setting, not battle state — a rewind must not
+                        // silently undo the live policy (the checkbox
+                        // mirror still carries the current value).
+                        game.keep_manual_override = battle_settings
+                            .as_ref()
+                            .map(|s| s.keep_manual_override)
+                            .unwrap_or(game.keep_manual_override);
                         *ai_turn = AiTurn::default();
                         injection.0 = None;
                         game.log_line(loc.tr("log.checkpoint.restarted"));
@@ -523,34 +629,61 @@ fn handle_ui_commands(
             PlayerCommand::RollbackToSync => {
                 if let Some(snap) = checkpoints.last_sync.clone() {
                     snap.restore(game, &mut state);
+                    // Same persistent-rule re-sync as RestartBattle.
+                    game.keep_manual_override = battle_settings
+                        .as_ref()
+                        .map(|s| s.keep_manual_override)
+                        .unwrap_or(game.keep_manual_override);
                     *ai_turn = AiTurn::default();
                     injection.0 = None;
                     game.log_line(loc.tr("log.checkpoint.rollback"));
                 }
             }
+            // §7.4 rule toggle (End Turn area checkbox): applies at the
+            // next full-turn refresh; BattleSettings mirrors it so the
+            // bin side persists it to settings.json.
+            PlayerCommand::SetManualKeep(keep) => {
+                game.keep_manual_override = keep;
+                if let Some(s) = battle_settings.as_deref_mut() {
+                    s.keep_manual_override = keep;
+                }
+            }
             // Issue (or replace) a division order — only during
             // the player's own tactical turn; the immediate plan puts the
             // division in motion this very turn.
-            PlayerCommand::DivOrder { division, pick } => {
+            PlayerCommand::DivOrder {
+                tag,
+                division,
+                pick,
+            } => {
                 issue_division_order(
                     game,
                     &mut state,
                     &loc,
                     &mut notice,
                     time.elapsed_secs(),
+                    &tag,
                     &division,
                     pick,
                 );
             }
             // Arm the division-order target pick on the map
             // (Seize hex / Engage unit) from the HQ command bar.
-            PlayerCommand::DivPick { division, kind } => {
+            PlayerCommand::DivPick {
+                tag,
+                division,
+                kind,
+            } => {
                 if game.session.phase != BattlePhase::TacticalActive
                     || game.session.current_side != state.player_side
                 {
                     continue;
                 }
-                state.div_pick = Some(crate::state::DivPick { division, kind });
+                state.div_pick = Some(crate::state::DivPick {
+                    tag,
+                    division,
+                    kind,
+                });
                 refresh_command_highlights(&mut state);
                 let hint = match kind {
                     crate::state::DivPickKind::Seize => {
@@ -562,8 +695,8 @@ fn handle_ui_commands(
                 };
                 notice.flash = Some(FlashNotice::plain(hint, time.elapsed_secs() + 4.0));
             }
-            PlayerCommand::CancelDivOrder(division) => {
-                if game.div_orders.remove(&division).is_some() {
+            PlayerCommand::CancelDivOrder { tag, division } => {
+                if cancel_division_order(game, &tag, &division) {
                     game.log_line(loc.trf("log.div.cancelled", &[("div", &division)]));
                 }
                 // The remaining orders were already planned this turn — the
@@ -629,34 +762,7 @@ fn handle_ui_commands(
             }
             PlayerCommand::AutoDeploy => {
                 if game.session.phase == BattlePhase::Deployment {
-                    // Hand-placed units must survive: the planner
-                    // skips non-undeployed units outright, and their hexes are
-                    // also marked pre-used so nobody re-takes them.
-                    let pre_used: HashSet<(i32, i32)> = state
-                        .units
-                        .iter()
-                        .filter(|u| {
-                            u.side == state.player_side && !u.undeployed && u.is_combat_effective()
-                        })
-                        .map(|u| (u.position.q, u.position.r))
-                        .collect();
-                    let player = state.player_side;
-                    // Allied divisions stay OFFBOARD for their own
-                    // AI (BeginBattle) — Auto Deploy fills only the player's
-                    // own battalions.
-                    let exclude: HashSet<String> = game
-                        .allies
-                        .iter()
-                        .flat_map(|a| a.divisions.iter().cloned())
-                        .collect();
-                    let placed = deploy_side(
-                        &mut state,
-                        player,
-                        CombatTactic::Default,
-                        &pre_used,
-                        &exclude,
-                        true, // OOB waiters only — hand-placed stay put
-                    );
+                    let placed = auto_deploy_player(game, &mut state);
                     if placed > 0 {
                         let n = placed.to_string();
                         game.log_line(loc.trf("log.deploy.auto_deploy", &[("n", &n)]));
@@ -669,43 +775,27 @@ fn handle_ui_commands(
                     }
                 }
             }
-            PlayerCommand::RecallAll | PlayerCommand::RecallDivision(_) => {
+            PlayerCommand::RecallAll | PlayerCommand::RecallDivision { .. } => {
                 if game.session.phase == BattlePhase::Deployment {
-                    let player = state.player_side;
-                    let division = match &cmd {
-                        PlayerCommand::RecallDivision(d) => Some(d.clone()),
+                    let key = match &cmd {
+                        PlayerCommand::RecallDivision { tag, division } => {
+                            Some((tag.as_str(), division.as_str()))
+                        }
                         _ => None,
                     };
-                    // For an ALLIED division "recall" clears the
-                    // stored sector suggestion — allied battalions deploy
-                    // through their own AI at BeginBattle, so there is
-                    // nothing to pull back (player divisions unchanged).
-                    if let Some(d) = &division {
-                        if game.allied_division(d).is_some() {
-                            if game.allied_sectors.remove(d).is_some() {
-                                state.ally_sectors_dirty = true;
-                            }
-                            continue;
-                        }
-                    }
-                    let mut recalled = 0usize;
-                    for u in &mut state.units {
-                        let in_scope = u.side == player
-                            && !u.undeployed
-                            && division.as_deref().map(|d| u.division == d).unwrap_or(true);
-                        if in_scope {
-                            u.undeployed = true;
-                            u.position = BattalionUnit::OFFBOARD;
-                            u.move_order = None;
-                            u.is_holding = false;
-                            recalled += 1;
-                        }
-                    }
+                    let recalled = match recall_group(game, &mut state, key) {
+                        // For an ALLIED division "recall" clears the
+                        // stored sector suggestion — allied battalions deploy
+                        // through their own AI at BeginBattle, so there is
+                        // nothing to pull back (nothing else changes).
+                        RecallOutcome::Allied => continue,
+                        RecallOutcome::Recalled(n) => n,
+                    };
                     state.units_dirty = true;
-                    state.selected_unit = None;
-                    let label = match &division {
-                        Some(d) if d.is_empty() => loc.tr("oob.unattached").into_owned(),
-                        Some(d) => d.clone(),
+                    state.clear_selection();
+                    let label = match key {
+                        Some((_, d)) if d.is_empty() => loc.tr("oob.unattached").into_owned(),
+                        Some((_, d)) => d.to_string(),
                         None => loc.tr("oob.all").into_owned(),
                     };
                     let n = recalled.to_string();
@@ -775,17 +865,15 @@ fn handle_ui_commands(
                             ("e_str", &e_str_s),
                         ],
                     ));
-                    // Transitions first: queue the injection only if
-                    // the session actually advances — otherwise the batch
-                    // would fire while the session stays put. (The batch is
-                    // a pure read, so building it ahead is safe.)
-                    let batch = game.session.build_sync_batch();
-                    match game
-                        .session
-                        .start_sync()
-                        .and_then(|_| game.session.complete_sync())
-                    {
-                        Ok(()) => {
+                    // Transitions AND the collapse latch ride the session's
+                    // taker: queue the injection only if the session actually
+                    // advances — otherwise the batch would fire while the
+                    // session stays put. §6.11: the latch only clears when
+                    // the batch really carried the collapse lines (a capture
+                    // ends the battle on the spot, so it rides an end batch,
+                    // never this one).
+                    match game.session.take_sync_batch() {
+                        Ok(batch) => {
                             injection.0 = Some(InjectionRequest {
                                 batch,
                                 is_final: false,
@@ -793,9 +881,6 @@ fn handle_ui_commands(
                                 phase2: None,
                             });
                             state.board_colors_dirty = true;
-                            // §6.11: the collapse lines just went
-                            // into the batch — they must not ride again.
-                            game.session.mark_collapse_injected();
                             // This is the newest state HOI4 has seen —
                             // rollback target until the next sync completes.
                             checkpoints.last_sync = Some(BattleSnapshot::take(game, &state));
@@ -815,35 +900,28 @@ fn handle_ui_commands(
                         // Mutual annihilation and any non-winner case.
                         _ => "draw",
                     };
-                    // Same transition-first ordering as Sync; the
-                    // batch itself is a pure read. The end
-                    // injection splits in two (§8.4) — phase 1 (damage + collapse
-                    // + the clock advance) goes out first; phase 2
-                    // (unfreeze + cleanup) follows the clock receipt.
-                    // Desync mode: the results must NOT be written into a
-                    // world this battle no longer matches — the exit sends
-                    // the abort cleanup batch only (unfreeze + flags +
-                    // popup, no damage, no clock).
+                    // Same transition-first ordering as Sync — the takers
+                    // build the batch, advance the session and settle the
+                    // §6.11 collapse latch together. The end injection splits
+                    // in two (§8.4) — phase 1 (damage + collapse + the clock
+                    // advance) goes out first; phase 2 (unfreeze + cleanup)
+                    // follows the clock receipt. Desync mode: the results
+                    // must NOT be written into a world this battle no longer
+                    // matches — the exit sends the abort cleanup batch only
+                    // (unfreeze + flags + popup, no damage, no clock).
                     let end = if game.session.sync_disabled {
-                        game.session.build_early_exit_batch(false)
+                        game.session.take_early_exit_batch(false)
                     } else {
-                        game.session.build_end_batch()
+                        game.session.take_end_batch()
                     };
-                    match game
-                        .session
-                        .complete_end()
-                        .and_then(|_| game.session.finish())
-                    {
-                        Ok(()) => {
+                    match end {
+                        Ok(end) => {
                             injection.0 = Some(InjectionRequest {
                                 batch: end.phase1,
                                 is_final: true,
                                 result: Some(winner.to_string()),
                                 phase2: Some(end.phase2),
                             });
-                            // §6.11: same as the sync path — the
-                            // collapse lines must not ride a second batch.
-                            game.session.mark_collapse_injected();
                             if game.session.sync_disabled {
                                 game.log_line_icon(
                                     Some(IconId::Door),
@@ -878,22 +956,17 @@ fn handle_ui_commands(
                 if game.session.phase == BattlePhase::ReadyToEnd {
                     // Desync mode carries nothing: no partial-hour damage,
                     // no clock — the exit is the abort cleanup batch only.
-                    let batches = game
-                        .session
-                        .build_early_exit_batch(!game.session.sync_disabled);
                     match game
                         .session
-                        .complete_end()
-                        .and_then(|_| game.session.finish())
+                        .take_early_exit_batch(!game.session.sync_disabled)
                     {
-                        Ok(()) => {
+                        Ok(batches) => {
                             injection.0 = Some(InjectionRequest {
                                 batch: batches.phase1,
                                 is_final: true,
                                 result: None,
                                 phase2: Some(batches.phase2),
                             });
-                            game.session.mark_collapse_injected();
                             if game.session.sync_disabled {
                                 game.log_line_icon(
                                     Some(IconId::Door),
@@ -936,122 +1009,97 @@ fn handle_ui_commands(
                 }
             }
             PlayerCommand::ToggleHold => {
-                if !player_can_act(game, &state) {
-                    continue;
-                }
-                if let Some(id) = state.selected_unit {
-                    let mut took_cover = false;
-                    if let Some(u) = state.units.iter_mut().find(|u| u.id == id) {
-                        // Hold is a command — allied battalions
-                        // take their stance from their own staff AI.
-                        if !game.commands(u) {
-                            continue;
-                        }
-                        // Infantry-attribute only
-                        // (incl. motorized/mechanized; cavalry and vehicle
-                        // crews cannot take cover). Taking cover
-                        // COSTS the turn's action and cancels any march;
-                        // standing back up is free. The stance drops on
-                        // movement (movement.rs) / attacking (combat).
-                        if !u.can_hold() {
-                            continue;
-                        }
-                        if u.is_holding {
-                            u.is_holding = false;
-                            // Standing up = the Hold command is
-                            // done — the division AI may resume command.
-                            u.manual_override = false;
-                            game.log_line(loc.trf("log.order.stand_up", &[("name", &u.name)]));
-                        } else {
-                            if u.acted {
-                                continue;
+                let ids = commanded_selection(game, &state);
+                match ids.len() {
+                    0 => {}
+                    1 => apply_toggle_hold(game, &mut state, ids[0], &loc),
+                    // Broadcast (§9.3 multi-select): every eligible
+                    // battalion toggles its own stance — dug-in ones stand
+                    // up, the rest take cover.
+                    _ => {
+                        let (mut covered, mut stood) = (0usize, 0usize);
+                        for id in ids {
+                            match toggle_hold_core(game, &mut state, id) {
+                                Some(true) => covered += 1,
+                                Some(false) => stood += 1,
+                                None => {}
                             }
-                            u.is_holding = true;
-                            u.acted = true; // §6.8: taking cover takes the turn
-                            u.move_order = None;
-                            // Hold is an open-ended player command
-                            // (the division AI must not march the unit away).
-                            u.manual_override = true;
-                            took_cover = true;
+                        }
+                        if covered > 0 {
+                            let n = covered.to_string();
                             game.log_line_icon(
                                 Some(IconId::Defense),
-                                loc.trf("log.order.take_cover", &[("name", &u.name)]),
+                                loc.trf("log.order.take_cover_multi", &[("n", &n)]),
                             );
                         }
-                    }
-                    // §6.2 命令顶替: taking cover also cancels any
-                    // attack order registered this turn (done outside the
-                    // unit borrow — ResMut field access borrows all of it).
-                    if took_cover {
-                        state.attack_orders.retain(|o| o.attacker != id);
+                        if stood > 0 {
+                            let n = stood.to_string();
+                            game.log_line(loc.trf("log.order.stand_up_multi", &[("n", &n)]));
+                        }
                     }
                 }
             }
             PlayerCommand::ToggleEmplace => {
-                if !player_can_act(game, &state) {
-                    continue;
-                }
-                if let Some(id) = state.selected_unit {
-                    if let Some(u) = state.units.iter_mut().find(|u| u.id == id) {
-                        // Emplacement is a command — `commands`
-                        // covers the old side check and excludes allies.
-                        if !game.commands(u) || !u.requires_emplacement() || u.acted {
-                            continue;
+                let ids = commanded_selection(game, &state);
+                match ids.len() {
+                    0 => {}
+                    1 => {
+                        let id = ids[0];
+                        if let Some(name) = state.unit_by_id(id).map(|u| u.name.clone()) {
+                            if let Some(now_emplaced) = toggle_emplace_core(game, &mut state, id) {
+                                let key = if now_emplaced {
+                                    "log.order.emplace"
+                                } else {
+                                    "log.order.limber"
+                                };
+                                game.log_line(loc.trf(key, &[("name", &name)]));
+                            }
                         }
-                        u.is_emplaced = !u.is_emplaced;
-                        u.acted = true; // §6.3: (un-)limbering takes the turn
-                                        // Emplacement is an open-ended player
-                                        // command (refresh_turn keeps the override while the
-                                        // gun stays emplaced; limbering keeps it too — the
-                                        // player is handling this gun until she stands by).
-                        u.manual_override = true;
-                        if u.is_emplaced {
-                            u.move_order = None;
+                    }
+                    // Broadcast: towed guns limber/emplace together —
+                    // the artillery-park mass command this exists for.
+                    _ => {
+                        let (mut emplaced, mut limbered) = (0usize, 0usize);
+                        for id in ids {
+                            match toggle_emplace_core(game, &mut state, id) {
+                                Some(true) => emplaced += 1,
+                                Some(false) => limbered += 1,
+                                None => {}
+                            }
                         }
-                        let name = u.name.clone();
-                        let key = if u.is_emplaced {
-                            "log.order.emplace"
-                        } else {
-                            "log.order.limber"
-                        };
-                        game.log_line(loc.trf(key, &[("name", &name)]));
-                        state.units_dirty = true;
-                        state.orders_dirty = true;
+                        if emplaced > 0 {
+                            let n = emplaced.to_string();
+                            game.log_line(loc.trf("log.order.emplace_multi", &[("n", &n)]));
+                        }
+                        if limbered > 0 {
+                            let n = limbered.to_string();
+                            game.log_line(loc.trf("log.order.limber_multi", &[("n", &n)]));
+                        }
                     }
                 }
             }
             PlayerCommand::RetreatSelected => {
-                if !player_can_act(game, &state) {
-                    continue;
-                }
-                if let Some(id) = state.selected_unit {
-                    let player = state.player_side;
-                    // Manual retreat is disengagement — only
-                    // legal in contact with the enemy.
-                    let in_contact = state.unit_by_id(id).is_some_and(|u| {
-                        state.units.iter().any(|e| {
-                            e.side != player
-                                && e.is_combat_effective()
-                                && e.position.distance(u.position) == 1
-                        })
-                    });
-                    if !in_contact {
-                        continue;
+                let ids = commanded_selection(game, &state);
+                match ids.len() {
+                    0 => {}
+                    1 => {
+                        let id = ids[0];
+                        if let Some(name) = state.unit_by_id(id).map(|u| u.name.clone()) {
+                            if retreat_core(game, &mut state, id) {
+                                game.log_line(loc.trf("log.order.retreat", &[("name", &name)]));
+                            }
+                        }
                     }
-                    if let Some(u) = state.units.iter_mut().find(|u| u.id == id) {
-                        // Manual retreat is a command — `commands`
-                        // covers the old side check and excludes allies.
-                        // An acted unit's ring hides R (ui.rs contract) — the
-                        // handler enforces the same gate.
-                        if game.commands(u) && u.is_combat_effective() && !u.acted {
-                            u.state = UnitState::Retreating;
-                            u.org *= 0.8; // manual retreat org penalty (§6.8)
-                            u.entrenchment = 0;
-                            u.manual_override = true; // player-ordered
-                            let name = u.name.clone();
-                            game.log_line(loc.trf("log.order.retreat", &[("name", &name)]));
-                            state.units_dirty = true;
-                            state.board_colors_dirty = true;
+                    _ => {
+                        let mut retreated = 0usize;
+                        for id in ids {
+                            if retreat_core(game, &mut state, id) {
+                                retreated += 1;
+                            }
+                        }
+                        if retreated > 0 {
+                            let n = retreated.to_string();
+                            game.log_line(loc.trf("log.order.retreat_multi", &[("n", &n)]));
                         }
                     }
                 }
@@ -1063,6 +1111,240 @@ fn handle_ui_commands(
 // ---------------------------------------------------------------------------
 // Map clicks: selection + command targeting
 // ---------------------------------------------------------------------------
+
+/// Box-select drag tracker (DESIGN.md §9.3): a left-press on the map
+/// during the tactical phase records the anchor; once the drag passes
+/// BOX_SELECT_PX the egui overlay draws the rectangle and the release
+/// commits every player-commanded battalion whose projected position
+/// falls inside it (allied battalions are never box-selected — they
+/// answer to their own staff). A plain drag REPLACES the selection;
+/// Shift held at the release UNIONS the boxed battalions into it. A
+/// sub-threshold release stays a plain click — the press frame already
+/// did the (de)selecting in `handle_map_clicks` (Shift there keeps the
+/// set, so a Shift+box drag never starts from an empty pool), so click
+/// behavior is untouched.
+fn track_box_select(
+    mut game: Option<ResMut<GameController>>,
+    mut state: ResMut<TacticalState>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    q_cam: Query<(&Camera, &GlobalTransform), With<Camera3d>>, // the 3D scene camera
+) {
+    let cursor = windows
+        .get_single()
+        .ok()
+        .and_then(|w| w.cursor_position());
+
+    if mouse.just_pressed(MouseButton::Left) && !state.pointer_over_ui {
+        // The drag arms only when a plain click would also mean "select"
+        // — target-picking modes (division order / fire mission) own the
+        // button while armed, and the deployment phase has its own
+        // left-drag (drag-deploy).
+        let eligible = game.as_ref().is_some_and(|g| {
+            g.session.phase == BattlePhase::TacticalActive
+                && g.session.current_side == state.player_side
+        }) && state.command_mode == CommandMode::Select
+            && state.div_pick.is_none();
+        state.box_select = match (eligible, cursor) {
+            (true, Some(p)) => Some(BoxSelect {
+                anchor: p,
+                current: p,
+                active: false,
+            }),
+            _ => None,
+        };
+        return;
+    }
+
+    let Some(mut drag) = state.box_select.take() else {
+        return;
+    };
+    if let Some(c) = cursor {
+        drag.current = c;
+        if !drag.active && drag.current.distance(drag.anchor) > BOX_SELECT_PX {
+            drag.active = true;
+        }
+    }
+    if mouse.just_released(MouseButton::Left) {
+        // Released over a UI panel → cancel (press guard covers the start;
+        // this covers a drag that ends on top of a panel or a modal that
+        // opened mid-drag).
+        if drag.active && !state.pointer_over_ui {
+            // Shift held at the release turns the commit into a UNION
+            // (the boxed battalions join the set) — the same
+            // read-the-modifier-at-release convention as the
+            // Shift+right-click waypoint append.
+            let additive =
+                keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+            commit_box_select(
+                game.as_deref_mut(),
+                &mut state,
+                &q_cam,
+                &windows,
+                drag,
+                additive,
+            );
+        }
+        return; // box_select already taken — the drag is over
+    }
+    // The release event can vanish with the window focus (alt-tab
+    // mid-drag) — never let a stale drag stick.
+    if !mouse.pressed(MouseButton::Left) {
+        return;
+    }
+    state.box_select = Some(drag);
+}
+
+/// The release commit: project every selectable unit to the screen and
+/// keep the ones inside the rectangle. `additive` (Shift held) unions
+/// them into the current set; a plain drag replaces it.
+fn commit_box_select(
+    game: Option<&mut GameController>,
+    state: &mut TacticalState,
+    q_cam: &Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    windows: &Query<&Window, With<bevy::window::PrimaryWindow>>,
+    drag: BoxSelect,
+    additive: bool,
+) {
+    let Some(game) = game else { return };
+    let Ok((camera, cam_tf)) = q_cam.get_single() else {
+        return;
+    };
+    let Some(size) = windows.get_single().ok().map(|w| w.resolution.size()) else {
+        return;
+    };
+    let (min, max) = drag.rect();
+    let candidates = state.units.iter().filter_map(|u| {
+        if !game.commands(u) || !u.is_combat_effective() || u.undeployed {
+            return None;
+        }
+        let w = hex_world(u.position) + Vec3::Y * unit_y_on_grid(state, u.position);
+        let ndc = camera.world_to_ndc(cam_tf, w)?;
+        if ndc.z < 0.0 || ndc.z > 1.0 {
+            return None;
+        }
+        let p = Vec2::new(
+            (ndc.x * 0.5 + 0.5) * size.x,
+            (1.0 - (ndc.y * 0.5 + 0.5)) * size.y,
+        );
+        Some((u.id, p))
+    });
+    let boxed = ids_in_screen_rect(candidates, min, max);
+    if additive {
+        state.select_union(boxed);
+    } else {
+        state.select_multiple(boxed);
+    }
+}
+
+/// Box-select membership (pure): ids whose projected screen point falls
+/// inside the dragged rectangle — roster iteration order, deterministic.
+fn ids_in_screen_rect(
+    candidates: impl Iterator<Item = (usize, Vec2)>,
+    min: Vec2,
+    max: Vec2,
+) -> Vec<usize> {
+    candidates
+        .filter(|(_, p)| p.x >= min.x && p.x <= max.x && p.y >= min.y && p.y <= max.y)
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// The TacticalActive left-CLICK selection transition (§9.3) — the press
+/// frame's pure decision so the shift semantics stay unit-testable:
+/// a friendly unit is selected (or Shift-toggled in/out of the set);
+/// anything else releases the set, EXCEPT with Shift held — additive mode
+/// keeps it, which is also what a starting Shift+box drag relies on
+/// (clearing on the press would leave nothing to union into).
+enum ClickSelect {
+    Select(usize),
+    Toggle(usize),
+    Clear,
+    Keep,
+}
+
+fn click_select_action(clicked: Option<(usize, Side)>, player: Side, shift_held: bool) -> ClickSelect {
+    match clicked {
+        Some((uid, uside)) if uside == player => {
+            if shift_held {
+                ClickSelect::Toggle(uid)
+            } else {
+                ClickSelect::Select(uid)
+            }
+        }
+        _ if shift_held => ClickSelect::Keep,
+        _ => ClickSelect::Clear,
+    }
+}
+
+/// Selection hotkeys (DESIGN.md §9.3):
+/// - Ctrl+1..9 stores the current selection under the slot; a bare 1..9
+///   recalls (selects) the group, dropping members that died or left the
+///   board. Battle-scoped only — groups never persist into settings or
+///   across battles.
+/// - C toggles manual control for the whole selection (see
+///   [`toggle_manual_selection`]); needs the player's tactical turn.
+fn handle_selection_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut game: Option<ResMut<GameController>>,
+    mut state: ResMut<TacticalState>,
+    ui_win: Res<UiWindows>,
+    tour: Res<BattleTour>,
+    stall: Option<Res<SyncStall>>,
+    desync: Option<Res<DesyncAlert>>,
+    loc: Res<LocaleRes>,
+) {
+    let Some(game) = game.as_deref_mut() else {
+        return;
+    };
+    if ui_win.modal_open() || tour.active || stall.is_some() || desync.is_some() {
+        return;
+    }
+    // Target-picking modes (fire mission / division order) read the
+    // PRIMARY selection at commit time — swapping the selection mid-pick
+    // would redirect the pending order.
+    if state.command_mode != CommandMode::Select || state.div_pick.is_some() {
+        return;
+    }
+    if keys.just_pressed(KeyCode::KeyC) && !state.selection.is_empty() {
+        toggle_manual_selection(game, &mut state, &loc);
+    }
+    const DIGITS: [(KeyCode, usize); 9] = [
+        (KeyCode::Digit1, 0),
+        (KeyCode::Digit2, 1),
+        (KeyCode::Digit3, 2),
+        (KeyCode::Digit4, 3),
+        (KeyCode::Digit5, 4),
+        (KeyCode::Digit6, 5),
+        (KeyCode::Digit7, 6),
+        (KeyCode::Digit8, 7),
+        (KeyCode::Digit9, 8),
+    ];
+    let ctrl =
+        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    for (key, slot) in DIGITS {
+        if !keys.just_pressed(key) {
+            continue;
+        }
+        if ctrl {
+            let n = state.store_control_group(slot);
+            if n > 0 {
+                let (slot_s, n_s) = ((slot + 1).to_string(), n.to_string());
+                game.log_line(loc.trf("log.group.saved", &[("slot", &slot_s), ("n", &n_s)]));
+            }
+        } else {
+            state.recall_control_group(slot);
+        }
+    }
+}
+
+/// Selection-set upkeep: members that died / surrendered / left the board
+/// drop out of the selection and the control groups (broken-but-present
+/// battalions keep their selection until the turn handover clears it).
+fn prune_selection_upkeep(mut state: ResMut<TacticalState>) {
+    state.prune_selection();
+}
 
 /// Drag-and-drop deployment. Left-press on an own unit starts a
 /// drag (and selects it); while held, `sync_deploy_ghost` previews the drop
@@ -1102,8 +1384,7 @@ fn handle_deploy_drag(
                     if commanded {
                         state.deploy_drag = Some(uid);
                     }
-                    state.selected_unit = Some(uid);
-                    state.units_dirty = true;
+                    state.select_only(uid);
                 }
             }
         }
@@ -1152,13 +1433,331 @@ fn handle_deploy_drag(
     }
 }
 
-/// Mouse scheme. Left button = non-sticky selection (click a
-/// friendly unit to select; click anything else to release). Right button =
-/// context command for the selected unit: empty/own hex → standing move
+/// The commandable members of the current selection (player-commanded,
+/// combat-effective battalions; allied info-selections excluded — the same
+/// gate the right-click broadcast uses). Broadcast commands iterate it;
+/// a single member takes the classic per-unit path.
+fn commanded_selection(game: &GameController, state: &TacticalState) -> Vec<usize> {
+    state
+        .selection
+        .iter()
+        .copied()
+        .filter(|&id| {
+            state
+                .unit_by_id(id)
+                .is_some_and(|u| game.commands(u) && u.is_combat_effective())
+        })
+        .collect()
+}
+
+/// The Hold-command toggle (radial H / command panel): take cover or
+/// stand up. Taking cover COSTS the turn's action (§6.8), cancels the
+/// standing march and any registered attack order, and marks the unit
+/// manual; standing back up is free and releases the override. Both
+/// directions dirty the unit + order visuals immediately — the acted
+/// translucency, the cancelled ribbon and the manual frame must appear
+/// on the click, not on a later deselect/turn tick.
+fn apply_toggle_hold(
+    game: &mut GameController,
+    state: &mut TacticalState,
+    id: usize,
+    loc: &Locale,
+) {
+    let Some(name) = state.unit_by_id(id).map(|u| u.name.clone()) else {
+        return;
+    };
+    match toggle_hold_core(game, state, id) {
+        Some(true) => game.log_line_icon(
+            Some(IconId::Defense),
+            loc.trf("log.order.take_cover", &[("name", &name)]),
+        ),
+        Some(false) => game.log_line(loc.trf("log.order.stand_up", &[("name", &name)])),
+        None => {}
+    }
+}
+
+/// Logging-free Hold toggle: `Some(true)` = took cover, `Some(false)` =
+/// stood back up, `None` = not eligible (not commanded / not infantry
+/// attribute / already acted when digging in). Lets the multi-select
+/// broadcast reuse the exact per-unit gating and aggregate the outcome.
+fn toggle_hold_core(game: &GameController, state: &mut TacticalState, id: usize) -> Option<bool> {
+    if !player_can_act(game, state) {
+        return None;
+    }
+    let mut took_cover = false;
+    let outcome = {
+        let u = state.units.iter_mut().find(|u| u.id == id)?;
+        // Hold is a command — allied battalions
+        // take their stance from their own staff AI.
+        if !game.commands(u) {
+            return None;
+        }
+        // Infantry-attribute only
+        // (incl. motorized/mechanized; cavalry and vehicle
+        // crews cannot take cover). Taking cover
+        // COSTS the turn's action and cancels any march;
+        // standing back up is free. The stance drops on
+        // movement (movement.rs) / attacking (combat).
+        if !u.can_hold() {
+            return None;
+        }
+        if u.is_holding {
+            u.is_holding = false;
+            // Standing up = the Hold command is
+            // done — the division AI may resume command.
+            u.manual_override = false;
+            false
+        } else {
+            if u.acted {
+                return None;
+            }
+            u.is_holding = true;
+            u.acted = true; // §6.8: taking cover takes the turn
+            u.move_order = None;
+            // Hold is an open-ended player command
+            // (the division AI must not march the unit away).
+            u.manual_override = true;
+            took_cover = true;
+            true
+        }
+    };
+    state.units_dirty = true;
+    state.orders_dirty = true;
+    // §6.2 命令顶替: taking cover also cancels any
+    // attack order registered this turn (done outside the
+    // unit borrow — ResMut field access borrows all of it).
+    if took_cover {
+        state.attack_orders.retain(|o| o.attacker != id);
+    }
+    Some(outcome)
+}
+
+/// Per-unit emplace/limber toggle core (no logging): `Some(bool)` = the
+/// NEW emplacement state, `None` = not eligible. (Un-)limbering takes the
+/// turn (§6.3) and is an open-ended player command (manual override).
+fn toggle_emplace_core(game: &GameController, state: &mut TacticalState, id: usize) -> Option<bool> {
+    if !player_can_act(game, state) {
+        return None;
+    }
+    let u = state.units.iter_mut().find(|u| u.id == id)?;
+    // Emplacement is a command — `commands`
+    // covers the old side check and excludes allies.
+    if !game.commands(u) || !u.requires_emplacement() || u.acted {
+        return None;
+    }
+    u.is_emplaced = !u.is_emplaced;
+    u.acted = true; // §6.3: (un-)limbering takes the turn
+                    // Emplacement is an open-ended player
+                    // command (refresh_turn keeps the override while the
+                    // gun stays emplaced; limbering keeps it too — the
+                    // player is handling this gun until she stands by).
+    u.manual_override = true;
+    if u.is_emplaced {
+        u.move_order = None;
+    }
+    let now_emplaced = u.is_emplaced;
+    state.units_dirty = true;
+    state.orders_dirty = true;
+    Some(now_emplaced)
+}
+
+/// Per-unit manual-retreat core (no logging): true = the retreat was
+/// ordered. Manual retreat is disengagement — only legal in contact with
+/// the enemy, before the unit acts; costs 20% org (§6.8) and marks the
+/// unit player-commanded. The org penalty rides the sync damage channel
+/// like any other org loss, so the strategic side sees the cohesion drop.
+fn retreat_core(game: &mut GameController, state: &mut TacticalState, id: usize) -> bool {
+    if !player_can_act(game, state) {
+        return false;
+    }
+    let player = state.player_side;
+    let in_contact = state.unit_by_id(id).is_some_and(|u| {
+        state.units.iter().any(|e| {
+            e.side != player
+                && e.is_combat_effective()
+                && e.position.distance(u.position) == 1
+        })
+    });
+    if !in_contact {
+        return false;
+    }
+    let (side, tag, province, max_org, max_str, org_lost) = {
+        let Some(u) = state.units.iter_mut().find(|u| u.id == id) else {
+            return false;
+        };
+        // Manual retreat is a command — `commands`
+        // covers the old side check and excludes allies.
+        if !(game.commands(u) && u.is_combat_effective() && !u.acted) {
+            return false;
+        }
+        let before = u.org;
+        u.state = UnitState::Retreating;
+        u.org *= 0.8; // manual retreat org penalty (§6.8)
+        u.entrenchment = 0;
+        u.manual_override = true; // player-ordered
+        (
+            u.side,
+            u.tag.clone(),
+            u.hoi4_province,
+            u.max_org,
+            u.max_strength,
+            before - u.org,
+        )
+    };
+    state.units_dirty = true;
+    state.board_colors_dirty = true;
+    if org_lost > 0.0 {
+        game.session
+            .record_damage(side, &tag, province, org_lost, 0.0, max_org, max_str);
+    }
+    true
+}
+
+/// One battalion's §7.4 command-toggle mutation, logging-free — the shared
+/// core of right-click-self and the C-key selection toggle.
+/// `manual=true` takes manual command (the standing orders are cancelled
+/// at the hand-over so no AI order keeps marching/firing under the manual
+/// flag); `manual=false` stands the battalion by (cancels the standing
+/// move AND any registered attack order, releases the override back to the
+/// division AI). Stance, emplacement and the acted flag are untouched by
+/// either direction. A non-manual battalion with no standing order is
+/// untouched by stand-by; an already-manual one is untouched by take-
+/// manual. Returns true when anything changed.
+fn set_manual_core(state: &mut TacticalState, id: usize, manual: bool) -> bool {
+    let has_order = state.unit_by_id(id).is_some_and(|u| u.move_order.is_some())
+        || state.attack_orders.iter().any(|o| o.attacker == id);
+    let manual_now = state
+        .unit_by_id(id)
+        .is_some_and(|u| u.manual_override);
+    let changed = if manual {
+        !manual_now
+    } else {
+        manual_now || has_order
+    };
+    if !changed {
+        return false;
+    }
+    if let Some(u) = state.units.iter_mut().find(|u| u.id == id) {
+        if manual {
+            u.move_order = None;
+            u.manual_override = true;
+        } else {
+            u.stand_by();
+        }
+    }
+    state.attack_orders.retain(|o| o.attacker != id);
+    state.units_dirty = true;
+    state.orders_dirty = true;
+    true
+}
+
+/// The localized log key for one battalion's manual-toggle direction:
+/// the division-AI flavor when its division has a standing order.
+fn manual_toggle_key(manual: bool, under_div_order: bool, multi: bool) -> &'static str {
+    match (manual, under_div_order, multi) {
+        (true, true, false) => "log.order.take_manual_div",
+        (true, false, false) => "log.order.take_manual",
+        (false, true, false) => "log.order.stand_by_div",
+        (false, false, false) => "log.order.stand_by",
+        (true, true, true) => "log.order.take_manual_div_multi",
+        (true, false, true) => "log.order.take_manual_multi",
+        (false, true, true) => "log.order.stand_by_div_multi",
+        (false, false, true) => "log.order.stand_by_multi",
+    }
+}
+
+/// Right-click on the selected battalion's own hex — the §7.4 command
+/// toggle. Default policy: stand by — cancel the standing order (move /
+/// attack) and release any manual override; a non-manual battalion with
+/// no standing order is untouched. With the keep-manual setting the
+/// click is a TWO-WAY switch: a battalion under the division AI is
+/// taken manual, and a manual one stands by back to the division order
+/// as usual. Mutation lives in [`set_manual_core`].
+/// Returns true when the click changed something.
+fn right_click_self(
+    game: &mut GameController,
+    state: &mut TacticalState,
+    sel: &BattalionUnit,
+    loc: &Locale,
+) -> bool {
+    let take_manual = game.keep_manual_override && !sel.manual_override;
+    if !set_manual_core(state, sel.id, take_manual) {
+        return false;
+    }
+    let key = manual_toggle_key(
+        take_manual,
+        game.div_ordered(&sel.tag, &sel.division),
+        false,
+    );
+    game.log_line(loc.trf(key, &[("name", &sel.name)]));
+    true
+}
+
+/// C key (§9.3): selection-wide manual-control toggle — no more
+/// per-battalion right-clicking. When EVERY commanded member is manual,
+/// the whole set stands by (back to the division AI); otherwise every
+/// non-manual member is taken manual. Members the player does not command
+/// (allied) are skipped. A single selection gets the same two-way switch
+/// as right-click-self, but UNGATED by the keep-manual setting: C is an
+/// explicit command, and in the default policy an idle manual battalion
+/// is handed back at the next turn refresh as usual. The log collapses
+/// to one aggregated line for a multi-selection.
+fn toggle_manual_selection(game: &mut GameController, state: &mut TacticalState, loc: &Locale) {
+    if !player_can_act(game, state) {
+        return;
+    }
+    let ids = commanded_selection(game, state);
+    if ids.is_empty() {
+        return;
+    }
+    let all_manual = ids
+        .iter()
+        .all(|&id| state.unit_by_id(id).is_some_and(|u| u.manual_override));
+    let take_manual = !all_manual;
+    let mut changed = 0usize;
+    let mut all_div = true;
+    for id in &ids {
+        // The release direction touches every member; the take-manual
+        // direction leaves already-manual members alone.
+        if take_manual && state.unit_by_id(*id).is_some_and(|u| u.manual_override) {
+            continue;
+        }
+        let under_div = state
+            .unit_by_id(*id)
+            .is_some_and(|u| game.div_ordered(&u.tag, &u.division));
+        if set_manual_core(state, *id, take_manual) {
+            changed += 1;
+            all_div &= under_div;
+        }
+    }
+    if changed == 0 {
+        return;
+    }
+    if ids.len() == 1 {
+        let id = ids[0];
+        let name = unit_name(state, id);
+        let key = manual_toggle_key(take_manual, all_div, false);
+        game.log_line(loc.trf(key, &[("name", &name)]));
+    } else {
+        let n = changed.to_string();
+        let key = manual_toggle_key(take_manual, all_div, true);
+        game.log_line(loc.trf(key, &[("n", &n)]));
+    }
+}
+
+/// Mouse scheme (DESIGN.md §9.3). Left button = non-sticky selection (click
+/// a friendly unit to select; click anything else to release; Shift+click
+/// toggles set membership; a left-DRAG past the threshold box-selects —
+/// the drag split lives in `track_box_select`). Right button =
+/// context command for the selection: empty/own hex → standing move
 /// order; visible enemy → attack (indirect artillery delivers a fire
 /// mission, direct-fire units assault adjacent targets or direct-fire at
-/// range); the selected unit itself → stand by (cancels both the standing
-/// move order and any registered attack order). Right-DRAG orbits the
+/// range); a single-selected unit itself → the §7.4 command toggle
+/// (stand by —
+/// cancels both the standing move order and any registered attack order —
+/// or, under the keep-manual setting, take manual control). A multi
+/// selection broadcasts: move fans out around the clicked hex, attack
+/// registers one order per battalion. Right-DRAG orbits the
 /// camera — the click/drag split lives in camera.rs (`MapRightClick`).
 #[allow(clippy::too_many_arguments)]
 fn handle_map_clicks(
@@ -1181,6 +1780,10 @@ fn handle_map_clicks(
     // Right-click arrives via the camera's click/orbit splitter; take() up
     // front so a stale click can never linger and fire twice.
     let right_clicked = rclick.0.take().is_some();
+    // Shift held on the click frame turns a move order into a waypoint
+    // append (MapRightClick settles on the release frame, so this reads
+    // the keys as they were when the right button went up).
+    let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     // The sync-stall dialog demands an explicit choice — freeze
     // ALL map input AND the Esc ladder (no peeling, no menu) while open.
     // The desync guard's dialog is modal the same way.
@@ -1228,9 +1831,8 @@ fn handle_map_clicks(
             // Esc cancels division-order target picking.
             state.div_pick = None;
             refresh_command_highlights(&mut state);
-        } else if state.selected_unit.is_some() {
-            state.selected_unit = None;
-            state.units_dirty = true;
+        } else if !state.selection.is_empty() {
+            state.clear_selection();
             state.clear_highlights();
         } else {
             ui_win.esc_menu = true;
@@ -1261,6 +1863,7 @@ fn handle_map_clicks(
             // highlights it while dragging, release commits the division's
             // battalions into the sector; right / Esc cancels.
             if state.deploy_sector.is_some() {
+                let tag = state.deploy_sector.as_ref().unwrap().tag.clone();
                 let division = state.deploy_sector.as_ref().unwrap().division.clone();
                 let anchored = state.deploy_sector.as_ref().unwrap().anchor;
                 if right {
@@ -1292,6 +1895,7 @@ fn handle_map_clicks(
                     commit_sector_deploy(
                         &mut state,
                         game,
+                        tag,
                         division,
                         anchored.unwrap(),
                         h,
@@ -1337,8 +1941,7 @@ fn handle_map_clicks(
                         u.position = h;
                         u.undeployed = false;
                         state.deploy_placing = None;
-                        state.selected_unit = Some(id);
-                        state.units_dirty = true;
+                        state.select_only(id);
                     }
                 } else if zone_ok && !deployable {
                     game.log_line(loc.tr("log.deploy.impassable"));
@@ -1347,16 +1950,14 @@ fn handle_map_clicks(
             }
             if right {
                 // Right-click only releases the selection during deployment.
-                state.selected_unit = None;
-                state.units_dirty = true;
+                state.clear_selection();
                 return;
             }
             // Click own unit → select; click empty zone hex → reposition (§11.1.5).
             let clicked = state.unit_at(h).map(|u| (u.id, u.side));
             if let Some((uid, uside)) = clicked {
                 if uside == state.player_side {
-                    state.selected_unit = Some(uid);
-                    state.units_dirty = true;
+                    state.select_only(uid);
                 }
                 return;
             }
@@ -1453,6 +2054,7 @@ fn handle_map_clicks(
                                 &loc,
                                 &mut notice,
                                 time.elapsed_secs(),
+                                &pick.tag,
                                 &pick.division,
                                 DivOrderPick::Seize(h),
                             );
@@ -1468,6 +2070,7 @@ fn handle_map_clicks(
                                         &loc,
                                         &mut notice,
                                         time.elapsed_secs(),
+                                        &pick.tag,
                                         &pick.division,
                                         DivOrderPick::Engage { unit: tid, hex: h },
                                     );
@@ -1539,15 +2142,15 @@ fn handle_map_clicks(
             if left {
                 // Non-sticky selection: friendly unit → select;
                 // anything else (ground, visible enemy) → release.
-                match clicked {
-                    Some((uid, uside)) if uside == player => {
-                        state.selected_unit = Some(uid);
-                        state.units_dirty = true;
-                    }
-                    _ => {
-                        if state.selected_unit.is_some() {
-                            state.selected_unit = None;
-                            state.units_dirty = true;
+                // Shift+click toggles the unit in/out of the selection
+                // set (additive mode: shift-clicking ground keeps the set).
+                match click_select_action(clicked, player, shift_held) {
+                    ClickSelect::Select(uid) => state.select_only(uid),
+                    ClickSelect::Toggle(uid) => state.toggle_select(uid),
+                    ClickSelect::Keep => {}
+                    ClickSelect::Clear => {
+                        if !state.selection.is_empty() {
+                            state.clear_selection();
                             state.clear_highlights();
                         }
                     }
@@ -1555,7 +2158,7 @@ fn handle_map_clicks(
                 return;
             }
 
-            // Right-click: context command for the selected unit.
+            // Right-click: context command for the selection.
             let Some(sel_id) = state.selected_unit else {
                 return;
             };
@@ -1563,53 +2166,70 @@ fn handle_map_clicks(
                 return;
             };
             if sel.side != player || !sel.is_combat_effective() {
-                state.selected_unit = None;
+                state.clear_selection();
                 return;
             }
-            // Allied battalions answer to their own staff — a
-            // right-click with an allied selection is silently ignored (the
-            // selection itself is kept, it is information-only).
-            if !game.commands(&sel) {
+            // The commandable members of the set (allied battalions answer
+            // to their own staff — an ALLIED-only selection makes the
+            // right-click a silent no-op, as before).
+            let commanded: Vec<usize> = state
+                .selection
+                .iter()
+                .copied()
+                .filter(|&id| {
+                    state
+                        .unit_by_id(id)
+                        .is_some_and(|u| game.commands(u) && u.is_combat_effective())
+                })
+                .collect();
+            if commanded.is_empty() {
+                return;
+            }
+            // The command paths operate on the COMMANDED member — with a
+            // mixed set (shift-added allied info-selection) the primary may
+            // be the allied one.
+            let sel = if commanded.len() == 1 && commanded[0] != sel_id {
+                state.unit_by_id(commanded[0]).cloned().unwrap_or(sel)
+            } else {
+                sel
+            };
+
+            // Right-click the selected unit itself → the §7.4 command
+            // toggle: stand by (release manual / cancel the order) or,
+            // under the keep-manual setting, take manual control of an
+            // AI-commanded battalion. See right_click_self. With a MULTI
+            // selection the toggle has no per-set meaning — clicking a
+            // member's own hex is ignored entirely.
+            if commanded.len() == 1 && h == sel.position {
+                right_click_self(game, &mut state, &sel, &loc);
+                return;
+            }
+            if commanded.len() > 1
+                && state
+                    .selection
+                    .iter()
+                    .any(|&id| state.unit_by_id(id).is_some_and(|u| u.position == h))
+            {
                 return;
             }
 
-            // Right-click the selected unit itself → stand by: cancel the
-            // standing order — move OR attack. Stance,
-            // emplacement and the acted flag are untouched.
-            if h == sel.position {
-                let has_order = sel.move_order.is_some()
-                    || state.attack_orders.iter().any(|o| o.attacker == sel_id);
-                if has_order {
-                    if let Some(u) = state.units.iter_mut().find(|u| u.id == sel_id) {
-                        u.move_order = None;
-                        // Standing by releases the unit back to
-                        // its division order (the player's command is done).
-                        u.manual_override = false;
-                    }
-                    state.attack_orders.retain(|o| o.attacker != sel_id);
-                    state.orders_dirty = true;
-                    game.log_line(loc.trf("log.order.stand_by", &[("name", &sel.name)]));
+            // Resolve the attack target under the cursor, if any (a
+            // Retreating enemy stays a valid §6.8 pursuit target even
+            // though unit_at skips non-effective units).
+            let target = match clicked {
+                Some((tid, uside)) if uside != player => Some(tid),
+                _ => state.attack_target_at(h, player).map(|t| t.id),
+            };
+            match (target, commanded.len()) {
+                (Some(tid), 1) => attack_target(game, &mut state, &sel, h, tid, &mut fx, &loc),
+                (Some(tid), _) => {
+                    broadcast_attack_target(game, &mut state, &commanded, h, tid, &mut fx, &loc)
                 }
-                return;
-            }
-
-            match clicked {
-                // Visible enemy → attack split.
-                Some((tid, uside)) if uside != player => {
-                    attack_target(game, &mut state, &sel, h, tid, &mut fx, &loc);
+                (None, 1) => {
+                    issue_move_order(game, &mut state, h, &loc, shift_held);
                 }
-                // Empty ground or a friendly hex → standing move order
-                // (occupancy rules live in issue_move_order).
-                _ => {
-                    // unit_at skips non-effective units, but a Retreating
-                    // enemy is still a valid target (§6.8 pursuit) — check
-                    // for one before falling through to a move order.
-                    if let Some(t) = state.attack_target_at(h, player) {
-                        let tid = t.id;
-                        attack_target(game, &mut state, &sel, h, tid, &mut fx, &loc);
-                    } else {
-                        issue_move_order(game, &mut state, h, &loc);
-                    }
+                (None, _) => {
+                    broadcast_move_order(game, &mut state, &commanded, h, &loc, shift_held)
                 }
             }
         }
@@ -1617,7 +2237,103 @@ fn handle_map_clicks(
     }
 }
 
-/// Right-click attack split: registers a
+/// Outcome of a right-click attack order attempt — the single-select
+/// wrapper logs it as before; the multi-select broadcast aggregates
+/// per description / per rejection reason.
+enum AttackIssue {
+    /// The standing order registered; carries its log description + icon.
+    Registered { desc: String, icon: Option<IconId> },
+    /// Refused with a localized reason (floaters + log line).
+    Rejected(String),
+}
+
+/// Right-click attack gating, logging-free: registers the standing
+/// attack order on success and reports what happened. The order itself
+/// resolves in the end-of-turn unified fire phase, never immediately.
+fn attack_target_core(
+    state: &mut TacticalState,
+    sel: &BattalionUnit,
+    h: HexCoord,
+    target_id: usize,
+    loc: &Locale,
+) -> AttackIssue {
+    let d = sel.position.distance(h);
+    let min_r = sel.min_attack_range();
+    let in_envelope = d >= min_r && d <= sel.attack_range;
+    let r = |key: &str| loc.tr(key).into_owned();
+    let envelope_reason = || {
+        r(if d < min_r {
+            "reject.too_close"
+        } else {
+            "reject.out_of_range"
+        })
+    };
+    let register = |state: &mut TacticalState, target: AttackTarget| {
+        let (_, desc, icon) = register_order_for(state, sel.id, target, loc);
+        AttackIssue::Registered { desc, icon }
+    };
+    if sel.acted {
+        AttackIssue::Rejected(r("reject.already_acted"))
+    } else if sel.shocked {
+        AttackIssue::Rejected(r("reject.shocked"))
+    } else if sel.is_hq() {
+        // §6.13: an HQ commands — it never initiates combat (it still
+        // defends and returns counter-fire). Named here so the player gets
+        // the reason instead of a generic "cannot assault".
+        AttackIssue::Rejected(r("reject.hq_command_unit"))
+    } else if sel.is_indirect_artillery() {
+        if !in_envelope {
+            AttackIssue::Rejected(envelope_reason())
+        } else if !sel.can_fire_support() {
+            AttackIssue::Rejected(r("reject.emplace_first"))
+        } else {
+            // Gesture rule: right-clicking a VISIBLE enemy unit =
+            // precise fire (full damage on the hex — picking never reveals
+            // hidden ones). Rocket launchers can never be precise — their
+            // right-click resolves as an area salvo (§6.3).
+            register(
+                state,
+                AttackTarget::FireMission {
+                    hex: h,
+                    precise: !sel.is_rocket(),
+                },
+            )
+        }
+    } else if sel.is_direct_gun() {
+        // Direct-fire guns (AT/AA): support fire ONLY — a right-click
+        // anywhere in the envelope registers a precise direct strike,
+        // point-blank included; never an assault (the d==1 branch below),
+        // never a zone mission. These pieces have no area-fire button.
+        if !in_envelope {
+            AttackIssue::Rejected(envelope_reason())
+        } else if !sel.can_fire_support() {
+            AttackIssue::Rejected(r("reject.emplace_first"))
+        } else {
+            register(state, AttackTarget::DirectFire(target_id))
+        }
+    } else if d == 1 {
+        if sel.can_assault() {
+            register(state, AttackTarget::Assault(target_id))
+        } else if sel.is_holding {
+            AttackIssue::Rejected(r("reject.holding"))
+        } else if sel.is_emplaced {
+            AttackIssue::Rejected(r("reject.emplaced"))
+        } else {
+            AttackIssue::Rejected(r("reject.cannot_assault"))
+        }
+    } else if sel.attack_range > 1 && in_envelope {
+        // Armor / AT direct fire (§6.3).
+        if sel.can_fire_support() {
+            register(state, AttackTarget::DirectFire(target_id))
+        } else {
+            AttackIssue::Rejected(r("reject.emplace_first"))
+        }
+    } else {
+        AttackIssue::Rejected(r("reject.out_of_range"))
+    }
+}
+
+/// Right-click attack split (single selection): registers a
 /// standing attack order — resolved in the end-of-turn unified fire phase,
 /// never immediately. Failures pop an orange floater on the target hex.
 fn attack_target(
@@ -1629,81 +2345,87 @@ fn attack_target(
     fx: &mut FxQueue,
     loc: &Locale,
 ) {
-    let d = sel.position.distance(h);
-    let min_r = sel.min_attack_range();
-    let in_envelope = d >= min_r && d <= sel.attack_range;
-    let r = |key: &str| loc.tr(key).into_owned();
-    let failed: Option<String> = if sel.acted {
-        Some(r("reject.already_acted"))
-    } else if sel.shocked {
-        Some(r("reject.shocked"))
-    } else if sel.is_indirect_artillery() {
-        if !in_envelope {
-            Some(r(if d < min_r {
-                "reject.too_close"
-            } else {
-                "reject.out_of_range"
-            }))
-        } else if !sel.can_fire_support() {
-            Some(r("reject.emplace_first"))
-        } else {
-            // Gesture rule: right-clicking a VISIBLE enemy unit =
-            // precise fire (full damage on the hex — picking never reveals
-            // hidden ones). Rocket launchers can never be precise — their
-            // right-click resolves as an area salvo (§6.3).
-            register_fire_mission(game, state, h, !sel.is_rocket(), loc);
-            None
+    match attack_target_core(state, sel, h, target_id, loc) {
+        AttackIssue::Registered { desc, icon } => {
+            game.log_line_icon(
+                icon,
+                loc.trf("log.order.registered", &[("name", &sel.name), ("desc", &desc)]),
+            );
         }
-    } else if sel.is_direct_gun() {
-        // Direct-fire guns (AT/AA): support fire ONLY — a right-click
-        // anywhere in the envelope registers a precise direct strike,
-        // point-blank included; never an assault (the d==1 branch below),
-        // never a zone mission. These pieces have no area-fire button.
-        if !in_envelope {
-            Some(r(if d < min_r {
-                "reject.too_close"
-            } else {
-                "reject.out_of_range"
-            }))
-        } else if !sel.can_fire_support() {
-            Some(r("reject.emplace_first"))
-        } else {
-            register_order(game, state, AttackTarget::DirectFire(target_id), loc);
-            None
+        AttackIssue::Rejected(reason) => {
+            game.log_line(loc.trf(
+                "log.order.rejected",
+                &[("name", &sel.name), ("reason", &reason)],
+            ));
+            fx.push(FxEvent::Floater {
+                pos: hex_world(h),
+                text: reason,
+                kind: FloaterKind::Congested,
+            });
         }
-    } else if d == 1 {
-        if sel.can_assault() {
-            register_order(game, state, AttackTarget::Assault(target_id), loc);
-            None
-        } else if sel.is_holding {
-            Some(r("reject.holding"))
-        } else if sel.is_emplaced {
-            Some(r("reject.emplaced"))
-        } else {
-            Some(r("reject.cannot_assault"))
+    }
+}
+
+/// Right-click attack with a MULTI selection (DESIGN.md §9.3): every
+/// commanded battalion registers its own standing order on the same target
+/// (the attack-order pool is one slot per attacker, so focus fire is
+/// native). The log stays compact: one line per distinct order description,
+/// one per distinct rejection reason, one floater per reason.
+fn broadcast_attack_target(
+    game: &mut GameController,
+    state: &mut TacticalState,
+    ids: &[usize],
+    h: HexCoord,
+    target_id: usize,
+    fx: &mut FxQueue,
+    loc: &Locale,
+) {
+    let mut registered: Vec<(String, Option<IconId>, usize)> = Vec::new();
+    let mut rejected: Vec<(String, usize)> = Vec::new();
+    for &id in ids {
+        let Some(sel) = state.unit_by_id(id).cloned() else {
+            continue;
+        };
+        match attack_target_core(state, &sel, h, target_id, loc) {
+            AttackIssue::Registered { desc, icon } => {
+                match registered.iter_mut().find(|(d, _, _)| *d == desc) {
+                    Some((_, _, n)) => *n += 1,
+                    None => registered.push((desc, icon, 1)),
+                }
+            }
+            AttackIssue::Rejected(reason) => {
+                match rejected.iter_mut().find(|(r, _)| *r == reason) {
+                    Some((_, n)) => *n += 1,
+                    None => rejected.push((reason, 1)),
+                }
+            }
         }
-    } else if sel.attack_range > 1 && in_envelope {
-        // Armor / AT direct fire (§6.3).
-        if sel.can_fire_support() {
-            register_order(game, state, AttackTarget::DirectFire(target_id), loc);
-            None
-        } else {
-            Some(r("reject.emplace_first"))
-        }
-    } else {
-        Some(r("reject.out_of_range"))
-    };
-    if let Some(reason) = failed {
+    }
+    for (desc, icon, n) in registered {
+        let name = broadcast_name(n, loc);
+        game.log_line_icon(
+            icon,
+            loc.trf("log.order.registered", &[("name", &name), ("desc", &desc)]),
+        );
+    }
+    for (reason, n) in rejected {
+        let name = broadcast_name(n, loc);
         game.log_line(loc.trf(
             "log.order.rejected",
-            &[("name", &sel.name), ("reason", &reason)],
+            &[("name", &name), ("reason", &reason)],
         ));
         fx.push(FxEvent::Floater {
             pos: hex_world(h),
-            text: reason,
+            text: format!("{n}× {reason}"),
             kind: FloaterKind::Congested,
         });
     }
+}
+
+/// The aggregated "{n} battalions" log subject for broadcast summaries.
+fn broadcast_name(n: usize, loc: &Locale) -> String {
+    let n = n.to_string();
+    loc.trf("battle.selection.count", &[("n", &n)])
 }
 
 /// Compute highlights for the current command mode + selection.
@@ -1746,38 +2468,71 @@ pub fn refresh_command_highlights(state: &mut TacticalState) {
     state.set_highlights(out);
 }
 
+/// Outcome of a march-order issue attempt — the single-select wrapper
+/// logs exactly as before; the multi-select broadcast aggregates.
+enum MoveIssue {
+    /// A fresh standing order was issued; `superseded_attack` marks the
+    /// §6.2 replacement of a registered attack order.
+    Issued { eta: u32, superseded_attack: bool },
+    /// Shift-appended as a new waypoint leg (silent by design).
+    Appended,
+    /// Re-affirmed the current destination (silent by design).
+    Reaffirmed,
+    /// Gated with a player-facing reason: `single_key` is the named
+    /// log template used by the single-select path, `reason_key` the
+    /// name-less reject wording for broadcast summaries.
+    Rejected {
+        single_key: &'static str,
+        reason_key: &'static str,
+    },
+    /// No route / illegal target hex (silently refused, as before).
+    Failed,
+}
+
 /// §6.2: issue a standing movement order — the unit marches at its own
 /// speed at the end of each of its turns, with a route arrow and an ETA in
 /// the command panel. Replaces the old AP-limited instant move.
-fn issue_move_order(
+/// Issue (or extend) a standing march order to `h`. `queued` = the
+/// Shift-click form: with an existing order (or waypoint chain) the new
+/// destination is APPENDED as the chain's next leg; without one it
+/// behaves like a plain order. The plain form REPLACES any chain.
+///
+/// Progress retention (§7.2, player side): re-issuing the CURRENT
+/// destination keeps the whole standing order untouched (re-affirm —
+/// silent, mirroring the AI side); re-pointing to a new destination
+/// whose fresh route shares the first step keeps the invested `hours`;
+/// only a first-step change starts from zero.
+fn issue_move_order_for(
     game: &mut GameController,
     state: &mut TacticalState,
+    id: usize,
     h: HexCoord,
-    loc: &Locale,
-) -> bool {
+    queued: bool,
+) -> MoveIssue {
     let Some(grid) = state.grid.clone() else {
-        return false;
-    };
-    let Some(id) = state.selected_unit else {
-        return false;
+        return MoveIssue::Failed;
     };
     let Some(u) = state.unit_by_id(id).cloned() else {
-        return false;
+        return MoveIssue::Failed;
     };
     // March orders go only to units the player actually commands
     // (allied battalions are planned by their own staff AI).
     if !game.commands(&u) || !u.is_combat_effective() {
-        return false;
+        return MoveIssue::Failed;
     }
     if u.is_emplaced {
-        game.log_line(loc.trf("log.order.emplaced_move", &[("name", &u.name)]));
-        return false;
+        return MoveIssue::Rejected {
+            single_key: "log.order.emplaced_move",
+            reason_key: "reject.emplaced",
+        };
     }
     // Right-click must honour the same gate as the radial menu — a
     // unit that already acted (fired/assaulted) cannot take a march order.
     if u.acted {
-        game.log_line(loc.trf("log.order.already_acted", &[("name", &u.name)]));
-        return false;
+        return MoveIssue::Rejected {
+            single_key: "log.order.already_acted",
+            reason_key: "reject.already_acted",
+        };
     }
     // Target occupancy: a friendly-occupied target hex is
     // legal — the occupant may march away before we arrive; blocking is only
@@ -1788,7 +2543,7 @@ fn issue_move_order(
         let visible_enemy =
             occ.side != state.player_side && state.fog_state(h) == VisibilityState::Visible;
         if visible_enemy {
-            return false;
+            return MoveIssue::Failed;
         }
     }
     let params = game.combat.params().clone();
@@ -1802,43 +2557,242 @@ fn issue_move_order(
         })
         .cloned()
         .collect();
+    let standing = state.unit_by_id(id).and_then(|x| x.move_order.clone());
+    if queued {
+        if let Some(order) = standing {
+            // Chain tail de-duplication: Shift-clicking the destination
+            // the chain already ends at changes nothing (silent).
+            let chain_end = order
+                .queue
+                .back()
+                .map(|leg| leg.dest)
+                .unwrap_or(*order.path.last().expect("standing order has a path"));
+            if chain_end == h {
+                return MoveIssue::Reaffirmed;
+            }
+            // Append: preview the leg from the current chain end (a
+            // probe unit standing there — same speed/terrain maths), so
+            // the ribbon hint and ETA are honest. The leg itself is
+            // re-planned from the live board when it activates.
+            let mut probe = u.clone();
+            probe.position = chain_end;
+            let Some((preview, _)) = find_path(&grid, &probe, &view, h, &params) else {
+                return MoveIssue::Failed;
+            };
+            if preview.is_empty() {
+                return MoveIssue::Failed;
+            }
+            let mut full = preview;
+            full.insert(0, chain_end); // preview includes its start hex
+            // Chain length the ribbon draws (unit + path + queued
+            // previews — same geometry as the mesh, via the shared
+            // polyline helper). The grow animation for an append starts
+            // from OLD length, so the visible chain stays put while the
+            // new leg draws on to the new end.
+            let poly_len = |unit: &BattalionUnit| -> f32 {
+                let pts = route_chain_polyline(&grid, unit);
+                pts.windows(2).map(|w| (w[1] - w[0]).length()).sum()
+            };
+            let old_len = poly_len(&u);
+            if let Some(mu) = state.units.iter_mut().find(|x| x.id == id) {
+                let Some(o) = mu.move_order.as_mut() else {
+                    return MoveIssue::Failed;
+                };
+                o.queue.push_back(MoveLeg {
+                    dest: h,
+                    preview: full,
+                });
+                // A player chain takes the battalion out of division
+                // automation for its whole length, like any manual order.
+                mu.manual_override = true;
+            }
+            let new_len = state.unit_by_id(id).map(poly_len).unwrap_or(old_len);
+            state.orders_dirty = true;
+            state.arrows_grow = true;
+            state.arrows_grow_from = if new_len > 1e-4 {
+                (old_len / new_len).clamp(0.0, 0.999)
+            } else {
+                0.0
+            };
+            return MoveIssue::Appended;
+        }
+        // No standing order — a Shift-click chain start falls through to
+        // the plain issue path below.
+    } else if let Some(order) = standing.as_ref() {
+        // Re-affirm: re-issuing the CURRENT destination keeps the whole
+        // standing order (path, invested hours AND queued legs) — silent,
+        // mirroring the AI side's same-destination rule.
+        if order.path.last() == Some(&h) {
+            return MoveIssue::Reaffirmed;
+        }
+    }
     let Some((path, _)) = find_path(&grid, &u, &view, h, &params) else {
-        return false;
+        return MoveIssue::Failed;
     };
     if path.is_empty() {
-        return false;
+        return MoveIssue::Failed;
     }
+    // Progress retention on re-pointing: a fresh route sharing the old
+    // first step keeps the invested hours (the unit is mid-step into that
+    // hex — only a genuinely different first step restarts the bar).
+    let carry_hours = standing
+        .as_ref()
+        .filter(|o| o.path.first() == path.first())
+        .map(|o| o.hours)
+        .unwrap_or(0.0);
     let eta = {
         let mut probe = u.clone();
         probe.move_order = Some(MoveOrder {
             path: path.clone(),
-            hours: 0.0,
+            hours: carry_hours,
+            queue: Default::default(),
         });
         order_eta_hours(&grid, &probe, &view, &params)
             .map(|hrs| eta_turns(hrs, &params))
             .unwrap_or(0)
     };
     if let Some(mu) = state.units.iter_mut().find(|x| x.id == id) {
-        mu.move_order = Some(MoveOrder { path, hours: 0.0 });
+        mu.move_order = Some(MoveOrder {
+            path,
+            hours: carry_hours,
+            queue: Default::default(),
+        });
         // A personal player command outranks the division order
-        // — the division AI leaves this unit alone until the march ends.
+        // — the division AI leaves this unit alone while the march runs
+        // (and, under the keep-manual setting, until stood by).
         mu.manual_override = true;
     }
     // §6.2 命令顶替: a fresh move order supersedes any attack
     // order the unit registered earlier this turn, just as an attack order
     // supersedes the march (register_order).
-    if state.attack_orders.iter().any(|o| o.attacker == id) {
+    let superseded_attack = state.attack_orders.iter().any(|o| o.attacker == id);
+    if superseded_attack {
         state.attack_orders.retain(|o| o.attacker != id);
-        game.log_line(loc.trf("log.order.attack_superseded", &[("name", &u.name)]));
     }
-    let (q, r, n) = (h.q.to_string(), h.r.to_string(), eta.to_string());
-    game.log_line(loc.trf(
-        "log.move.eta",
-        &[("name", &u.name), ("q", &q), ("r", &r), ("n", &n)],
-    ));
     state.orders_dirty = true;
     state.arrows_grow = true; // grow the ribbon from the unit
-    true
+    state.arrows_grow_from = 0.0;
+    MoveIssue::Issued {
+        eta,
+        superseded_attack,
+    }
+}
+
+/// Single-selection march order: `issue_move_order_for` plus the
+/// per-unit log lines.
+fn issue_move_order(
+    game: &mut GameController,
+    state: &mut TacticalState,
+    h: HexCoord,
+    loc: &Locale,
+    queued: bool,
+) -> bool {
+    let Some(id) = state.selected_unit else {
+        return false;
+    };
+    let Some(u) = state.unit_by_id(id).cloned() else {
+        return false;
+    };
+    match issue_move_order_for(game, state, id, h, queued) {
+        MoveIssue::Issued {
+            eta,
+            superseded_attack,
+        } => {
+            if superseded_attack {
+                game.log_line(loc.trf("log.order.attack_superseded", &[("name", &u.name)]));
+            }
+            let (q, r, n) = (h.q.to_string(), h.r.to_string(), eta.to_string());
+            game.log_line(loc.trf(
+                "log.move.eta",
+                &[("name", &u.name), ("q", &q), ("r", &r), ("n", &n)],
+            ));
+            true
+        }
+        MoveIssue::Appended | MoveIssue::Reaffirmed => true,
+        MoveIssue::Rejected { single_key, .. } => {
+            game.log_line(loc.trf(single_key, &[("name", &u.name)]));
+            false
+        }
+        MoveIssue::Failed => false,
+    }
+}
+
+/// Right-click march with a MULTI selection (DESIGN.md §9.3): every
+/// commanded battalion gets its own standing order. The clicked hex goes
+/// to the first battalion; the rest fan out to the nearest unclaimed
+/// passable hexes around it (the spread_goal idea) so a stack order
+/// never sends five battalions into one hex. Shift+right-click appends
+/// the spread destinations as waypoint legs instead (same orthogonality
+/// as single-select). The log collapses to one summary + per-reason
+/// skip counts.
+fn broadcast_move_order(
+    game: &mut GameController,
+    state: &mut TacticalState,
+    ids: &[usize],
+    h: HexCoord,
+    loc: &Locale,
+    queued: bool,
+) {
+    let Some(grid) = state.grid.clone() else {
+        return;
+    };
+    // Claimed ground: combat-effective units OUTSIDE the broadcast set
+    // (members may reshuffle among themselves), plus each destination as
+    // it is handed out.
+    let member: HashSet<usize> = ids.iter().copied().collect();
+    let mut taken: HashSet<HexCoord> = state
+        .units
+        .iter()
+        .filter(|u| u.is_combat_effective() && !member.contains(&u.id))
+        .map(|u| u.position)
+        .collect();
+    let mut issued = 0usize;
+    let mut skipped: Vec<(&'static str, usize)> = Vec::new();
+    let mut failed = 0usize;
+    for &id in ids {
+        // Nearest unclaimed passable hex around the click (the click
+        // itself included, so the first battalion marches on the point).
+        let dest = (0..=ids.len().max(3) as i32)
+            .flat_map(|ring| h.hexes_in_range(ring))
+            .find(|&c| {
+                grid.in_bounds(c)
+                    && grid.cell(c).map(|cell| cell.is_passable).unwrap_or(false)
+                    && !taken.contains(&c)
+            })
+            .unwrap_or(h);
+        taken.insert(dest);
+        match issue_move_order_for(game, state, id, dest, queued) {
+            MoveIssue::Issued { .. } | MoveIssue::Appended | MoveIssue::Reaffirmed => issued += 1,
+            MoveIssue::Rejected { reason_key, .. } => {
+                match skipped.iter_mut().find(|(k, _)| *k == reason_key) {
+                    Some((_, n)) => *n += 1,
+                    None => skipped.push((reason_key, 1)),
+                }
+            }
+            MoveIssue::Failed => failed += 1,
+        }
+    }
+    if issued > 0 {
+        let (q, r, n) = (h.q.to_string(), h.r.to_string(), issued.to_string());
+        game.log_line(loc.trf(
+            "log.broadcast.move",
+            &[("n", &n), ("q", &q), ("r", &r)],
+        ));
+    }
+    for (reason_key, n) in skipped {
+        let n = n.to_string();
+        game.log_line(loc.trf(
+            "log.broadcast.skipped",
+            &[("n", &n), ("reason", &loc.tr(reason_key))],
+        ));
+    }
+    if failed > 0 {
+        let n = failed.to_string();
+        game.log_line(loc.trf(
+            "log.broadcast.skipped",
+            &[("n", &n), ("reason", &loc.tr("reject.no_path"))],
+        ));
+    }
 }
 
 /// Turn a unit to face a hex (combat facing, §6.3): persists in
@@ -1865,18 +2819,19 @@ fn unit_name(state: &TacticalState, id: usize) -> String {
         .unwrap_or_else(|| format!("#{id}"))
 }
 
-/// Register (or replace) the selected unit's standing attack order
-/// for this turn. One order per unit — re-registering swaps the target; the
-/// order resolves in the end-of-turn unified fire phase, never immediately.
-fn register_order(
-    game: &mut GameController,
+/// Register (or replace) a unit's standing attack order for this turn.
+/// One order per unit — re-registering swaps the target; the order
+/// resolves in the end-of-turn unified fire phase, never immediately.
+/// Returns `(attacker name, description, icon)` so the caller composes
+/// the log line — single-shot logs per unit, the multi-select broadcast
+/// aggregates by description.
+fn register_order_for(
     state: &mut TacticalState,
+    attacker: usize,
     target: AttackTarget,
     loc: &Locale,
-) {
-    let Some(id) = state.selected_unit else {
-        return;
-    };
+) -> (String, String, Option<IconId>) {
+    let id = attacker;
     let name = unit_name(state, id);
     state.attack_orders.retain(|o| o.attacker != id);
     state.attack_orders.push(AttackOrder {
@@ -1889,7 +2844,8 @@ fn register_order(
         // Manual attack orders protect the unit for exactly one
         // turn (they resolve in the fire phase; refresh_turn then releases
         // the unit back to the division AI unless a march/Hold/emplacement
-        // keeps the override alive).
+        // keeps the override alive — or the keep-manual setting (§7.4)
+        // retains it until the player stands the unit by).
         u.manual_override = true;
     }
     state.orders_dirty = true;
@@ -1931,6 +2887,21 @@ fn register_order(
             )
         }
     };
+    (name, desc, icon)
+}
+
+/// Register the PRIMARY selected unit's standing attack order
+/// (single-select path) and log it.
+fn register_order(
+    game: &mut GameController,
+    state: &mut TacticalState,
+    target: AttackTarget,
+    loc: &Locale,
+) {
+    let Some(id) = state.selected_unit else {
+        return;
+    };
+    let (name, desc, icon) = register_order_for(state, id, target, loc);
     game.log_line_icon(
         icon,
         loc.trf("log.order.registered", &[("name", &name), ("desc", &desc)]),
@@ -2546,6 +3517,12 @@ fn execute_movement(
                 had_events = true;
             }
             MovementEvent::Progress { .. } => {}
+            // A chain waypoint was reached — the order rolled onto its
+            // next leg. Log-silent (only the FINAL arrival announces
+            // itself); the standing-order change still flags the visuals.
+            MovementEvent::WaypointReached { .. } => {
+                had_events = true;
+            }
         }
     }
     if moved || had_events {
@@ -2595,7 +3572,7 @@ fn end_player_turn(
     ));
     state.command_mode = CommandMode::Select;
     state.clear_highlights();
-    state.selected_unit = None;
+    state.clear_selection();
     state.units_dirty = true;
     // AI turn is queued in tick_battle when current_side flips.
 }
@@ -2834,6 +3811,7 @@ fn apply_ai_action(
                             mu.move_order = Some(MoveOrder {
                                 path: path.clone(),
                                 hours: 0.0,
+                                queue: Default::default(),
                             });
                         }
                     }
@@ -2985,6 +3963,25 @@ fn apply_ai_action(
             } else {
                 !is_rocket && hex_visible && enemy_at_hex
             };
+            // Registration backstop for AREA missions: the planner aims
+            // clean zones, but ANY area registration whose blast circle
+            // (aim hex + ring 1) holds a same-side targetable battalion
+            // is refused here — the resolution model always splashes the
+            // whole weighted circle, and deliberate friendly fire is not
+            // AI policy. Precise missions (single hex) never splash and
+            // pass untouched; the player's own manual missions are not
+            // AI-registered and keep their accepted-risk arc.
+            if !precise {
+                let friend_in_blast = state.units.iter().any(|f| {
+                    f.side == acting_side
+                        && f.id != *attacker_id
+                        && f.is_targetable()
+                        && f.position.distance(*target_hex) <= 1
+                });
+                if friend_in_blast {
+                    return false;
+                }
+            }
             let an = state
                 .unit_by_id(*attacker_id)
                 .map(|u| u.name.clone())
@@ -3044,15 +4041,29 @@ fn apply_ai_action(
     }
 }
 
+/// Drop the standing order of the (owner tag, division) group — the HQ
+/// radial bar's and the OOB header's cancel affordance. Returns true when
+/// an order was there (a same-name division of another nation keeps its).
+fn cancel_division_order(game: &mut GameController, tag: &str, division: &str) -> bool {
+    game.div_orders
+        .remove(&(tag.to_string(), division.to_string()))
+        .is_some()
+}
+
 /// Issue (or replace) a division order — validated, logged, and
 /// planned immediately so the division moves this very turn. Shared by the
 /// HQ radial bar (via `PlayerCommand::DivOrder`) and the map target pick.
+/// `tag` + `division` are the commanded division's (owner country, name)
+/// identity (§7.5) — the order drives that division only, never a
+/// same-name one under another nation.
+#[allow(clippy::too_many_arguments)]
 fn issue_division_order(
     game: &mut GameController,
     state: &mut TacticalState,
     loc: &Locale,
     notice: &mut NoticeBar,
     now: f32,
+    tag: &str,
     division: &str,
     pick: DivOrderPick,
 ) -> bool {
@@ -3065,7 +4076,7 @@ fn issue_division_order(
     let div_ok = state
         .units
         .iter()
-        .any(|u| u.side == state.player_side && u.division == division);
+        .any(|u| u.side == state.player_side && u.tag == tag && u.division == division);
     if !div_ok {
         return false;
     }
@@ -3085,8 +4096,9 @@ fn issue_division_order(
         DivOrderPick::Engage { hex, .. } => Some(hex),
         _ => None,
     };
+    let key = (tag.to_string(), division.to_string());
     game.div_orders.insert(
-        division.to_string(),
+        key.clone(),
         DivisionOrder {
             pick,
             seized: false,
@@ -3095,7 +4107,7 @@ fn issue_division_order(
     );
     let kind = game
         .div_orders
-        .get(division)
+        .get(&key)
         .map(|o| loc.tr(o.kind_key()).into_owned())
         .unwrap_or_default();
     let msg = loc.trf("log.div.ordered", &[("div", division), ("kind", &kind)]);
@@ -3162,11 +4174,11 @@ fn plan_division_orders(
 
     let mut planned = false;
     let orders = std::mem::take(&mut game.div_orders);
-    for (division, mut order) in orders {
+    for ((tag, division), mut order) in orders {
         let div_units: Vec<usize> = state
             .units
             .iter()
-            .filter(|u| u.side == player && u.division == division)
+            .filter(|u| u.side == player && u.tag == tag && u.division == division)
             .map(|u| u.id)
             .collect();
         let effective = div_units
@@ -3181,6 +4193,7 @@ fn plan_division_orders(
         let div_owned = |h: HexCoord| {
             state.units.iter().any(|u| {
                 u.side == player
+                    && u.tag == tag
                     && u.division == division
                     && u.position == h
                     && u.is_combat_effective()
@@ -3244,7 +4257,9 @@ fn plan_division_orders(
 
         // ── Plan the division (one TacticalAi per division per turn; the
         // seed mixes in division + turn so replays stay deterministic and
-        // tie-breaks vary across turns).
+        // tie-breaks vary across turns). The seed stays keyed on the NAME
+        // alone — mixing the tag in would shift every existing battle's
+        // plan for no gain (the pair's own units are planned either way).
         let mut h = 0xcbf29ce484222325u64;
         for b in division.bytes() {
             h = (h ^ b as u64).wrapping_mul(0x100000001b3);
@@ -3255,7 +4270,7 @@ fn plan_division_orders(
         let own: Vec<BattalionUnit> = state
             .units
             .iter()
-            .filter(|u| u.side == player && u.division == division)
+            .filter(|u| u.side == player && u.tag == tag && u.division == division)
             .cloned()
             .collect();
         let mut ai = TacticalAi::new(player, order.phase_tactic(), seed);
@@ -3294,13 +4309,45 @@ fn plan_division_orders(
             ],
         ));
         planned = true;
-        game.div_orders.insert(division, order);
+        game.div_orders.insert((tag, division), order);
     }
     game.div_planned_turn = game.session.turn_number;
     if planned {
         state.orders_dirty = true;
     }
     planned
+}
+
+/// The battalions `contingent` plans this turn: the player side's units of
+/// the contingent's still-unordered divisions, matched on the owner tag as
+/// well as the division name — a same-name division belonging to the player
+/// (or to another nation) must never enter an allied slice.
+fn contingent_units<'a>(
+    state: &'a TacticalState,
+    contingent: &AllyContingent,
+    player: Side,
+    slice: &[String],
+) -> Vec<&'a BattalionUnit> {
+    state
+        .units
+        .iter()
+        .filter(|u| u.side == player && u.tag == contingent.tag && slice.contains(&u.division))
+        .collect()
+}
+
+/// The contingent divisions the AI still plans: its own list minus every
+/// division the player put under a standing order (that one is planned by
+/// `plan_division_orders` instead — §7.4/§7.5, "suspend from the allied
+/// slice while the order stands"). The suspension is read from the
+/// (contingent tag, division name) pair: a player-owned division that
+/// happens to share the name neither suspends nor is suspended by it.
+fn contingent_slice(game: &GameController, contingent: &AllyContingent) -> Vec<String> {
+    contingent
+        .divisions
+        .iter()
+        .filter(|d| !game.div_ordered(&contingent.tag, d))
+        .cloned()
+        .collect()
 }
 
 /// Turn-start planning for the AI-controlled allied
@@ -3342,19 +4389,12 @@ fn plan_allied_nations(game: &mut GameController, state: &mut TacticalState, loc
     let mut planned = false;
     let allies = game.allies.clone();
     for contingent in &allies {
-        let slice: Vec<String> = contingent
-            .divisions
-            .iter()
-            .filter(|d| !game.div_orders.contains_key(*d))
-            .cloned()
-            .collect();
+        let slice: Vec<String> = contingent_slice(game, contingent);
         if slice.is_empty() {
             continue;
         }
-        let own: Vec<BattalionUnit> = state
-            .units
-            .iter()
-            .filter(|u| u.side == player && slice.contains(&u.division))
+        let own: Vec<BattalionUnit> = contingent_units(state, contingent, player, &slice)
+            .into_iter()
             .cloned()
             .collect();
         if !own.iter().any(|u| u.is_combat_effective()) {
@@ -3473,6 +4513,38 @@ fn tick_division_orders(
     crate::stage!("tick_division_orders: done");
 }
 
+/// Full-turn per-unit reset plus the manual-override hand-back report:
+/// refresh every battalion, then name the player-side battalions of
+/// divisions with a standing order whose override the reset released
+/// (the battle log announces them — a division-order re-plan must not
+/// look like it silently stole the unit). Under the keep-manual policy
+/// (§7.4) the reset never releases an override, so the report is empty
+/// and only the player's stand-by returns units.
+fn refresh_turn_all(
+    units: &mut [BattalionUnit],
+    keep_manual: bool,
+    player_side: Side,
+    div_orders: &HashMap<(String, String), DivisionOrder>,
+) -> Vec<String> {
+    let mut returned: Vec<String> = Vec::new();
+    for u in units.iter_mut() {
+        let was_manual = u.manual_override;
+        if keep_manual {
+            u.refresh_turn_keep_manual();
+        } else {
+            u.refresh_turn();
+        }
+        if was_manual
+            && !u.manual_override
+            && u.side == player_side
+            && has_div_order(div_orders, &u.tag, &u.division)
+        {
+            returned.push(u.name.clone());
+        }
+    }
+    returned
+}
+
 /// Both sides have acted: retreat steps, §6.14 out-of-bounds leaving,
 /// attrition, per-turn resets, fog, clock, flag tick + collapse
 /// trigger (§6.11), sync/victory checks (§6.12/§8).
@@ -3548,9 +4620,20 @@ fn finish_full_turn(
     }
     crate::stage!("finish_full_turn: regen+retreat done");
 
-    // Encirclement attrition (§6.4).
-    game.combat
+    // Encirclement attrition (§6.4) — the org it grinds off rides the sync
+    // damage channel like any combat loss: a pocket broken purely by siege
+    // used to reach HOI4 with no feedback at all.
+    let attrition = game
+        .combat
         .apply_encirclement_attrition(&grid, &mut state.units);
+    for h in &attrition {
+        let (tag, prov, mx_org, mx_str) = state
+            .unit_by_id(h.unit_id)
+            .map(|u| (u.tag.clone(), u.hoi4_province, u.max_org, u.max_strength))
+            .unwrap_or_else(|| (String::new(), None, 1.0, 1.0));
+        game.session
+            .record_damage(h.side, &tag, prov, h.org_lost, 0.0, mx_org, mx_str);
+    }
     crate::stage!("finish_full_turn: attrition done");
 
     // §6.11: end-of-turn flag tick — the control ratio inside
@@ -3599,8 +4682,20 @@ fn finish_full_turn(
     }
 
     // Per-turn reset for everyone (§6.2): action flags + defense pools.
-    for u in state.units.iter_mut() {
-        u.refresh_turn();
+    // A manual override expires inside refresh_turn once its command is
+    // done — surface the hand-back so a division-order re-plan never looks
+    // like it silently stole the battalion. With the keep-manual setting
+    // (§7.4) no override expires here at all: completed commands hold the
+    // battalion until the player stands it by, and the release log below
+    // then has nothing to announce.
+    let returned = refresh_turn_all(
+        &mut state.units,
+        game.keep_manual_override,
+        game.session.player_side,
+        &game.div_orders,
+    );
+    if !returned.is_empty() {
+        game.log_line(loc.trf("log.div.returned", &[("names", &returned.join(", "))]));
     }
 
     crate::stage!("finish_full_turn: flag tick done");
@@ -3665,6 +4760,54 @@ fn check_victory_and_transition(
     }
 }
 
+/// The outcome of a deployment-phase recall group (one division, or the
+/// whole player force).
+enum RecallOutcome {
+    /// An allied division: nothing was pulled back — its stored sector
+    /// suggestion (if any) was cleared instead.
+    Allied,
+    /// Player battalions returned to the OOB queue.
+    Recalled(usize),
+}
+
+/// Deployment-phase recall. `key` is a division's (owner tag, division name)
+/// command identity, `None` = the whole player side.
+/// An ALLIED division's "recall" clears its sector suggestion and pulls
+/// nothing back — allied battalions deploy through their own AI at
+/// BeginBattle (§7.5). A player division's placed battalions return to the
+/// OOB queue; the tag keeps a same-name ally's battalions where they are.
+fn recall_group(
+    game: &mut GameController,
+    state: &mut TacticalState,
+    key: Option<(&str, &str)>,
+) -> RecallOutcome {
+    if let Some((tag, division)) = key {
+        if game.allied_division_of(tag, division).is_some() {
+            if game.clear_ally_sector(tag, division) {
+                state.ally_sectors_dirty = true;
+            }
+            return RecallOutcome::Allied;
+        }
+    }
+    let player = state.player_side;
+    let mut recalled = 0usize;
+    for u in &mut state.units {
+        let in_scope = u.side == player
+            && !u.undeployed
+            && key
+                .map(|(tag, d)| u.tag == tag && u.division == d)
+                .unwrap_or(true);
+        if in_scope {
+            u.undeployed = true;
+            u.position = BattalionUnit::OFFBOARD;
+            u.move_order = None;
+            u.is_holding = false;
+            recalled += 1;
+        }
+    }
+    RecallOutcome::Recalled(recalled)
+}
+
 /// A drawn rectangle's deployable area — `anchor.rect_between`
 /// (release) ∩ the side's zone ∩ passable, deployable terrain (the guard
 /// shared by sector deploy and the allied suggestion path), minus
@@ -3690,6 +4833,37 @@ fn sector_area(
         .collect()
 }
 
+/// The player's Auto Deploy button: place the OOB waiters of the
+/// divisions SHE commands and leave every allied contingent's battalions
+/// OFFBOARD for their own AI (§7.5, `deploy_allied_nations` at BeginBattle).
+/// The exclusion is the (owner country, division name) pair — a same-name
+/// division of the player's own is still hers to deploy.
+/// Hand-placed units must survive: the planner skips non-undeployed units
+/// outright, and their hexes are also marked pre-used so nobody re-takes
+/// them. Returns the number of battalions handed to the planner.
+fn auto_deploy_player(game: &GameController, state: &mut TacticalState) -> usize {
+    let player = state.player_side;
+    let pre_used: HashSet<(i32, i32)> = state
+        .units
+        .iter()
+        .filter(|u| u.side == player && !u.undeployed && u.is_combat_effective())
+        .map(|u| (u.position.q, u.position.r))
+        .collect();
+    let exclude: HashSet<(String, String)> = game
+        .allies
+        .iter()
+        .flat_map(|a| a.divisions.iter().map(move |d| (a.tag.clone(), d.clone())))
+        .collect();
+    deploy_side(
+        state,
+        player,
+        CombatTactic::Default,
+        &pre_used,
+        &exclude,
+        true, // OOB waiters only — hand-placed stay put
+    )
+}
+
 /// AI deployment (§11.1.5, terrain-aware scoring): arranges `side`'s
 /// combat-effective units inside its own zone.
 /// Runs for the ENEMY at Begin Battle, out of the player's sight; also used
@@ -3698,9 +4872,11 @@ fn sector_area(
 /// placed by hand. Zones already hold only deployable hexes.
 /// The tactic card shapes the deployment (urban garrisons /
 /// cover lurking / river hugging); the player's card is Default.
-/// `exclude` names divisions that must stay OFFBOARD (allied AI
-/// slices on the player's side) — ai_deploy's `only_division` is an
-/// INCLUSION filter, so an exclusion deploys division-by-division.
+/// `exclude` lists (owner tag, division name) pairs that must stay
+/// OFFBOARD (allied AI slices on the player's side) — ai_deploy's
+/// `only_division` is an INCLUSION filter, so an exclusion deploys
+/// division-by-division; the pair keeps a same-name division of the
+/// player's own in the deploy.
 /// `only_undeployed`: the player's Auto Deploy passes
 /// true (hand-placed units stay put); the BeginBattle ENEMY deploy must pass
 /// false — enemy battalions arrive NOT marked undeployed (scenario.rs
@@ -3713,7 +4889,7 @@ fn deploy_side(
     side: Side,
     tactic: CombatTactic,
     pre_used: &HashSet<(i32, i32)>,
-    exclude: &HashSet<String>,
+    exclude: &HashSet<(String, String)>,
     only_undeployed: bool,
 ) -> usize {
     let Some((a_zone, d_zone)) = state.deployment_zones.clone() else {
@@ -3727,10 +4903,13 @@ fn deploy_side(
     } else {
         (d_zone, a_zone)
     };
+    let excluded = |u: &BattalionUnit| exclude.iter().any(|(t, d)| *t == u.tag && *d == u.division);
     let mut placed = 0usize;
-    for u in state.units.iter().filter(|u| {
-        u.side == side && (!only_undeployed || u.undeployed) && !exclude.contains(&u.division)
-    }) {
+    for u in state
+        .units
+        .iter()
+        .filter(|u| u.side == side && (!only_undeployed || u.undeployed) && !excluded(u))
+    {
         if u.is_combat_effective() {
             placed += 1;
         }
@@ -3746,6 +4925,7 @@ fn deploy_side(
             pre_used,
             None,
             None,
+            None,
             only_undeployed,
         );
     } else {
@@ -3756,17 +4936,17 @@ fn deploy_side(
         // partition gives each division its own slice of the band instead
         // of every division spanning the whole front.
         let mut used = pre_used.clone();
-        let mut divisions: Vec<String> = Vec::new();
+        let mut keys: Vec<(String, String)> = Vec::new();
         for u in &state.units {
-            if u.side == side
-                && (!only_undeployed || u.undeployed)
-                && !exclude.contains(&u.division)
-                && !divisions.contains(&u.division)
-            {
-                divisions.push(u.division.clone());
+            if u.side == side && (!only_undeployed || u.undeployed) && !excluded(u) {
+                let key = (u.tag.clone(), u.division.clone());
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
             }
         }
-        for division in &divisions {
+        let divisions: Vec<String> = keys.iter().map(|(_, d)| d.clone()).collect();
+        for (tag, division) in &keys {
             tactical_ai::ai_deploy_impl(
                 &grid,
                 &mut state.units,
@@ -3776,11 +4956,13 @@ fn deploy_side(
                 tactic,
                 &used,
                 Some(division),
+                Some(tag),
                 Some(&divisions),
                 only_undeployed,
             );
             for u in &state.units {
                 if u.side == side
+                    && u.tag == *tag
                     && u.division == *division
                     && u.position != BattalionUnit::OFFBOARD
                 {
@@ -3793,11 +4975,7 @@ fn deploy_side(
     // fit (zone smaller than the force) keep the OFFBOARD sentinel and stay
     // in the OOB queue. Excluded (allied) divisions keep waiting OFFBOARD.
     for u in &mut state.units {
-        if u.side == side
-            && u.undeployed
-            && u.position != BattalionUnit::OFFBOARD
-            && !exclude.contains(&u.division)
-        {
+        if u.side == side && u.undeployed && u.position != BattalionUnit::OFFBOARD && !excluded(u) {
             u.undeployed = false;
         }
     }
@@ -3810,13 +4988,17 @@ fn deploy_side(
 /// The rectangle is intersected with the player's zone + deployable terrain
 /// and the planner fills it with the division's undeployed battalions
 /// (hand-placed hexes protected via `pre_used`, exactly like Auto Deploy).
-/// For an ALLIED division (§7.5) the rectangle is a deployment
+/// `tag` + `division` are the division's (owner country, name) command
+/// identity (§7.5): a drag for the player's own division deploys hers even
+/// when an ally fields a division of the same name, and vice versa.
+/// For an ALLIED division the rectangle is a deployment
 /// SUGGESTION instead — stored into `game.allied_sectors` and consumed by
 /// the division's own AI at BeginBattle (re-drag overwrites, Recall clears).
 #[allow(clippy::too_many_arguments)]
 fn commit_sector_deploy(
     state: &mut TacticalState,
     game: &mut GameController,
+    tag: String,
     division: String,
     anchor: HexCoord,
     release: HexCoord,
@@ -3861,9 +5043,8 @@ fn commit_sector_deploy(
     }
     // The allied branch stores the hint and stops — the division
     // waits OFFBOARD for its own AI (deploy_allied_nations at BeginBattle).
-    if game.allied_division(&division).is_some() {
-        game.allied_sectors
-            .insert(division.clone(), (anchor, release));
+    if game.allied_division_of(&tag, &division).is_some() {
+        game.set_ally_sector(&tag, &division, (anchor, release));
         state.ally_sectors_dirty = true;
         notice.flash = Some(FlashNotice::plain(
             loc.trf("notice.deploy.ally_sector_set", &[("div", &division)]),
@@ -3875,7 +5056,11 @@ fn commit_sector_deploy(
         .units
         .iter()
         .filter(|u| {
-            u.side == player && u.undeployed && u.division == division && u.is_combat_effective()
+            u.side == player
+                && u.tag == tag
+                && u.undeployed
+                && u.division == division
+                && u.is_combat_effective()
         })
         .count();
     tactical_ai::ai_deploy(
@@ -3887,10 +5072,16 @@ fn commit_sector_deploy(
         CombatTactic::Default,
         &used,
         Some(&division),
+        Some(&tag),
     );
     let mut placed = 0usize;
     for u in &mut state.units {
-        if u.side == player && u.undeployed && u.position != BattalionUnit::OFFBOARD {
+        if u.side == player
+            && u.tag == tag
+            && u.division == division
+            && u.undeployed
+            && u.position != BattalionUnit::OFFBOARD
+        {
             u.undeployed = false;
             placed += 1;
         }
@@ -3920,6 +5111,9 @@ fn commit_sector_deploy(
 /// (rect ∩ zone ∩ deployable, the sector_area guard; empty → the full
 /// player zone). A deployed division's hexes join `pre_used` so later
 /// divisions and nations spread instead of stacking.
+/// Every step is scoped to the (contingent tag, division name) pair: a
+/// player-owned battalion that happens to share an ally's division name is
+/// never placed, flagged or crowded out by this pass.
 fn deploy_allied_nations(game: &mut GameController, state: &mut TacticalState, loc: &Locale) {
     if game.allies.is_empty() {
         return;
@@ -3945,7 +5139,6 @@ fn deploy_allied_nations(game: &mut GameController, state: &mut TacticalState, l
         .map(|u| (u.position.q, u.position.r))
         .collect();
     let allies = game.allies.clone();
-    let sectors = game.allied_sectors.clone();
     // The full player-side division order — the sector partition
     // slices the band per division instead of letting every division span
     // the whole front.
@@ -3963,10 +5156,10 @@ fn deploy_allied_nations(game: &mut GameController, state: &mut TacticalState, l
     };
     for contingent in &allies {
         for division in &contingent.divisions {
-            let area: Vec<HexCoord> = sectors
-                .get(division)
+            let area: Vec<HexCoord> = game
+                .ally_sector(&contingent.tag, division)
                 .map(|(anchor, release)| {
-                    sector_area(&grid, &self_zone, *anchor, *release, &pre_used)
+                    sector_area(&grid, &self_zone, anchor, release, &pre_used)
                 })
                 .filter(|area| !area.is_empty())
                 .unwrap_or_else(|| self_zone.clone());
@@ -3979,14 +5172,16 @@ fn deploy_allied_nations(game: &mut GameController, state: &mut TacticalState, l
                 contingent.tactic,
                 &pre_used,
                 Some(division),
+                Some(&contingent.tag),
                 Some(&division_order),
                 false, // BeginBattle allied deploy: arrange the contingent whole
             );
             // Division-scoped flip (deploy_side's whole-side flip is the
-            // wrong granularity here): only this division's placed units,
-            // and their hexes crowd out the next division.
+            // wrong granularity here): only this owner's division's placed
+            // units, and their hexes crowd out the next division.
             for u in &mut state.units {
                 if u.side == player
+                    && u.tag == contingent.tag
                     && u.division == *division
                     && u.undeployed
                     && u.position != BattalionUnit::OFFBOARD
@@ -4061,11 +5256,15 @@ fn tick_sector_preview(mut state: ResMut<TacticalState>, time: Res<Time>, mut la
         CombatTactic::Default,
         &used,
         Some(&pick.division),
+        Some(&pick.tag),
     );
     state.sector_preview = probe
         .iter()
         .filter(|u| {
-            u.side == player && u.division == pick.division && u.position != BattalionUnit::OFFBOARD
+            u.side == player
+                && u.tag == pick.tag
+                && u.division == pick.division
+                && u.position != BattalionUnit::OFFBOARD
         })
         .map(|u| (u.id, u.position))
         .collect();
@@ -4108,17 +5307,24 @@ fn update_fog(state: &mut TacticalState, game: &GameController) {
         );
     // A selected enemy that slips out of sight must not keep
     // leaking through the selection ring / stat panel / command highlights.
-    if let Some(id) = state.selected_unit {
-        let leaks = state.unit_by_id(id).is_some_and(|u| {
-            u.side != state.player_side
-                && state
-                    .fog
-                    .as_ref()
-                    .is_some_and(|f| !f.is_visible(u.position))
-        });
-        if leaks {
-            state.selected_unit = None;
-        }
+    let leaked: Vec<usize> = state
+        .selection
+        .iter()
+        .copied()
+        .filter(|&id| {
+            state.unit_by_id(id).is_some_and(|u| {
+                u.side != state.player_side
+                    && state
+                        .fog
+                        .as_ref()
+                        .is_some_and(|f| !f.is_visible(u.position))
+            })
+        })
+        .collect();
+    if !leaked.is_empty() {
+        state.selection.retain(|id| !leaked.contains(id));
+        state.selected_unit = state.selection.last().copied();
+        state.units_dirty = true;
     }
     state.board_colors_dirty = true;
 }
@@ -4727,7 +5933,7 @@ mod tests {
         ];
         let loc = Locale::from_text(tactical_locale::Language::English, "", "");
         let mut fx = crate::fx::FxQueue::default();
-        state.selected_unit = Some(1);
+        state.select_only(1);
 
         // Point-blank (dist 1): a direct strike, NOT an assault.
         let sel = state.unit_by_id(1).unwrap().clone();
@@ -4832,5 +6038,1395 @@ mod tests {
         let want21 = yaw(HexCoord::new(4, 4), HexCoord::new(3, 3));
         assert_eq!(state.unit_facing.get(&1), Some(&want12), "attacker faces target");
         assert_eq!(state.unit_facing.get(&2), Some(&want21), "target faces back");
+    }
+
+    /// The full-turn reset + hand-back report: the default policy releases
+    /// every completed manual command and reports player battalions of
+    /// divisions with a standing order (the log.announce set).
+    #[test]
+    fn refresh_turn_all_default_releases_and_reports_ordered_divisions() {
+        let mk = |id: usize, name: &str, div: &str, side: Side| {
+            let mut u = BattalionUnit::new(id, name, UnitType::Infantry, side, HexCoord::ZERO);
+            u.division = div.to_string();
+            u.tag = "GER".to_string();
+            u.manual_override = true; // command completed last turn
+            u
+        };
+        let mut units = vec![
+            mk(1, "1a", "1. Div", Side::Attacker),
+            mk(2, "1b", "1. Div", Side::Attacker),
+            mk(3, "2a", "2. Div", Side::Attacker),
+            mk(4, "foe", "E.Div", Side::Defender),
+        ];
+        let mut orders = HashMap::new();
+        orders.insert(
+            ("GER".to_string(), "1. Div".to_string()),
+            DivisionOrder {
+                pick: DivOrderPick::Advance,
+                seized: false,
+                engage_last_pos: None,
+            },
+        );
+        let returned = refresh_turn_all(&mut units, false, Side::Attacker, &orders);
+        assert!(
+            units.iter().all(|u| !u.manual_override),
+            "the default policy releases every completed command"
+        );
+        assert_eq!(
+            returned,
+            vec!["1a".to_string(), "1b".to_string()],
+            "only player battalions of ordered divisions are announced"
+        );
+    }
+
+    /// The keep-manual policy: refresh after refresh releases nothing and
+    /// the hand-back report stays empty — stand-by is the only release.
+    #[test]
+    fn refresh_turn_all_keep_manual_releases_nothing() {
+        let mk = |id: usize, name: &str, div: &str| {
+            let mut u =
+                BattalionUnit::new(id, name, UnitType::Infantry, Side::Attacker, HexCoord::ZERO);
+            u.division = div.to_string();
+            u.tag = "GER".to_string();
+            u.manual_override = true; // command completed last turn
+            u
+        };
+        let mut units = vec![mk(1, "1a", "1. Div"), mk(2, "1b", "1. Div")];
+        let mut orders = HashMap::new();
+        orders.insert(
+            ("GER".to_string(), "1. Div".to_string()),
+            DivisionOrder {
+                pick: DivOrderPick::Advance,
+                seized: false,
+                engage_last_pos: None,
+            },
+        );
+        let returned = refresh_turn_all(&mut units, true, Side::Attacker, &orders);
+        assert!(
+            units.iter().all(|u| u.manual_override),
+            "keep-manual retains completed commands"
+        );
+        assert!(
+            returned.is_empty(),
+            "no hand-backs to announce under keep-manual"
+        );
+        // Stand-by still releases — and stays released on later resets.
+        units[0].stand_by();
+        assert!(!units[0].manual_override, "stand-by returns the battalion");
+        let returned = refresh_turn_all(&mut units, true, Side::Attacker, &orders);
+        assert!(
+            returned.is_empty(),
+            "a stood-down battalion is already released — the keep reset reports nothing"
+        );
+        assert!(
+            !units[0].manual_override && units[1].manual_override,
+            "release sticks; the untouched battalion stays manual"
+        );
+    }
+
+    /// A battle-ready controller+state pair for the §7.4 click-toggle /
+    /// Hold tests: the player is the Attacker and it is her tactical turn.
+    fn tactical_fixture() -> (GameController, TacticalState) {
+        let mut game = GameController::new(Side::Attacker, CombatTactic::Default, 7);
+        game.session.phase = BattlePhase::TacticalActive;
+        game.session.current_side = Side::Attacker;
+        let mut state = TacticalState::default();
+        state.grid = Some(Arc::new(HexGrid::new(8, 8, Terrain::Plains)));
+        (game, state)
+    }
+
+    fn inf(id: usize, div: &str, side: Side) -> BattalionUnit {
+        let mut u = BattalionUnit::new(id, "1.Inf", UnitType::Infantry, side, HexCoord::ZERO);
+        u.name = format!("{id}.Inf");
+        u.division = div.to_string();
+        u
+    }
+
+    /// §6.8/§8.2: the 20% disengagement penalty is org the unit really lost —
+    /// it rides the sync damage channel like any other loss.
+    #[test]
+    fn manual_retreat_books_its_org_penalty() {
+        let (mut game, mut state) = tactical_fixture();
+        state.player_side = Side::Attacker;
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(3, 3);
+        a.tag = "GER".to_string();
+        let mut e = inf(9, "9. Div", Side::Defender);
+        e.position = HexCoord::new(4, 3);
+        state.units = vec![a, e];
+        let before = state.unit_by_id(1).unwrap().org;
+        assert!(retreat_core(&mut game, &mut state, 1));
+        let after = state.unit_by_id(1).unwrap();
+        assert_eq!(after.state, UnitState::Retreating);
+        assert!((after.org - before * 0.8).abs() < 1e-3, "{}", after.org);
+        // Booked into the hour's rollup (the live point channel needs a
+        // battle context; the ratio rollup always updates).
+        let (org, _) = game
+            .session
+            .hourly_damage_summary()
+            .for_side(Side::Attacker);
+        assert!(org > 0.0, "retreat org penalty not booked: {org}");
+    }
+
+    /// Keep-manual mode: right-click self on an AI-commanded battalion
+    /// takes it manual and cancels its standing orders — an AI order must
+    /// not keep running under the manual flag.
+    #[test]
+    fn right_click_self_keep_mode_takes_manual_and_clears_orders() {
+        let (mut game, mut state) = tactical_fixture();
+        game.keep_manual_override = true;
+        game.div_orders.insert(
+            ("GER".to_string(), "1. Div".to_string()),
+            DivisionOrder {
+                pick: DivOrderPick::Advance,
+                seized: false,
+                engage_last_pos: None,
+            },
+        );
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.tag = "GER".to_string();
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(1, 0)],
+            hours: 0.0,
+            queue: Default::default(),
+        });
+        state.units = vec![u, inf(2, "E.Div", Side::Defender)];
+        state.attack_orders.push(AttackOrder {
+            attacker: 1,
+            target: AttackTarget::Assault(2),
+        });
+        let sel = state.unit_by_id(1).unwrap().clone();
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        assert!(right_click_self(&mut game, &mut state, &sel, &loc));
+        let u = state.unit_by_id(1).unwrap();
+        assert!(u.manual_override, "AI-commanded battalion taken manual");
+        assert!(u.move_order.is_none(), "standing AI march cancelled");
+        assert!(
+            state.attack_orders.iter().all(|o| o.attacker != 1),
+            "registered attack order cancelled at the hand-over"
+        );
+        assert!(state.orders_dirty && state.units_dirty, "visuals flagged");
+        assert_eq!(
+            game.log.last().unwrap().text,
+            "1.Inf under manual command — division AI hands off",
+            "division-order split log key"
+        );
+    }
+
+    /// Keep-manual mode: an idle battalion under no division order is
+    /// taken manual too (plain log key).
+    #[test]
+    fn right_click_self_keep_mode_takes_idle_battalion_manual() {
+        let (mut game, mut state) = tactical_fixture();
+        game.keep_manual_override = true;
+        state.units = vec![inf(1, "", Side::Attacker)];
+        let sel = state.unit_by_id(1).unwrap().clone();
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        assert!(right_click_self(&mut game, &mut state, &sel, &loc));
+        assert!(state.unit_by_id(1).unwrap().manual_override);
+        assert_eq!(
+            game.log.last().unwrap().text,
+            "1.Inf under manual command"
+        );
+    }
+
+    /// Default mode is untouched: idle non-manual → no-op; a standing
+    /// order still cancels (stand by); manual still releases.
+    #[test]
+    fn right_click_self_default_mode_unchanged() {
+        let (mut game, mut state) = tactical_fixture();
+        game.keep_manual_override = false;
+        state.units = vec![inf(1, "1. Div", Side::Attacker)];
+        let sel = state.unit_by_id(1).unwrap().clone();
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        assert!(
+            !right_click_self(&mut game, &mut state, &sel, &loc),
+            "idle non-manual battalion: no-op"
+        );
+        assert!(game.log.is_empty());
+        assert!(!state.unit_by_id(1).unwrap().manual_override);
+
+        // A standing order still cancels (the historic stand-by).
+        state
+            .units
+            .iter_mut()
+            .find(|u| u.id == 1)
+            .unwrap()
+            .move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(1, 0)],
+            hours: 0.0,
+            queue: Default::default(),
+        });
+        let sel = state.unit_by_id(1).unwrap().clone();
+        assert!(right_click_self(&mut game, &mut state, &sel, &loc));
+        assert!(state.unit_by_id(1).unwrap().move_order.is_none());
+        assert!(!state.unit_by_id(1).unwrap().manual_override);
+        assert_eq!(
+            game.log.last().unwrap().text,
+            "1.Inf stands by — orders cancelled"
+        );
+
+        // A manual battalion releases as always.
+        let u1 = state.units.iter_mut().find(|u| u.id == 1).unwrap();
+        u1.manual_override = true;
+        u1.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(1, 0)],
+            hours: 0.0,
+            queue: Default::default(),
+        });
+        let sel = state.unit_by_id(1).unwrap().clone();
+        assert!(right_click_self(&mut game, &mut state, &sel, &loc));
+        assert!(!state.unit_by_id(1).unwrap().manual_override);
+        assert!(state.unit_by_id(1).unwrap().move_order.is_none());
+    }
+
+    /// Keep mode never breaks the release direction: a manual battalion
+    /// still stands by back to its division.
+    #[test]
+    fn right_click_self_keep_mode_manual_still_stands_by() {
+        let (mut game, mut state) = tactical_fixture();
+        game.keep_manual_override = true;
+        game.div_orders.insert(
+            ("GER".to_string(), "1. Div".to_string()),
+            DivisionOrder {
+                pick: DivOrderPick::Advance,
+                seized: false,
+                engage_last_pos: None,
+            },
+        );
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.tag = "GER".to_string();
+        u.manual_override = true;
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(1, 0)],
+            hours: 0.0,
+            queue: Default::default(),
+        });
+        state.units = vec![u];
+        let sel = state.unit_by_id(1).unwrap().clone();
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        assert!(right_click_self(&mut game, &mut state, &sel, &loc));
+        assert!(!state.unit_by_id(1).unwrap().manual_override, "released");
+        assert!(state.unit_by_id(1).unwrap().move_order.is_none());
+        assert_eq!(
+            game.log.last().unwrap().text,
+            "1.Inf stands by — orders cancelled, back under division AI command"
+        );
+    }
+
+    /// H (take cover) applies IMMEDIATELY: stance + acted + manual flag
+    /// change, the standing march and registered attack order die, and
+    /// the unit/order visuals are flagged the same frame — no deselect or
+    /// turn tick required (regression: the dirty flags were missing).
+    #[test]
+    fn apply_toggle_hold_take_cover_is_immediate() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(1, 0)],
+            hours: 0.0,
+            queue: Default::default(),
+        });
+        state.units = vec![u, inf(2, "E.Div", Side::Defender)];
+        state.attack_orders.push(AttackOrder {
+            attacker: 1,
+            target: AttackTarget::Assault(2),
+        });
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        apply_toggle_hold(&mut game, &mut state, 1, &loc);
+        let u = state.unit_by_id(1).unwrap();
+        assert!(u.is_holding, "cover taken");
+        assert!(u.acted, "cover costs the action — translucent now");
+        assert!(u.manual_override, "open-ended command marks manual");
+        assert!(u.move_order.is_none(), "standing march cancelled");
+        assert!(
+            state.attack_orders.iter().all(|o| o.attacker != 1),
+            "attack order cancelled"
+        );
+        assert!(
+            state.units_dirty && state.orders_dirty,
+            "acted look + cancelled ribbon refresh immediately"
+        );
+    }
+
+    /// Standing up releases the override and flags the visuals too.
+    #[test]
+    fn apply_toggle_hold_stand_up_is_immediate() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.is_holding = true;
+        u.manual_override = true;
+        state.units = vec![u];
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        apply_toggle_hold(&mut game, &mut state, 1, &loc);
+        assert!(!state.unit_by_id(1).unwrap().is_holding, "stood up");
+        assert!(!state.unit_by_id(1).unwrap().manual_override, "released");
+        assert!(
+            state.units_dirty && state.orders_dirty,
+            "stance visuals refresh immediately"
+        );
+    }
+
+    /// The H gates hold: an already-acted unit and a unit that cannot
+    /// take cover are untouched; outside the player's tactical turn the
+    /// toggle is inert.
+    #[test]
+    fn apply_toggle_hold_gates() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut acted = inf(1, "1. Div", Side::Attacker);
+        acted.acted = true;
+        let mut cavalry = BattalionUnit::new(
+            2,
+            "2.Cav",
+            UnitType::Cavalry,
+            Side::Attacker,
+            HexCoord::new(1, 0),
+        );
+        cavalry.division = "1. Div".to_string();
+        state.units = vec![acted, cavalry];
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        apply_toggle_hold(&mut game, &mut state, 1, &loc);
+        assert!(
+            !state.unit_by_id(1).unwrap().is_holding,
+            "acted unit cannot take cover"
+        );
+        apply_toggle_hold(&mut game, &mut state, 2, &loc);
+        assert!(
+            !state.unit_by_id(2).unwrap().is_holding,
+            "cavalry cannot take cover"
+        );
+        assert!(game.log.is_empty());
+
+        // Not the player's tactical turn → inert.
+        let (mut game2, mut state2) = tactical_fixture();
+        game2.session.current_side = Side::Defender;
+        state2.units = vec![inf(3, "1. Div", Side::Attacker)];
+        apply_toggle_hold(&mut game2, &mut state2, 3, &loc);
+        assert!(!state2.unit_by_id(3).unwrap().is_holding);
+        assert!(game2.log.is_empty());
+    }
+
+    /// BUG-0098: re-issuing the CURRENT destination keeps the whole
+    /// standing order (invested hours AND queued legs) and stays silent.
+    #[test]
+    fn issue_move_order_reaffirm_same_destination_keeps_order() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.position = HexCoord::new(1, 1);
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            hours: 0.12,
+            queue: Default::default(),
+        });
+        state.units = vec![u];
+        state.select_only(1);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        assert!(issue_move_order(
+            &mut game,
+            &mut state,
+            HexCoord::new(3, 1),
+            &loc,
+            false
+        ));
+        let order = state.unit_by_id(1).unwrap().move_order.as_ref().unwrap();
+        assert_eq!(order.hours, 0.12, "invested hours untouched");
+        assert_eq!(order.path.last(), Some(&HexCoord::new(3, 1)));
+        assert!(game.log.is_empty(), "re-affirm is silent (no log spam)");
+        assert!(!state.orders_dirty, "nothing changed — nothing flagged");
+    }
+
+    /// BUG-0098: re-pointing to a NEW destination whose fresh route
+    /// shares the first step carries the invested hours; a first-step
+    /// change starts the bar from zero.
+    #[test]
+    fn issue_move_order_repoint_carries_hours_only_when_first_step_shared() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.position = HexCoord::new(1, 1);
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            hours: 0.05,
+            queue: Default::default(),
+        });
+        state.units = vec![u];
+        state.select_only(1);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        // Same first step (2,1): hours carry to the new destination.
+        assert!(issue_move_order(
+            &mut game,
+            &mut state,
+            HexCoord::new(4, 1),
+            &loc,
+            false
+        ));
+        let order = state.unit_by_id(1).unwrap().move_order.as_ref().unwrap();
+        assert_eq!(order.path.last(), Some(&HexCoord::new(4, 1)));
+        assert!(
+            (order.hours - 0.05).abs() < 1e-6,
+            "mid-step progress carries: {}",
+            order.hours
+        );
+
+        // First step changes (route leaves north): fresh start.
+        assert!(issue_move_order(
+            &mut game,
+            &mut state,
+            HexCoord::new(1, 3),
+            &loc,
+            false
+        ));
+        let order = state.unit_by_id(1).unwrap().move_order.as_ref().unwrap();
+        assert_eq!(order.hours, 0.0, "first-step change zeroes the bar");
+    }
+
+    /// Shift-click appends a waypoint leg to the standing order; the
+    /// chain tail de-duplicates; a plain right-click REPLACES the whole
+    /// chain.
+    #[test]
+    fn issue_move_order_queued_appends_and_plain_replaces() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.position = HexCoord::new(1, 1);
+        state.units = vec![u];
+        state.select_only(1);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        // Chain start (Shift without a standing order = plain issue).
+        assert!(issue_move_order(
+            &mut game,
+            &mut state,
+            HexCoord::new(3, 1),
+            &loc,
+            true
+        ));
+        assert!(state.unit_by_id(1).unwrap().move_order.is_some());
+
+        // Append a leg → the queue holds the second destination.
+        assert!(issue_move_order(
+            &mut game,
+            &mut state,
+            HexCoord::new(5, 1),
+            &loc,
+            true
+        ));
+        let order = state.unit_by_id(1).unwrap().move_order.as_ref().unwrap();
+        assert_eq!(order.queue.len(), 1);
+        assert_eq!(order.queue.back().unwrap().dest, HexCoord::new(5, 1));
+        let logs = game.log.len();
+
+        // Shift-clicking the chain tail again = de-duplicated no-op.
+        assert!(issue_move_order(
+            &mut game,
+            &mut state,
+            HexCoord::new(5, 1),
+            &loc,
+            true
+        ));
+        let order = state.unit_by_id(1).unwrap().move_order.as_ref().unwrap();
+        assert_eq!(order.queue.len(), 1, "tail duplicate dropped");
+        assert_eq!(game.log.len(), logs, "no-op stays silent");
+
+        // A plain (non-Shift) click REPLACES the chain entirely.
+        assert!(issue_move_order(
+            &mut game,
+            &mut state,
+            HexCoord::new(7, 1),
+            &loc,
+            false
+        ));
+        let order = state.unit_by_id(1).unwrap().move_order.as_ref().unwrap();
+        assert_eq!(order.path.last(), Some(&HexCoord::new(7, 1)));
+        assert!(order.queue.is_empty(), "plain click drops the chain");
+    }
+
+    /// Stand-by clears the WHOLE chain (the queue rides the single-order
+    /// slot and dies with it).
+    #[test]
+    fn stand_by_clears_the_whole_chain() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.position = HexCoord::new(1, 1);
+        u.manual_override = true;
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(2, 1)],
+            hours: 0.0,
+            queue: VecDeque::from([MoveLeg {
+                dest: HexCoord::new(4, 1),
+                preview: vec![
+                    HexCoord::new(2, 1),
+                    HexCoord::new(3, 1),
+                    HexCoord::new(4, 1),
+                ],
+            }]),
+        });
+        state.units = vec![u];
+        let sel = state.unit_by_id(1).unwrap().clone();
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        assert!(right_click_self(&mut game, &mut state, &sel, &loc));
+        assert!(
+            state.unit_by_id(1).unwrap().move_order.is_none(),
+            "stand-by drops the order AND its queued legs"
+        );
+    }
+
+    /// BUG-0099: the registration backstop — an AI AREA mission whose
+    /// blast circle (aim hex + ring 1) holds a same-side targetable
+    /// battalion is refused even when the planner proposed it (the
+    /// planner aims clean zones; this gate catches anything that slips
+    /// through, e.g. a moved friendly). Precise missions never splash and
+    /// always register.
+    #[test]
+    fn ai_area_mission_refused_when_friend_sits_in_the_blast() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut arty = BattalionUnit::new(
+            1,
+            "1.Arty",
+            UnitType::ArtilleryBrigade,
+            Side::Attacker,
+            HexCoord::new(2, 2),
+        );
+        arty.is_emplaced = true;
+        let mut friend = inf(2, "1. Div", Side::Attacker);
+        friend.position = HexCoord::new(4, 3);
+        state.units = vec![arty, friend];
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        // (5,3) is one hex from the friendly (4,3) — the blast would
+        // splash her. Nothing registers.
+        let refused = apply_ai_action(
+            &AiAction::FireSupport {
+                attacker_id: 1,
+                target_hex: HexCoord::new(5, 3),
+            },
+            Side::Attacker,
+            &mut game,
+            &mut state,
+            &loc,
+            false,
+        );
+        assert!(!refused, "an area mission into a friendly-held circle must be refused");
+        assert!(
+            state.attack_orders.iter().all(|o| o.attacker != 1),
+            "no fire order may register for the refused mission"
+        );
+
+        // Control: a clean hex registers the AREA mission as proposed.
+        let accepted = apply_ai_action(
+            &AiAction::FireSupport {
+                attacker_id: 1,
+                target_hex: HexCoord::new(6, 3),
+            },
+            Side::Attacker,
+            &mut game,
+            &mut state,
+            &loc,
+            false,
+        );
+        assert!(accepted, "a clean zone registers normally");
+        assert!(
+            state.attack_orders.iter().any(|o| {
+                matches!(
+                    &o.target,
+                    AttackTarget::FireMission {
+                        hex,
+                        precise: false
+                    } if *hex == HexCoord::new(6, 3)
+                )
+            }),
+            "the clean area mission must be registered as fired"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // §9.3 multi-select: broadcast commands + box-select membership
+    // ---------------------------------------------------------------
+
+    /// The press-frame click decision: Shift+empty keeps the set (a
+    /// starting Shift+box drag needs the pool intact), plain click
+    /// releases, Shift+unit toggles, plain click selects.
+    #[test]
+    fn click_select_action_shift_never_clears() {
+        let own = Some((7, Side::Attacker));
+        assert!(matches!(
+            click_select_action(own, Side::Attacker, false),
+            ClickSelect::Select(7)
+        ));
+        assert!(matches!(
+            click_select_action(own, Side::Attacker, true),
+            ClickSelect::Toggle(7)
+        ));
+        assert!(matches!(
+            click_select_action(None, Side::Attacker, true),
+            ClickSelect::Keep
+        ));
+        assert!(matches!(
+            click_select_action(None, Side::Attacker, false),
+            ClickSelect::Clear
+        ));
+        // An enemy under the cursor behaves like ground for selection.
+        let foe = Some((9, Side::Defender));
+        assert!(matches!(
+            click_select_action(foe, Side::Attacker, true),
+            ClickSelect::Keep
+        ));
+        assert!(matches!(
+            click_select_action(foe, Side::Attacker, false),
+            ClickSelect::Clear
+        ));
+    }
+
+    /// Box-select membership is a pure screen-rect containment in roster
+    /// order (deterministic regardless of drag direction).
+    #[test]
+    fn box_select_membership_follows_the_rect() {
+        let candidates = vec![
+            (1, Vec2::new(10.0, 10.0)),
+            (2, Vec2::new(50.0, 50.0)),
+            (3, Vec2::new(200.0, 200.0)),
+            (4, Vec2::new(100.0, 99.0)),
+        ];
+        let ids = ids_in_screen_rect(
+            candidates.into_iter(),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(100.0, 100.0),
+        );
+        assert_eq!(ids, vec![1, 2, 4], "edge-inclusive, roster order");
+    }
+
+    /// Broadcast march: the first battalion takes the clicked hex, the
+    /// rest fan out to the nearest unclaimed passable hexes; every order
+    /// is a per-unit standing march with manual override.
+    #[test]
+    fn broadcast_move_spreads_and_marks_override() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(1, 1);
+        let mut b = inf(2, "1. Div", Side::Attacker);
+        b.position = HexCoord::new(1, 2);
+        let mut c = inf(3, "1. Div", Side::Attacker);
+        c.position = HexCoord::new(1, 3);
+        state.units = vec![a, b, c];
+        state.select_multiple(vec![1, 2, 3]);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        broadcast_move_order(&mut game, &mut state, &[1, 2, 3], HexCoord::new(5, 2), &loc, false);
+
+        let dests: Vec<HexCoord> = state
+            .units
+            .iter()
+            .filter_map(|u| u.move_order.as_ref().and_then(|o| o.path.last().copied()))
+            .collect();
+        assert_eq!(dests.len(), 3, "every battalion got a march");
+        assert_eq!(
+            dests[0],
+            HexCoord::new(5, 2),
+            "the first battalion marches on the clicked hex"
+        );
+        let unique: HashSet<HexCoord> = dests.iter().copied().collect();
+        assert_eq!(unique.len(), 3, "no two battalions share a destination");
+        assert!(
+            state.units.iter().all(|u| u.manual_override),
+            "a broadcast march is a manual command for each battalion"
+        );
+        let summary = game
+            .log
+            .iter()
+            .map(|l| &l.text)
+            .filter(|t| t.contains("battalions"))
+            .count();
+        assert_eq!(summary, 1, "one aggregated log line, not three: {:?}", game.log.iter().map(|l| &l.text).collect::<Vec<_>>());
+    }
+
+    /// Broadcast march skips ineligible members (an acted battalion keeps
+    /// its turn spent) and reports the skip count.
+    #[test]
+    fn broadcast_move_skips_acted_with_a_counted_line() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(1, 1);
+        a.acted = true;
+        let mut b = inf(2, "1. Div", Side::Attacker);
+        b.position = HexCoord::new(1, 2);
+        state.units = vec![a, b];
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        broadcast_move_order(&mut game, &mut state, &[1, 2], HexCoord::new(5, 2), &loc, false);
+
+        assert!(state.unit_by_id(1).unwrap().move_order.is_none(), "acted unit stays put");
+        assert!(state.unit_by_id(2).unwrap().move_order.is_some());
+        assert!(
+            game.log.iter().any(|l| l.text.contains("could not comply")),
+            "the skip is reported: {:?}", game.log.iter().map(|l| &l.text).collect::<Vec<_>>()
+        );
+    }
+
+    /// Broadcast attack: every commanded battalion registers its OWN
+    /// standing order on the same target (the focus-fire pool is one slot
+    /// per attacker); the log aggregates to one line per description.
+    #[test]
+    fn broadcast_attack_registers_per_attacker_and_aggregates() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(3, 3);
+        let mut b = inf(2, "1. Div", Side::Attacker);
+        b.position = HexCoord::new(4, 3);
+        let mut e = inf(9, "9. Div", Side::Defender);
+        e.position = HexCoord::new(3, 4);
+        state.units = vec![a, b, e];
+        state.select_multiple(vec![1, 2]);
+        let loc = Locale::load(tactical_locale::Language::English);
+        let mut fx = crate::fx::FxQueue::default();
+
+        broadcast_attack_target(&mut game, &mut state, &[1, 2], HexCoord::new(3, 4), 9, &mut fx, &loc);
+
+        assert!(
+            state.attack_orders.iter().any(|o| o.attacker == 1)
+                && state.attack_orders.iter().any(|o| o.attacker == 2),
+            "both battalions registered: {:?}", state.attack_orders
+        );
+        let registered = game
+            .log
+            .iter()
+            .filter(|l| l.text.contains("assault"))
+            .count();
+        assert_eq!(registered, 1, "one aggregated assault line: {:?}", game.log.iter().map(|l| &l.text).collect::<Vec<_>>());
+    }
+
+    /// Single-select regression: the broadcast fns with a ONE-member set
+    /// are not the single path — the click handler routes len==1 through
+    /// issue_move_order / attack_target, which keep the per-unit log lines.
+    #[test]
+    fn single_select_move_keeps_the_named_eta_line() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(1, 1);
+        state.units = vec![a];
+        state.select_only(1);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        assert!(issue_move_order(&mut game, &mut state, HexCoord::new(4, 1), &loc, false));
+        assert!(
+            game.log.iter().any(|l| l.text.contains("1.Inf") && l.text.contains("ETA")),
+            "the single path keeps the named ETA line: {:?}", game.log.iter().map(|l| &l.text).collect::<Vec<_>>()
+        );
+    }
+
+    /// Broadcast Hold: dug-in members stand up, the rest take cover —
+    /// each battalion toggles its own stance.
+    #[test]
+    fn broadcast_hold_toggles_each_member() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(1, 1);
+        a.is_holding = true;
+        a.acted = true;
+        let mut b = inf(2, "1. Div", Side::Attacker);
+        b.position = HexCoord::new(2, 2);
+        state.units = vec![a, b];
+        state.select_multiple(vec![1, 2]);
+
+        let mut covered = 0;
+        let mut stood = 0;
+        for id in commanded_selection(&game, &state) {
+            match toggle_hold_core(&game, &mut state, id) {
+                Some(true) => covered += 1,
+                Some(false) => stood += 1,
+                None => {}
+            }
+        }
+        assert_eq!((covered, stood), (1, 1), "one digs in, one stands up");
+        assert!(state.unit_by_id(2).unwrap().is_holding);
+        assert!(!state.unit_by_id(1).unwrap().is_holding);
+    }
+
+    // ---------------------------------------------------------------
+    // §9.3 C key: selection-wide manual-control toggle
+    // ---------------------------------------------------------------
+
+    fn two_inf_fixture() -> (GameController, TacticalState) {
+        let (game, state) = tactical_fixture();
+        (game, state)
+    }
+
+    /// C with a non-manual selection takes every member manual — a clean
+    /// hand-over: standing orders are cancelled at the hand-off, exactly
+    /// like the right-click take-manual branch.
+    #[test]
+    fn c_key_takes_the_whole_set_manual() {
+        let (mut game, mut state) = two_inf_fixture();
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(1, 1);
+        a.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(2, 1)],
+            hours: 0.0,
+            queue: Default::default(),
+        });
+        let mut b = inf(2, "1. Div", Side::Attacker);
+        b.position = HexCoord::new(1, 2);
+        state.units = vec![a, b];
+        state.select_multiple(vec![1, 2]);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        toggle_manual_selection(&mut game, &mut state, &loc);
+
+        assert!(state.units.iter().all(|u| u.manual_override));
+        assert!(state.unit_by_id(1).unwrap().move_order.is_none(), "hand-over cancels the march");
+        let lines: Vec<&String> = game.log.iter().map(|l| &l.text).collect();
+        assert_eq!(lines.len(), 1, "one aggregated line: {lines:?}");
+        assert!(lines[0].contains("2 battalions under manual command"), "{lines:?}");
+    }
+
+    /// C with an all-manual selection stands the whole set by — orders
+    /// cancelled, overrides released.
+    #[test]
+    fn c_key_releases_an_all_manual_set() {
+        let (mut game, mut state) = two_inf_fixture();
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(1, 1);
+        a.manual_override = true;
+        let mut b = inf(2, "1. Div", Side::Attacker);
+        b.position = HexCoord::new(1, 2);
+        b.manual_override = true;
+        state.units = vec![a, b];
+        state.attack_orders.push(AttackOrder {
+            attacker: 1,
+            target: AttackTarget::Assault(9),
+        });
+        state.select_multiple(vec![1, 2]);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        toggle_manual_selection(&mut game, &mut state, &loc);
+
+        assert!(state.units.iter().all(|u| !u.manual_override));
+        assert!(state.attack_orders.is_empty(), "stand-by cancels the registered attack too");
+        let lines: Vec<&String> = game.log.iter().map(|l| &l.text).collect();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("stand by"), "{lines:?}");
+    }
+
+    /// C on a MIXED set takes manual only the non-manual members —
+    /// the already-manual one is untouched (no flip-flop).
+    #[test]
+    fn c_key_mixed_set_takes_only_the_non_manual() {
+        let (mut game, mut state) = two_inf_fixture();
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(1, 1);
+        a.manual_override = true;
+        let mut b = inf(2, "1. Div", Side::Attacker);
+        b.position = HexCoord::new(1, 2);
+        state.units = vec![a, b];
+        state.select_multiple(vec![1, 2]);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        toggle_manual_selection(&mut game, &mut state, &loc);
+
+        assert!(state.unit_by_id(2).unwrap().manual_override, "the AI-commanded one is taken");
+        assert!(state.unit_by_id(1).unwrap().manual_override, "the manual one stays manual");
+        let lines: Vec<&String> = game.log.iter().map(|l| &l.text).collect();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("1 battalion"), "only one changed: {lines:?}");
+    }
+
+    /// Log flavor: members under a standing division order get the
+    /// division-hand-off wording; without one the plain key.
+    #[test]
+    fn c_key_log_split_by_division_order() {
+        let (mut game, mut state) = two_inf_fixture();
+        game.div_orders.insert(
+            ("GER".to_string(), "1. Div".to_string()),
+            DivisionOrder {
+                pick: DivOrderPick::Advance,
+                seized: false,
+                engage_last_pos: None,
+            },
+        );
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.tag = "GER".to_string();
+        a.position = HexCoord::new(1, 1);
+        state.units = vec![a];
+        state.select_only(1);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        toggle_manual_selection(&mut game, &mut state, &loc);
+        assert!(
+            game.log.iter().any(|l| l.text.contains("division AI hands off")),
+            "div flavor: {:?}", game.log.iter().map(|l| &l.text).collect::<Vec<_>>()
+        );
+
+        // Plain flavor without a division order.
+        let (mut game2, mut state2) = two_inf_fixture();
+        let mut c = inf(3, "2. Div", Side::Attacker);
+        c.position = HexCoord::new(1, 1);
+        state2.units = vec![c];
+        state2.select_only(3);
+        toggle_manual_selection(&mut game2, &mut state2, &loc);
+        let t = &game2.log.last().unwrap().text;
+        assert!(t.contains("under manual command") && !t.contains("division"), "{t}");
+    }
+
+    /// C is inert outside the player's tactical turn (deployment phase).
+    #[test]
+    fn c_key_inert_outside_the_tactical_turn() {
+        let (mut game, mut state) = two_inf_fixture();
+        game.session.phase = BattlePhase::Deployment;
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(1, 1);
+        state.units = vec![a];
+        state.select_only(1);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        toggle_manual_selection(&mut game, &mut state, &loc);
+        assert!(!state.unit_by_id(1).unwrap().manual_override);
+        assert!(game.log.is_empty());
+    }
+
+    /// Single selection: C is the two-way switch UNGATED by the
+    /// keep-manual setting — default mode takes manual too (an idle manual
+    /// battalion is handed back at the next turn refresh as usual).
+    #[test]
+    fn c_key_single_selection_toggles_both_ways_in_default_mode() {
+        let (mut game, mut state) = two_inf_fixture();
+        assert!(!game.keep_manual_override);
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(1, 1);
+        state.units = vec![a];
+        state.select_only(1);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        toggle_manual_selection(&mut game, &mut state, &loc);
+        assert!(state.unit_by_id(1).unwrap().manual_override, "default mode: C still takes manual");
+
+        toggle_manual_selection(&mut game, &mut state, &loc);
+        assert!(!state.unit_by_id(1).unwrap().manual_override, "second C stands by");
+    }
+
+    /// The shared core keeps right-click-self behavior identical:
+    /// default mode never takes manual, keep mode does.
+    #[test]
+    fn right_click_self_still_gated_by_keep_manual() {
+        let (mut game, mut state) = two_inf_fixture();
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.position = HexCoord::new(1, 1);
+        state.units = vec![a];
+        let loc = Locale::load(tactical_locale::Language::English);
+        let sel = state.unit_by_id(1).unwrap().clone();
+
+        // Default mode, no orders: untouched.
+        assert!(!right_click_self(&mut game, &mut state, &sel, &loc));
+        assert!(!state.unit_by_id(1).unwrap().manual_override);
+
+        // Keep mode: takes manual.
+        game.keep_manual_override = true;
+        assert!(right_click_self(&mut game, &mut state, &sel, &loc));
+        assert!(state.unit_by_id(1).unwrap().manual_override);
+    }
+
+    /// §7.5: the allied split is keyed on (owner tag, division name) — a
+    /// battle can field same-name divisions under several nations, and the
+    /// player's own battalion stays hers even when an ally fields a division
+    /// with the very same name.
+    #[test]
+    fn allied_split_keeps_a_same_name_player_division() {
+        let (mut game, mut state) = tactical_fixture();
+        state.player_side = Side::Attacker;
+        game.allies = vec![AllyContingent {
+            tag: "FRA".to_string(),
+            tactic: CombatTactic::Assault,
+            divisions: vec!["2. Inf".to_string()],
+        }];
+        let mut own = inf(1, "2. Inf", Side::Attacker);
+        own.tag = "GER".to_string();
+        let mut ally = inf(2, "2. Inf", Side::Attacker);
+        ally.tag = "FRA".to_string();
+        state.units = vec![own, ally];
+
+        let own = state.unit_by_id(1).unwrap();
+        let ally = state.unit_by_id(2).unwrap();
+        assert!(!game.is_allied(own), "the player's own division stays hers");
+        assert!(game.commands(own));
+        assert!(game.is_allied(ally), "the ally's copy answers to its AI");
+        assert!(!game.commands(ally));
+        // The tag-aware identity resolves each owner to its own contingent —
+        // there is no name-only lookup left to be fooled by the collision.
+        assert_eq!(game.allied_division_of("FRA", "2. Inf").unwrap().tag, "FRA");
+        assert!(game.allied_division_of("GER", "2. Inf").is_none());
+    }
+
+    /// A same-name player/ally pair for the deployment-chain tests: the
+    /// player (GER) and the ally (FRA) each field a division called
+    /// "2. Inf", both waiting OFFBOARD in the player's deployment zone.
+    fn same_name_deploy_fixture() -> (GameController, TacticalState) {
+        let (mut game, mut state) = tactical_fixture();
+        state.player_side = Side::Attacker;
+        let grid = HexGrid::new(10, 10, Terrain::Plains);
+        let a_zone: Vec<HexCoord> = grid.iter_coords().filter(|h| h.q < 3).collect();
+        let d_zone: Vec<HexCoord> = grid.iter_coords().filter(|h| h.q > 6).collect();
+        state.grid = Some(Arc::new(grid));
+        state.deployment_zones = Some((a_zone, d_zone));
+        let waiting = |id: usize, div: &str, tag: &str| {
+            let mut u = inf(id, div, Side::Attacker);
+            u.name = format!("{tag}-{id}");
+            u.tag = tag.to_string();
+            u.undeployed = true;
+            u.position = BattalionUnit::OFFBOARD;
+            u
+        };
+        state.units = vec![waiting(1, "2. Inf", "GER"), waiting(2, "2. Inf", "FRA")];
+        game.allies = vec![AllyContingent {
+            tag: "FRA".to_string(),
+            tactic: CombatTactic::Assault,
+            divisions: vec!["2. Inf".to_string()],
+        }];
+        (game, state)
+    }
+
+    /// Auto Deploy fills the player's own OOB waiters only; the allied
+    /// division of the SAME NAME stays OFFBOARD for its own AI (§7.5) — the
+    /// exclusion is the (tag, division) pair, not the name.
+    #[test]
+    fn auto_deploy_places_a_same_name_player_division() {
+        let (game, mut state) = same_name_deploy_fixture();
+
+        let placed = auto_deploy_player(&game, &mut state);
+        assert_eq!(placed, 1, "exactly the player's own battalion is in scope");
+
+        let own = state.unit_by_id(1).unwrap();
+        assert!(
+            !own.undeployed && own.position != BattalionUnit::OFFBOARD,
+            "the player's own division is placed"
+        );
+        let ally = state.unit_by_id(2).unwrap();
+        assert!(
+            ally.undeployed && ally.position == BattalionUnit::OFFBOARD,
+            "the same-name ally waits for its own AI"
+        );
+    }
+
+    /// The allied planning slice is tag-filtered too: a same-name player
+    /// division never enters an ally's AI slice (it would be commanded by
+    /// both halves of the split).
+    #[test]
+    fn allied_slice_excludes_a_same_name_division() {
+        let mut state = TacticalState::default();
+        state.player_side = Side::Attacker;
+        let mut own = inf(1, "2. Inf", Side::Attacker);
+        own.tag = "GER".to_string();
+        let mut ally = inf(2, "2. Inf", Side::Attacker);
+        ally.tag = "FRA".to_string();
+        let mut foe = inf(3, "3. Inf", Side::Defender);
+        foe.tag = "POL".to_string();
+        state.units = vec![own, ally, foe];
+        let contingent = AllyContingent {
+            tag: "FRA".to_string(),
+            tactic: CombatTactic::Assault,
+            divisions: vec!["2. Inf".to_string()],
+        };
+
+        let slice = vec!["2. Inf".to_string()];
+        let planned: Vec<usize> = contingent_units(&state, &contingent, Side::Attacker, &slice)
+            .iter()
+            .map(|u| u.id)
+            .collect();
+        assert_eq!(
+            planned,
+            vec![2],
+            "only the FRA battalion is planned by the ally"
+        );
+    }
+
+    /// BeginBattle deploy: an allied contingent's divisions are placed by
+    /// their own AI inside the player's zone, while the player's own
+    /// battalions keep waiting OFFBOARD for her hand (the same split a
+    /// script battle runs).
+    #[test]
+    fn allied_contingent_deploys_and_the_players_own_stays_offboard() {
+        let (mut game, mut state) = tactical_fixture();
+        state.player_side = Side::Attacker;
+        let grid = HexGrid::new(8, 8, Terrain::Plains);
+        let a_zone: Vec<HexCoord> = grid.iter_coords().filter(|h| h.q < 2).collect();
+        let d_zone: Vec<HexCoord> = grid.iter_coords().filter(|h| h.q > 5).collect();
+        state.grid = Some(Arc::new(grid));
+        state.deployment_zones = Some((a_zone, d_zone));
+        let waiting = |id: usize, div: &str, tag: &str| {
+            let mut u = inf(id, div, Side::Attacker);
+            u.tag = tag.to_string();
+            u.undeployed = true;
+            u.position = BattalionUnit::OFFBOARD;
+            u
+        };
+        state.units = vec![
+            waiting(1, "1. Div", "GER"),
+            waiting(2, "A. Div", "FRA"),
+        ];
+        game.allies = vec![AllyContingent {
+            tag: "FRA".to_string(),
+            tactic: CombatTactic::Assault,
+            divisions: vec!["A. Div".to_string()],
+        }];
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        deploy_allied_nations(&mut game, &mut state, &loc);
+
+        let ally = state.unit_by_id(2).unwrap();
+        assert!(
+            !ally.undeployed && ally.position != BattalionUnit::OFFBOARD,
+            "the FRA division is placed by its own AI"
+        );
+        let own = state.unit_by_id(1).unwrap();
+        assert!(
+            own.undeployed && own.position == BattalionUnit::OFFBOARD,
+            "the player's own division still waits for her"
+        );
+    }
+
+    /// Same-name pair at BeginBattle: the FRA contingent's pass places its
+    /// own battalion and must leave the player's identically named GER
+    /// battalion OFFBOARD — the deploy call and its flip loop are both
+    /// scoped to (contingent tag, division name).
+    #[test]
+    fn allied_deploy_pass_skips_a_same_name_player_battalion() {
+        let (mut game, mut state) = same_name_deploy_fixture();
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        deploy_allied_nations(&mut game, &mut state, &loc);
+
+        let ally = state.unit_by_id(2).unwrap();
+        assert!(
+            !ally.undeployed && ally.position != BattalionUnit::OFFBOARD,
+            "the FRA battalion is placed by its own AI"
+        );
+        let own = state.unit_by_id(1).unwrap();
+        assert!(
+            own.undeployed && own.position == BattalionUnit::OFFBOARD,
+            "the same-name player battalion still waits for her"
+        );
+    }
+
+    /// Sector drag, player's own division: the (tag, division) pair routes
+    /// the rectangle to the player's battalion as a real deploy, and the
+    /// same-name ally stays OFFBOARD with no suggestion stored for it.
+    #[test]
+    fn sector_drag_deploys_the_players_same_name_division() {
+        let (mut game, mut state) = same_name_deploy_fixture();
+        let loc = Locale::load(tactical_locale::Language::English);
+        let mut notice = NoticeBar::default();
+
+        commit_sector_deploy(
+            &mut state,
+            &mut game,
+            "GER".to_string(),
+            "2. Inf".to_string(),
+            HexCoord::new(0, 0),
+            HexCoord::new(2, 9),
+            &loc,
+            &mut notice,
+            0.0,
+        );
+
+        let own = state.unit_by_id(1).unwrap();
+        assert!(
+            !own.undeployed && own.position != BattalionUnit::OFFBOARD,
+            "the drag deployed the player's own division"
+        );
+        let ally = state.unit_by_id(2).unwrap();
+        assert!(
+            ally.undeployed && ally.position == BattalionUnit::OFFBOARD,
+            "the ally's same-name battalion is untouched by the player's drag"
+        );
+        assert!(
+            game.ally_sector("FRA", "2. Inf").is_none(),
+            "no suggestion is stored for the ally"
+        );
+    }
+
+    /// Sector drag, allied division: the rectangle becomes a SUGGESTION for
+    /// that contingent only — nothing is deployed, and the player's
+    /// same-name battalion is not even looked at.
+    #[test]
+    fn sector_drag_stores_a_same_name_ally_suggestion() {
+        let (mut game, mut state) = same_name_deploy_fixture();
+        let loc = Locale::load(tactical_locale::Language::English);
+        let mut notice = NoticeBar::default();
+
+        commit_sector_deploy(
+            &mut state,
+            &mut game,
+            "FRA".to_string(),
+            "2. Inf".to_string(),
+            HexCoord::new(0, 0),
+            HexCoord::new(2, 9),
+            &loc,
+            &mut notice,
+            0.0,
+        );
+
+        assert_eq!(
+            game.ally_sector("FRA", "2. Inf"),
+            Some((HexCoord::new(0, 0), HexCoord::new(2, 9))),
+            "the drag stored the suggestion under the ally's pair"
+        );
+        assert!(
+            game.ally_sector("GER", "2. Inf").is_none(),
+            "the player's division gets no suggestion"
+        );
+        assert!(
+            state.unit_by_id(1).unwrap().undeployed,
+            "the player's own battalion is untouched"
+        );
+        assert!(
+            state.unit_by_id(2).unwrap().undeployed,
+            "the ally deploys only at BeginBattle"
+        );
+    }
+
+    /// Recall separates the pair: the player's own division returns to the
+    /// OOB queue while the ally's same-name battalion stays where it is, and
+    /// the ally's recall clears only ITS suggestion.
+    #[test]
+    fn recall_separates_a_same_name_player_and_ally_division() {
+        let (mut game, mut state) = same_name_deploy_fixture();
+        let own_pos = HexCoord::new(1, 1);
+        let ally_pos = HexCoord::new(2, 2);
+        state.units[0].position = own_pos;
+        state.units[0].undeployed = false;
+        state.units[1].position = ally_pos;
+        state.units[1].undeployed = false;
+        game.set_ally_sector("FRA", "2. Inf", (HexCoord::new(0, 0), HexCoord::new(2, 9)));
+
+        let outcome = recall_group(&mut game, &mut state, Some(("GER", "2. Inf")));
+        assert!(
+            matches!(outcome, RecallOutcome::Recalled(1)),
+            "exactly the player's own battalion answers the player's recall"
+        );
+        assert!(state.unit_by_id(1).unwrap().undeployed);
+        let ally = state.unit_by_id(2).unwrap();
+        assert!(
+            !ally.undeployed && ally.position == ally_pos,
+            "the ally's same-name battalion is not recalled"
+        );
+        assert!(
+            game.ally_sector("FRA", "2. Inf").is_some(),
+            "the player's recall leaves the ally's suggestion alone"
+        );
+
+        // The ally's own recall clears the suggestion instead.
+        assert!(matches!(
+            recall_group(&mut game, &mut state, Some(("FRA", "2. Inf"))),
+            RecallOutcome::Allied
+        ));
+        assert!(game.ally_sector("FRA", "2. Inf").is_none());
+        assert!(
+            !state.unit_by_id(2).unwrap().undeployed,
+            "clearing the hint pulls nothing back"
+        );
+    }
+
+    /// The allied suspend check is pair-scoped: a standing order on the
+    /// PLAYER's "2. Inf" leaves the ally's same-name division in its
+    /// contingent's planning slice, while an order on the ally's own pair
+    /// takes it out — and neither suspends the other.
+    #[test]
+    fn allied_slice_is_suspended_only_by_its_own_pair() {
+        let (mut game, _state) = same_name_deploy_fixture();
+        let contingent = game.allies[0].clone();
+        let advance = || DivisionOrder {
+            pick: DivOrderPick::Advance,
+            seized: false,
+            engage_last_pos: None,
+        };
+
+        assert_eq!(
+            contingent_slice(&game, &contingent),
+            vec!["2. Inf".to_string()],
+            "no order: the whole contingent plans"
+        );
+        // The player commands her OWN same-name division.
+        game.div_orders
+            .insert(("GER".to_string(), "2. Inf".to_string()), advance());
+        assert_eq!(
+            contingent_slice(&game, &contingent),
+            vec!["2. Inf".to_string()],
+            "the player's order on her own copy must not suspend the ally"
+        );
+        assert!(game.div_ordered("GER", "2. Inf"));
+
+        // The player commands the ALLIED HQ — that one is suspended.
+        game.div_orders
+            .insert(("FRA".to_string(), "2. Inf".to_string()), advance());
+        assert!(
+            contingent_slice(&game, &contingent).is_empty(),
+            "the ally's own ordered division leaves its contingent's slice"
+        );
+        assert!(
+            game.div_ordered("GER", "2. Inf"),
+            "the player's own order survives the ally's"
+        );
+    }
+
+    /// A division order rides the (owner tag, division) pair end to end:
+    /// ordering the ally's HQ plans the ally's battalions and leaves the
+    /// player's same-name division where it is — and cancelling the order
+    /// takes exactly that pair out.
+    #[test]
+    fn division_order_drives_only_its_own_pair() {
+        let (mut game, mut state) = same_name_deploy_fixture();
+        let loc = Locale::load(tactical_locale::Language::English);
+        let mut notice = NoticeBar::default();
+        // Both divisions stand on the board, one visible enemy ahead.
+        state.units[0].position = HexCoord::new(1, 1);
+        state.units[0].undeployed = false;
+        state.units[1].position = HexCoord::new(1, 2);
+        state.units[1].undeployed = false;
+        let mut foe = inf(9, "Foe", Side::Defender);
+        foe.tag = "POL".to_string();
+        foe.position = HexCoord::new(6, 6);
+        state.units.push(foe);
+
+        // The player orders the ALLY's "2. Inf" (the HQ path's pair).
+        assert!(issue_division_order(
+            &mut game,
+            &mut state,
+            &loc,
+            &mut notice,
+            0.0,
+            "FRA",
+            "2. Inf",
+            DivOrderPick::Engage {
+                unit: 9,
+                hex: HexCoord::new(6, 6),
+            },
+        ));
+
+        assert!(game.div_ordered("FRA", "2. Inf"), "the order landed on the ally");
+        assert!(
+            !game.div_ordered("GER", "2. Inf"),
+            "the player's same-name division holds no order"
+        );
+        assert!(
+            state.unit_by_id(2).unwrap().move_order.is_some(),
+            "the ally's division is planned and marching"
+        );
+        assert!(
+            state.unit_by_id(1).unwrap().move_order.is_none(),
+            "the player's same-name division is not driven by it"
+        );
+
+        // Cancel takes exactly that pair out.
+        assert!(cancel_division_order(&mut game, "FRA", "2. Inf"));
+        assert!(!game.div_ordered("FRA", "2. Inf"), "the ally's order is cancelled");
+        assert!(
+            !cancel_division_order(&mut game, "GER", "2. Inf"),
+            "nothing to cancel on the player's same-name division"
+        );
     }
 }

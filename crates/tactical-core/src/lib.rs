@@ -31,7 +31,7 @@ pub use grid::{GridCell, HexGrid};
 pub use hex::{CubeCoord, HexCoord, HexDirection};
 pub use params::CombatParams;
 pub use rng::XorShift64;
-pub use terrain::Terrain;
+pub use terrain::{RiverBand, Terrain};
 pub use unit::{
     Attrs, BattalionUnit, Chassis, MobilityClass, MoveOrder, Side, SupportAttachment, SupportKind,
     TerrainAdjusters, UnitState, UnitType,

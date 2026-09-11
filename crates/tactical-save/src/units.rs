@@ -582,6 +582,29 @@ pub fn create_tactical_units_named(
         }
     }
 
+    // 3b. Division-level equipment fill (§5.3/§6.13): the synthetic HQ asks
+    //     for no equipment of its own, so its strength rides the DIVISION's
+    //     own fill — Σ min(stock, need) / Σ need over the archetypes the
+    //     line battalions request, the same shape as the per-battalion
+    //     clamp. A division with no equipment to its name fields a
+    //     0-strength HQ: a hollow division gets no free command unit.
+    let div_equipment_fill = if total_need.is_empty() {
+        1.0
+    } else {
+        let need: f32 = total_need.values().sum();
+        let have: f32 = total_need
+            .iter()
+            .map(|(archetype, n)| {
+                available
+                    .get(*archetype)
+                    .map(|stock| stock.iter().map(|(_, count, _)| *count).sum::<f32>())
+                    .unwrap_or(0.0)
+                    .min(*n)
+            })
+            .sum();
+        (have / need).clamp(0.0, 1.0)
+    };
+
     // 4. Expand each subunit group into individual battalions.
     // Country combat modifiers stack additively with doctrine
     // factors (HOI4 modifier semantics); the experience multiplier scales
@@ -737,10 +760,12 @@ pub fn create_tactical_units_named(
         // relabel it from the naming table here.
         hq.name = naming.hq();
         hq.org = hq.max_org * org_ratio;
-        // The synthetic HQ has no equipment needs of its own (not part of
-        // HOI4's strength pool) — it follows the division's manpower-side
-        // ratio only, no equipment-ratio clamp.
-        hq.strength = hq.max_strength * str_ratio;
+        // The synthetic HQ needs no equipment of its own (it is nobody's
+        // HOI4 division), so it rides the DIVISION's fill instead — the
+        // same min(manpower, equipment) clamp every line battalion gets
+        // (§5.3). A division stripped of equipment must not field a fully
+        // combat-effective HQ while its real battalions sit at 0.
+        hq.strength = hq.max_strength * str_ratio.min(div_equipment_fill);
         hq.entrenchment = entrench_layers(division.entrenchment);
         // The HQ belongs to the division's roster entry like its
         // battalions (its damage routing stays as-is — the damage bases
@@ -2313,6 +2338,41 @@ countries = {
             0,
         );
         assert_eq!(units[0].strength, 0.0, "str={}", units[0].strength);
+        // §6.13: the synthetic HQ rides the same division-level fill — a
+        // hollow division gets no free combat-effective command unit out of
+        // it (an equipment-stripped division must not gain a free armed
+        // unit just by having one battalion in its template).
+        let hq = units.iter().find(|u| u.is_hq()).expect("HQ synthesized");
+        assert_eq!(hq.strength, 0.0, "hq str={}", hq.strength);
+        assert!(!hq.is_combat_effective());
+    }
+
+    #[test]
+    fn hq_strength_rides_the_division_equipment_fill() {
+        // §5.3/§6.13: the HQ needs no equipment of its own, so its strength
+        // takes the division's own fill clamp — half the infantry equipment
+        // (105/200) leaves a half-fill HQ: min(manpower 0.90, 0.525).
+        let (eq, ut) = mini_tables();
+        let save =
+            DIVISION_SAVE.replace("infantry_equipment_0 = 210", "infantry_equipment_0 = 105");
+        let div = parse_first_division(&save);
+        let units = create_tactical_units(
+            &div,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+        );
+        let hq = units.iter().find(|u| u.is_hq()).expect("HQ synthesized");
+        assert!(
+            (hq.strength - 3.0 * 0.525).abs() < 1e-2,
+            "hq str={}",
+            hq.strength
+        );
     }
 
     /// Command-chain fixture: division 1001 in army 42 (general 500),

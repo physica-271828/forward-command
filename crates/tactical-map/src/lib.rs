@@ -11,12 +11,14 @@
 //!    uniform bitmap scale, §4.3 — NO latitude correction; the HOI4 bitmap
 //!    is the standard) → occupancy down-sample → seeded terrain variation →
 //!    coastal/border water → rivers.bmp overlay → VP urban → river edges →
-//!    deployment zones (§4.2 step 9). Full province, up to 512×512.
+//!    factory districts → road network → railways → deployment zones
+//!    (§4.2 step 9). Full province, up to 512×512.
 
 mod bmp;
 mod csv;
 mod generator;
 mod localisation;
+mod rails;
 mod states;
 mod unitstacks;
 
@@ -26,7 +28,11 @@ pub use csv::{
 };
 pub use generator::{river_bit, DeploymentZones, MapGenerator, TacticalMap};
 pub use localisation::{load_vp_names, vp_names_path};
-pub use states::{load_province_to_state, load_victory_points, states_dir_of};
+pub use rails::{load_railways, RailwayLine};
+pub use states::{
+    load_province_to_state, load_state_categories, load_state_industry, load_state_infrastructure,
+    load_victory_points, states_dir_of,
+};
 pub use unitstacks::load_unit_stacks;
 
 use std::fmt;
@@ -178,6 +184,11 @@ mod tests {
         // Full overlay wiring (rivers.bmp + history/states VPs).
         gen.set_rivers(IndexMap::load_indexed_bmp(&dir.join("map").join("rivers.bmp")).unwrap());
         gen.set_victory_points(load_victory_points(&states_dir_of(&dir)).unwrap());
+        gen.set_province_to_state(load_province_to_state(&states_dir_of(&dir)).unwrap());
+        gen.set_state_categories(load_state_categories(&states_dir_of(&dir)).unwrap());
+        gen.set_state_industry(load_state_industry(&states_dir_of(&dir)).unwrap());
+        gen.set_state_infrastructure(load_state_infrastructure(&states_dir_of(&dir)).unwrap());
+        gen.set_railways(load_railways(&dir.join("map").join("railways.txt")).unwrap());
         // unitstacks index-0 positions anchor VP cities.
         gen.set_unit_stacks(load_unit_stacks(&dir.join("map").join("unitstacks.txt")));
         // VP display names for the floating city label.
@@ -207,21 +218,36 @@ mod tests {
         let mut river = 0usize;
         let mut urban = 0usize;
         let mut village = 0usize;
+        let mut road = 0usize;
+        let mut rail = 0usize;
+        let mut factory = 0usize;
         for c in tm.grid.iter_coords() {
-            match tm.grid.cell(c).map(|c| c.terrain) {
-                Some(tactical_core::Terrain::River) => river += 1,
-                Some(tactical_core::Terrain::Urban) => urban += 1,
-                Some(tactical_core::Terrain::Village) => village += 1,
+            let cell = tm.grid.cell(c).unwrap();
+            match cell.terrain {
+                tactical_core::Terrain::River => river += 1,
+                tactical_core::Terrain::Urban => urban += 1,
+                tactical_core::Terrain::Village => village += 1,
                 _ => {}
             }
+            if cell.road {
+                road += 1;
+            }
+            if cell.rail {
+                rail += 1;
+            }
+            if cell.factory {
+                factory += 1;
+            }
         }
-        eprintln!("[smoke] 3560: river={river} urban={urban} village={village}");
+        eprintln!("[smoke] 3560: river={river} urban={urban} village={village} road={road} rail={rail} factory={factory}");
         assert!(
             river >= 10,
             "expected the Meuse as river hexes, got {river}"
         );
         assert_eq!(urban, 3, "Sedan VP level 1 → 3-hex small city, got {urban}");
         assert!(village >= 10, "expected a village scatter, got {village}");
+        // The road net links the villages/city and reaches the borders.
+        assert!(road >= village, "expected a road network, got {road}");
         // Stitched maps: attack from W,NW → origin province(s)
         // folded in; attacker deploys on origin soil, defender in Sedan.
         let w = tm.grid.width;
@@ -399,6 +425,227 @@ mod tests {
         assert_eq!(name3, "Warsaw");
     }
 
+
+
+    /// TEMP topology analyzer: dump road-edge graph cycles/junctions.
+    #[test]
+    #[ignore = "requires a local Hearts of Iron IV installation"]
+    fn tmp_topology_report() {
+        use tactical_core::{HexCoord, HexDirection, Terrain};
+        let dir = detect_hoi4_dir().expect("HOI4 install not found");
+        let map = ProvinceMap::load_bmp(&dir.join("map").join("provinces.bmp")).unwrap();
+        let defs = load_definition_csv(&dir.join("map").join("definition.csv")).unwrap();
+        let adjs = load_adjacencies_csv(&dir.join("map").join("adjacencies.csv")).unwrap();
+        let mut gen = MapGenerator::new(map, defs, adjs);
+        gen.set_rivers(IndexMap::load_indexed_bmp(&dir.join("map").join("rivers.bmp")).unwrap());
+        gen.set_victory_points(load_victory_points(&states_dir_of(&dir)).unwrap());
+        gen.set_province_to_state(load_province_to_state(&states_dir_of(&dir)).unwrap());
+        gen.set_state_categories(load_state_categories(&states_dir_of(&dir)).unwrap());
+        gen.set_state_industry(load_state_industry(&states_dir_of(&dir)).unwrap());
+        gen.set_state_infrastructure(load_state_infrastructure(&states_dir_of(&dir)).unwrap());
+        gen.set_railways(load_railways(&dir.join("map").join("railways.txt")).unwrap());
+        gen.set_unit_stacks(load_unit_stacks(&dir.join("map").join("unitstacks.txt")));
+        for (pid, dirs, name) in [
+            (3544u32, vec![HexDirection::W, HexDirection::SW], "warsaw"),
+            (3560, vec![HexDirection::E], "sedan"),
+            (1198, vec![HexDirection::E], "desert"),
+            (3914, vec![HexDirection::NW], "ioannina"),
+        ] {
+            let tm = gen.generate(pid, &dirs).unwrap();
+            let g = &tm.grid;
+            // Road edge graph over playable hexes.
+            let linked = |a: HexCoord, b: HexCoord| -> bool {
+                let Some(d) = a.direction_to(b) else { return false };
+                let ab = g.cell(a).map(|c| c.road_edges & d.bit() != 0).unwrap_or(false);
+                let ba = g.cell(b).map(|c| c.road_edges & d.opposite().bit() != 0).unwrap_or(false);
+                ab || ba
+            };
+            let nodes: Vec<HexCoord> = g
+                .iter_coords()
+                .filter(|&h| !g.cell(h).unwrap().out_of_bounds && g.cell(h).unwrap().road_edges != 0)
+                .collect();
+            let deg = |h: HexCoord| {
+                h.neighbors().into_iter().filter(|&n| linked(h, n)).count()
+            };
+            let mut tris = Vec::new();
+            let mut quads = Vec::new();
+            for (i, &a) in nodes.iter().enumerate() {
+                let na: Vec<HexCoord> = a.neighbors().into_iter().filter(|&n| linked(a, n)).collect();
+                let k = |h: HexCoord| (h.q, h.r);
+                for &b in &na {
+                    if k(b) <= k(a) { continue; }
+                    let nb: Vec<HexCoord> = b.neighbors().into_iter().filter(|&n| linked(b, n)).collect();
+                    // triangle: a-b, b-c, c-a
+                    for &c in &nb {
+                        if k(c) <= k(b) || c == a { continue; }
+                        if linked(c, a) {
+                            tris.push((a, b, c));
+                        }
+                    }
+                    // quad: a-b-c-d-a with a smallest index
+                    for &c in &nb {
+                        if c == a { continue; }
+                        for &d in &c.neighbors() {
+                            if d == c || d == b || d == a { continue; }
+                            if linked(c, d) && linked(d, a) && k(a) < k(b) && k(a) < k(c) && k(a) < k(d) {
+                                let _ = i;
+                                quads.push((a, b, c, d));
+                            }
+                        }
+                    }
+                }
+            }
+            // Short forks: junction (deg>=3) hex whose two branches rejoin within 4 steps.
+            let junctions: Vec<HexCoord> = nodes.iter().copied().filter(|&h| deg(h) >= 3).collect();
+            // Bridges on edge-exit runs: bridge hex whose road path does NOT continue on both sides.
+            let mut edge_bridges = Vec::new();
+            for &h in &nodes {
+                let c = g.cell(h).unwrap();
+                if !c.bridge { continue; }
+                let in_links = h.neighbors().into_iter().filter(|&n| linked(h, n) && !g.cell(n).unwrap().out_of_bounds).count();
+                let _ = in_links;
+                // A bridge whose band exits the playable mask: any edge bit toward an out-of-bounds/off-grid hex.
+                let exits = HexDirection::ALL.iter().any(|d| {
+                    c.road_edges & d.bit() != 0 && {
+                        let n = h.neighbor(*d);
+                        g.cell(n).map(|n2| n2.out_of_bounds).unwrap_or(true)
+                    }
+                });
+                if exits { edge_bridges.push(h); }
+            }
+            eprintln!("[topo] {name} pid={pid}: nodes={} junctions={} tris={} quads={} edge_bridges={:?}",
+                nodes.len(), junctions.len(), tris.len(), quads.len(), edge_bridges);
+            for t in &tris { eprintln!("[topo] {name} TRI ({},{})-({},{})-({},{})", (t.0).q,(t.0).r,(t.1).q,(t.1).r,(t.2).q,(t.2).r); }
+            for qd in quads.iter().take(12) { eprintln!("[topo] {name} QUAD ({},{})-({},{})-({},{})-({},{})", (qd.0).q,(qd.0).r,(qd.1).q,(qd.1).r,(qd.2).q,(qd.2).r,(qd.3).q,(qd.3).r); }
+            // RAIL triangles (same analysis on rail_edges).
+            let rlinked = |a: HexCoord, b: HexCoord| -> bool {
+                let Some(d) = a.direction_to(b) else { return false };
+                let ab = g.cell(a).map(|c| c.rail_edges & d.bit() != 0).unwrap_or(false);
+                let ba = g.cell(b).map(|c| c.rail_edges & d.opposite().bit() != 0).unwrap_or(false);
+                ab || ba
+            };
+            let rnodes: Vec<HexCoord> = g
+                .iter_coords()
+                .filter(|&h| !g.cell(h).unwrap().out_of_bounds && g.cell(h).unwrap().rail_edges != 0)
+                .collect();
+            let mut rtris = 0usize;
+            for &a in &rnodes {
+                for &b in &a.neighbors() {
+                    if !rlinked(a, b) || (b.q, b.r) <= (a.q, a.r) { continue; }
+                    for &c in &b.neighbors() {
+                        if (c.q, c.r) <= (b.q, b.r) || c == a { continue; }
+                        if rlinked(b, c) && rlinked(c, a) { rtris += 1; }
+                    }
+                }
+            }
+            // Adjacent-but-UNLINKED road-flag pairs: bands pass within one
+            // hex without an edge — visual merge suspects.
+            let mut adjacent_unlinked = 0usize;
+            for h in g.iter_coords() {
+                let c = g.cell(h).unwrap();
+                if c.out_of_bounds || !c.road { continue; }
+                for n in h.neighbors() {
+                    let Some(nc) = g.cell(n) else { continue };
+                    if nc.out_of_bounds || !nc.road { continue; }
+                    if (n.q, n.r) <= (h.q, h.r) { continue; }
+                    if !linked(h, n) { adjacent_unlinked += 1; }
+                }
+            }
+            eprintln!("[topo] {name}: rail_nodes={} rail_tris={} adjacent_unlinked_road_pairs={}",
+                rnodes.len(), rtris, adjacent_unlinked);
+            // Visual triangles: adjacent-unlinked pair (a,b) sharing a
+            // common linked neighbour c (a-c and b-c both real links).
+            let mut vtri = 0usize;
+            for h in g.iter_coords() {
+                let c0 = g.cell(h).unwrap();
+                if c0.out_of_bounds || !c0.road { continue; }
+                for n in h.neighbors() {
+                    let Some(nc) = g.cell(n) else { continue; };
+                    if nc.out_of_bounds || !nc.road { continue; }
+                    if (n.q, n.r) <= (h.q, h.r) { continue; }
+                    if linked(h, n) { continue; }
+                    let common = h.neighbors().into_iter().any(|x| {
+                        x != n && linked(h, x) && linked(n, x)
+                    });
+                    if common {
+                        vtri += 1;
+                        if vtri <= 8 {
+                            eprintln!("[topo] {name} VTRI ({},{})~({},{})", h.q, h.r, n.q, n.r);
+                        }
+                    }
+                }
+            }
+            eprintln!("[topo] {name}: visual_triangles={vtri}");
+            // Coastal diagnostics: playable water / shore hexes / spurs.
+            let mut water_in = 0usize;
+            let mut shore = 0usize;
+            for h in g.iter_coords() {
+                let c = g.cell(h).unwrap();
+                if c.out_of_bounds { continue; }
+                if c.terrain == Terrain::Water { water_in += 1; }
+                if c.terrain != Terrain::Water && c.is_passable
+                    && h.neighbors().into_iter().any(|n| {
+                        g.cell(n).map(|x| x.terrain == Terrain::Water).unwrap_or(false)
+                    })
+                {
+                    shore += 1;
+                }
+            }
+            // branch endpoints = road hexes with exactly 1 edge bit, adjacent to water dist 1
+            let mut coastal_ends = 0usize;
+            for h in g.iter_coords() {
+                let c = g.cell(h).unwrap();
+                if c.out_of_bounds || !c.road { continue; }
+                if c.road_edges.count_ones() == 1
+                    && h.neighbors().into_iter().any(|n| {
+                        g.cell(n).map(|x| x.terrain == Terrain::Water).unwrap_or(false)
+                    })
+                {
+                    coastal_ends += 1;
+                    eprintln!("[topo] {name} COASTAL-END ({},{})", h.q, h.r);
+                }
+            }
+            eprintln!("[topo] {name}: playable_water={water_in} shore_hexes={shore} coastal_ends={coastal_ends}");
+
+            // village not adjacent to road check
+            let mut orphan_villages = 0usize;
+            for h in g.iter_coords() {
+                let c = g.cell(h).unwrap();
+                if c.out_of_bounds || c.terrain != Terrain::Village { continue; }
+                let near_road = std::iter::once(h).chain(h.neighbors()).any(|x| g.cell(x).map(|x2| x2.road).unwrap_or(false));
+                let near_water = h.neighbors().into_iter().any(|x| matches!(g.cell(x).map(|x2| x2.terrain), Some(Terrain::Water) | Some(Terrain::River)));
+                if !near_road && !near_water { orphan_villages += 1; }
+            }
+            eprintln!("[topo] {name}: orphan_villages={orphan_villages}");
+
+            // Road net vs the elevation field (ENH-0137: price roads by
+            // relief instead of terrain type — how much relief does the
+            // painted net actually sit on?).
+            let mut by_elev = std::collections::BTreeMap::new();
+            let mut by_terrain = std::collections::BTreeMap::new();
+            let mut climbs = std::collections::BTreeMap::new();
+            for h in g.iter_coords() {
+                let c = g.cell(h).unwrap();
+                if c.out_of_bounds || !(c.road || c.rail) {
+                    continue;
+                }
+                *by_elev.entry(c.elevation).or_insert(0usize) += 1;
+                *by_terrain
+                    .entry(format!("{:?}", c.terrain))
+                    .or_insert(0usize) += 1;
+                for n in h.neighbors() {
+                    if (n.q, n.r) <= (h.q, h.r) || !linked(h, n) {
+                        continue;
+                    }
+                    let ne = g.cell(n).map(|x| x.elevation).unwrap_or(0);
+                    *climbs.entry(ne - c.elevation).or_insert(0usize) += 1;
+                }
+            }
+            eprintln!("[topo] {name}: road/rail hexes by elevation {by_elev:?}");
+            eprintln!("[topo] {name}: road/rail hexes by terrain {by_terrain:?}");
+            eprintln!("[topo] {name}: road steps by Δelev {climbs:?}");
+        }
+    }
     /// Fuzz the MENU BACKDROP path (menu.rs `backdrop_state`): every land
     /// province in the backdrop's pixel-area window × every single attack
     /// direction goes through `generate()` under `catch_unwind`. A panicking
@@ -417,6 +664,11 @@ mod tests {
         let mut gen = MapGenerator::new(map, defs, adjs);
         gen.set_rivers(IndexMap::load_indexed_bmp(&dir.join("map").join("rivers.bmp")).unwrap());
         gen.set_victory_points(load_victory_points(&states_dir_of(&dir)).unwrap());
+        gen.set_province_to_state(load_province_to_state(&states_dir_of(&dir)).unwrap());
+        gen.set_state_categories(load_state_categories(&states_dir_of(&dir)).unwrap());
+        gen.set_state_industry(load_state_industry(&states_dir_of(&dir)).unwrap());
+        gen.set_state_infrastructure(load_state_infrastructure(&states_dir_of(&dir)).unwrap());
+        gen.set_railways(load_railways(&dir.join("map").join("railways.txt")).unwrap());
         gen.set_unit_stacks(load_unit_stacks(&dir.join("map").join("unitstacks.txt")));
         gen.set_vp_names(load_vp_names(
             &dir.join("localisation")
@@ -485,6 +737,11 @@ mod tests {
         let mut gen = MapGenerator::new(map, defs, adjs);
         gen.set_rivers(IndexMap::load_indexed_bmp(&dir.join("map").join("rivers.bmp")).unwrap());
         gen.set_victory_points(load_victory_points(&states_dir_of(&dir)).unwrap());
+        gen.set_province_to_state(load_province_to_state(&states_dir_of(&dir)).unwrap());
+        gen.set_state_categories(load_state_categories(&states_dir_of(&dir)).unwrap());
+        gen.set_state_industry(load_state_industry(&states_dir_of(&dir)).unwrap());
+        gen.set_state_infrastructure(load_state_infrastructure(&states_dir_of(&dir)).unwrap());
+        gen.set_railways(load_railways(&dir.join("map").join("railways.txt")).unwrap());
         gen.set_unit_stacks(load_unit_stacks(&dir.join("map").join("unitstacks.txt")));
         gen.set_vp_names(load_vp_names(
             &dir.join("localisation")

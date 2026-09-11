@@ -362,19 +362,29 @@ pub fn sync_unit_visuals(
         ));
     }
 
-    // Selection ring under the selected unit.
-    if let Some(id) = state.selected_unit {
-        if let Some(unit) = state.unit_by_id(id) {
-            let (ring, mat) = cache.ring(&mut meshes, &mut images, &mut materials);
-            let y = unit_y_on_grid(&state, unit.position) + 0.01;
-            let (x, z) = unit.position.to_world(crate::board::HEX_SIZE);
-            commands.spawn((
-                Mesh3d(ring),
-                MeshMaterial3d(mat),
-                Transform::from_xyz(x, y, z),
-                SelectionRing,
-                NotShadowCaster, // flat ring: casts no visible shadow
-            ));
+    // Selection ring under EVERY selected unit (§9.3 multi-select).
+    let ring_units: Vec<&BattalionUnit> = state
+        .selection
+        .iter()
+        .filter_map(|&id| state.unit_by_id(id))
+        .collect();
+    for unit in &ring_units {
+        let (ring, mat) = cache.ring(&mut meshes, &mut images, &mut materials);
+        let y = unit_y_on_grid(&state, unit.position) + 0.01;
+        let (x, z) = unit.position.to_world(crate::board::HEX_SIZE);
+        commands.spawn((
+            Mesh3d(ring),
+            MeshMaterial3d(mat),
+            Transform::from_xyz(x, y, z),
+            SelectionRing,
+            NotShadowCaster, // flat ring: casts no visible shadow
+        ));
+    }
+    // Range rings stay a SINGLE-selection readout (§6.3): with several
+    // battalions selected the overlapping envelopes would be unreadable.
+    if ring_units.len() == 1 {
+        let unit = ring_units[0];
+        {
             // Ranged unit selected: show the max-range circle (§6.3). Only
             // hexes whose center is inside it can be fired at / supported.
             // Uniform red regardless of side (deliberate choice over

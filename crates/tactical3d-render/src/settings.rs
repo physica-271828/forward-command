@@ -1,9 +1,12 @@
-//! In-battle render/performance settings: the
-//! Esc menu's Settings window adjusts MSAA / shadows / render scale / frame
-//! cap / idle frame-saver WITHOUT leaving the battle. `BattleSettings` is
-//! the live source of truth once the window is up (`RenderQuality` in
+//! In-battle settings editable without leaving the battle: the
+//! Esc menu's Settings window adjusts the render/performance knobs
+//! (MSAA / shadows / render scale / frame cap / idle frame-saver);
+//! the "keep manual command" rule (§7.4) rides the same resource — its
+//! checkbox next to the End Turn button writes it, and the bin crate's
+//! change-detection persistence saves BOTH to settings.json. `BattleSettings`
+//! is the live source of truth once the window is up (`RenderQuality` in
 //! state.rs only carries the startup values into `spawn_camera` /
-//! `setup_board`); the Settings window writes it and change detection drives
+//! `setup_board`); change detection drives
 //! [`apply_battle_settings`] here (hot-apply) plus the bin crate's
 //! persistence to settings.json.
 
@@ -12,9 +15,9 @@ use bevy::prelude::*;
 use crate::gate::RenderGate;
 use crate::render_scale::RenderScaleState;
 
-/// Live render/performance knobs for the battle window — a mirror of the
-/// settings.json render keys. Inserted by the bin crate at assembly from
-/// `AppSettings`; the Esc-menu Settings window edits it. Every consumer
+/// Live in-battle settings for the battle window — a mirror of the
+/// settings.json keys. Inserted by the bin crate at assembly from
+/// `AppSettings`; the in-battle UI edits it. Every consumer
 /// reacts through Bevy change detection, so writes must only happen on a
 /// real edit (the UI guards `value != current` before assigning).
 #[derive(Resource)]
@@ -31,6 +34,14 @@ pub struct BattleSettings {
     pub max_fps: u32,
     /// Idle frame-saver: drop to ~10 fps when nothing moves.
     pub low_power: bool,
+    /// Manual-command retention (§7.4, settings `keep_manual_override`):
+    /// when true a completed manual command (arrival / attack
+    /// resolution) does NOT hand the battalion back — it stays manual
+    /// until stood by. The game loop reads the policy from
+    /// `GameController`; this field is the persistence mirror the bin
+    /// writes back to settings.json (synced into `GameController` by the
+    /// SetManualKeep command).
+    pub keep_manual_override: bool,
 }
 
 /// The sun's cascade coverage, captured by `setup_board` (board.rs) at spawn

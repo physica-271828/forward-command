@@ -1,0 +1,33 @@
+# Version handshake (DESIGN §3.3): the external program compares its own
+# version with the one advertised in tac_start and calls exactly one of
+# these on every injected batch. A stale program is reported to the
+# player once per battle; a matching or newer program stays silent.
+d_tac_ver_ok = {
+	set_country_flag = tac_ver_seen
+}
+
+d_tac_ver_prog_stale = {
+	set_country_flag = tac_ver_seen
+	if = {
+		limit = {
+			NOT = { has_country_flag = tac_ver_warned }
+		}
+		set_country_flag = tac_ver_warned
+		country_event = { id = tac_version.1 hours = 0 }
+	}
+}
+
+# Only ever called from exe-injected effects (the hourly sync receipt and
+# the battle-end cleanup), so running at all proves a program is driving
+# this battle. A program that never reported a version predates the
+# handshake — tell the player to update it.
+d_tac_ver_check = {
+	if = {
+		limit = {
+			NOT = { has_country_flag = tac_ver_seen }
+			NOT = { has_country_flag = tac_ver_warned }
+		}
+		set_country_flag = tac_ver_warned
+		country_event = { id = tac_version.1 hours = 0 }
+	}
+}

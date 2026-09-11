@@ -81,12 +81,18 @@ battle.hover.flag_holding:0 "坚守中（防御 +25%）"
 battle.hover.flag_emplaced:0 "已架设"
 battle.hover.flag_acted:0 "已行动"
 battle.hover.flag_reloading:0 "装填中（{n} 回合）"
+battle.hover.cmd_manual:0 "指挥：手操（师 AI 不接管）"
+battle.hover.cmd_div_ai:0 "指挥：师 AI 代管"
 battle.hover.hex:0 "格 ({q}, {r})"
 battle.hover.terrain_mods:0 "移动 {move}"
 battle.hover.cover:0 "掩蔽 {cover}%"
 battle.hover.impassable:0 "不可通行"
 battle.hover.out_of_bounds:0 "界外区域——单位滞留 {max} 回合即脱离战斗"
 battle.hover.oob_countdown:0 "界外滞留 {n}/{max}——满 {max} 回合脱离战斗"
+battle.hover.road:0 "道路"
+battle.hover.rail:0 "铁路"
+battle.hover.bridge:0 "桥梁"
+battle.hover.factory:0 "工厂区"
 
 # ── 环形命令菜单提示（按钮字形保持单字母）──
 battle.radial.take_cover:0 "进入掩护 — 防御 +25%，直到移动或攻击（消耗本回合）"
@@ -224,6 +230,9 @@ battle.tooltip.auto.skip_reports:0 "回合战报弹窗显示下方延时后自�
 battle.tooltip.auto.auto_sync:0 "到整点自动执行同步；同步摘要弹窗按下方延时自动关闭（勾选自动跳过后，摘要关闭即恢复自动推进）。"
 battle.tooltip.auto.report_close_secs:0 "回合战报在屏幕上停留这么久后自动关闭。"
 battle.tooltip.auto.sync_close_secs:0 "同步摘要在屏幕上停留这么久后自动关闭。"
+battle.manual.keep:0 "保持指挥"
+battle.tooltip.manual.keep.checked:0 "保持手操：手操命令完成（到达目标/攻击结算）后营不自动归还——营保持手动指挥、师 AI 不接管，也不参与师命令规划；直到右键该营自身待命才归还。"
+battle.tooltip.manual.keep.unchecked:0 "完成即归还（默认）：手操命令完成后，营在回合滚动点归还所属师并重新纳入师命令规划；归还时战斗日志会提示。"
 battle.notice.auto.fuse:0 "连续 {n} 个回合零移动且零战斗 — 自动推进已停止"
 
 # ── 师级命令 (DESIGN §7.4) ──

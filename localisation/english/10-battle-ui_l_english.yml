@@ -81,12 +81,18 @@ battle.hover.flag_holding:0 "HOLDING (+25% def)"
 battle.hover.flag_emplaced:0 "EMPLACED"
 battle.hover.flag_acted:0 "ACTED"
 battle.hover.flag_reloading:0 "RELOADING ({n}t)"
+battle.hover.cmd_manual:0 "Command: MANUAL (division AI hands off)"
+battle.hover.cmd_div_ai:0 "Command: division AI"
 battle.hover.hex:0 "Hex ({q}, {r})"
 battle.hover.terrain_mods:0 "Move {move}"
 battle.hover.cover:0 "Cover {cover}%"
 battle.hover.impassable:0 "IMPASSABLE"
 battle.hover.out_of_bounds:0 "OUT OF BOUNDS — a unit lingering {max} turns leaves the battle"
 battle.hover.oob_countdown:0 "Out of bounds {n}/{max} — leaves the battle at {max}"
+battle.hover.road:0 "Road"
+battle.hover.rail:0 "Railway"
+battle.hover.bridge:0 "Bridge"
+battle.hover.factory:0 "Factory district"
 
 # ── Radial command-menu tooltips (button glyphs stay single letters) ──
 battle.radial.take_cover:0 "Take cover — +25% defense until you move or attack (takes the turn)"
@@ -226,6 +232,9 @@ battle.tooltip.auto.skip_reports:0 "Each round's combat-report window closes its
 battle.tooltip.auto.auto_sync:0 "The hour-boundary Sync runs by itself; the summary closes after its own delay (with auto-advance on, closing it resumes the skipping)."
 battle.tooltip.auto.report_close_secs:0 "How long a combat report stays on screen before closing itself."
 battle.tooltip.auto.sync_close_secs:0 "How long the sync summary stays up before closing itself."
+battle.manual.keep:0 "Keep command"
+battle.tooltip.manual.keep.checked:0 "Keep manual: after a manual order completes (arrival / attack resolution) the battalion does not return automatically — it stays under manual command, the division AI never takes it over and it takes no part in division-order planning, until stood by (right-click the battalion itself)."
+battle.tooltip.manual.keep.unchecked:0 "Return when done (default): after a manual order completes, the battalion returns to its division at the turn rollover and rejoins division-order planning; the battle log announces the hand-back."
 battle.notice.auto.fuse:0 "{n} rounds with no movement and no combat — auto-advance halted"
 
 # ── Division orders (DESIGN §7.4) ──

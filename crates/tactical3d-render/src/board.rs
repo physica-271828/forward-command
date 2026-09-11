@@ -1,6 +1,7 @@
 //! Board rendering: one merged palette-textured mesh for all terrain hexes
-//! (river strips baked in), ONE merged static mesh for all props, and
-//! palette-only recoloring for fog of war and command highlights.
+//! (river strips baked in), ONE merged static mesh for all props, ONE
+//! merged static ribbon mesh for roads and railways, and palette-only
+//! recoloring for fog of war and command highlights.
 //!
 //! Terrain is static for a battle, so the merged
 //! board mesh (millions of verts on big provinces) is built ONCE; palette
@@ -421,6 +422,31 @@ pub struct DeploymentBorder;
 #[derive(Component)]
 pub struct RouteArrows;
 
+/// The route ribbon's chain polyline of a standing order: the unit's hex
+/// first, then the active path, then each queued leg's preview with its
+/// shared start hex skipped — one continuous, terrain-heighted baseline
+/// (no per-pass lift). Shared by the mesh builder and the grow-animation
+/// length bookkeeping, so a Shift-append's reveal seam can never drift
+/// from the drawn geometry.
+pub fn route_chain_polyline(grid: &HexGrid, u: &BattalionUnit) -> Vec<Vec3> {
+    let center_of = |h: HexCoord| {
+        let (x, z) = h.to_world(HEX_SIZE);
+        Vec3::new(x, hex_top_y_at(grid, h), z)
+    };
+    let mut p = vec![center_of(u.position)];
+    if let Some(order) = &u.move_order {
+        for &h in &order.path {
+            p.push(center_of(h));
+        }
+        for leg in &order.queue {
+            for &h in leg.preview.iter().skip(1) {
+                p.push(center_of(h));
+            }
+        }
+    }
+    p
+}
+
 /// Continuous HOI4-style route ribbon for the **selected** player-side
 /// unit's standing move order (enemy orders are never shown; unselected
 /// units' ribbons are hidden too): black medium border, pure
@@ -428,26 +454,25 @@ pub struct RouteArrows;
 /// meshes — (border, interior) — because a single material's emissive would
 /// tint the black border red; they spawn as two entities with the border
 /// slightly lower. `clip` (0..=1) limits the ribbon to that fraction of
-/// total length — the grow-from-unit animation on issue. Route-ribbon mesh:
+/// total length — the grow-from-unit animation on issue. A Shift-click
+/// waypoint chain draws as ONE continuous arrow: the active segment plus
+/// each queued leg's preview polyline extend the same red ribbon all the
+/// way to the chain's last destination (the HOI4 queued-order look).
+/// Route-ribbon mesh:
 /// the standing move order of the selected unit — or, for a selected HQ
 /// whose division has a standing division order, EVERY battalion of that
-/// division (`div_filter = Some(division)`):
+/// division (`div_filter = Some((tag, division))`):
 /// the player reviews the whole division's pre-orders at a glance before
 /// End Turn.
 pub fn build_route_arrows_mesh(
     state: &TacticalState,
     clip: f32,
-    div_filter: Option<&str>,
+    div_filter: Option<(&str, &str)>,
     params: &CombatParams,
 ) -> ((Mesh, Image), (Mesh, Image)) {
     const BLACK: [f32; 4] = [0.02, 0.02, 0.02, 1.0];
     const RED: [f32; 4] = [0.85, 0.10, 0.07, 1.0];
     let grid = state.grid.as_ref().expect("grid must exist");
-    let top_of = |h: HexCoord, lift: f32| hex_top_y_at(grid, h) + lift;
-    let center_of = |h: HexCoord, lift: f32| {
-        let (x, z) = h.to_world(HEX_SIZE);
-        Vec3::new(x, top_of(h, lift), z)
-    };
     let mut mbs = [MeshBuilder::new(), MeshBuilder::new()];
     const W: f32 = 0.11; // red interior half-width
     const BORDER: f32 = 0.065; // black border extra width
@@ -457,14 +482,23 @@ pub fn build_route_arrows_mesh(
             && u.move_order.is_some()
             && match div_filter {
                 // Selected HQ with a standing division order → the whole
-                // division's march ribbons.
-                Some(div) => u.division == div,
-                // Otherwise only the selected unit's own ribbon.
-                None => state.selected_unit == Some(u.id),
+                // division's march ribbons (its own owner's, never a
+                // same-name division's).
+                Some((tag, div)) => u.tag == tag && u.division == div,
+                // Otherwise every selected unit's own ribbon.
+                None => state.is_selected(u.id),
             }
     };
     for u in state.units.iter().filter(|u| ribbon_of(u)) {
-        let order = u.move_order.as_ref().unwrap();
+        // The chain polyline at a common baseline (y added per pass) —
+        // see `route_chain_polyline`. Lengths are shared by the two
+        // passes and the progress fill.
+        let chain_pts = route_chain_polyline(grid, u);
+        let segs: Vec<f32> = chain_pts
+            .windows(2)
+            .map(|w| (w[1] - w[0]).length())
+            .collect();
+        let total: f32 = segs.iter().sum();
         // Draw each layer (black border underneath, red on top) as its own
         // clipped polyline pass into its own builder. Only a tiny y-lift
         // separates them: too much and the viewing angle hides the far-side
@@ -474,15 +508,10 @@ pub fn build_route_arrows_mesh(
             .enumerate()
         {
             let mb = &mut mbs[pass];
-            let mut pts = vec![center_of(u.position, lift)];
-            for &h in &order.path {
-                pts.push(center_of(h, lift));
-            }
-            let segs: Vec<f32> = pts.windows(2).map(|w| (w[1] - w[0]).length()).collect();
-            let total: f32 = segs.iter().sum();
             if total < 1e-4 {
                 continue;
             }
+            let pts: Vec<Vec3> = chain_pts.iter().map(|v| *v + Vec3::Y * lift).collect();
             let limit = total * clip.clamp(0.0, 1.0);
             let mut travelled = 0.0;
             for (i, len) in segs.iter().enumerate() {
@@ -521,7 +550,8 @@ pub fn build_route_arrows_mesh(
                 travelled += len;
             }
             // Arrowhead at the destination once fully grown (the bigger
-            // border pass underneath reads as its outline).
+            // border pass underneath reads as its outline). With a chain
+            // the head marks the chain's LAST waypoint.
             if clip >= 1.0 - 1e-6 && pts.len() >= 2 {
                 let d = *pts.last().unwrap();
                 let p = pts[pts.len() - 2];
@@ -542,21 +572,31 @@ pub fn build_route_arrows_mesh(
         // from the unit toward the next hex — it reaches the hex exactly
         // when the marching step completes (invested hours / step cost,
         // §6.2). Interior pass only, centred and a hair above the red so
-        // it reads as a fill level without z-fighting. Shown only on the
-        // fully grown ribbon (the 0.45 s grow is a transient).
-        if clip >= 1.0 - 1e-6 {
-            if let Some(frac) = next_step_progress(grid, &state.units, u, params) {
-                if frac > 0.02 {
-                    // Light pink — reads clearly against the red interior.
-                    const LIGHT: [f32; 4] = [1.0, 0.70, 0.78, 1.0];
-                    let a = center_of(u.position, 0.058 + 0.006);
-                    let b = center_of(order.path[0], 0.058 + 0.006);
-                    let seg = (b - a).length();
-                    if seg > 1e-4 {
-                        let end = a + (b - a) * frac;
-                        let fwd = (b - a) / seg;
-                        let side = Vec3::new(-fwd.z, 0.0, fwd.x).normalize_or(Vec3::X);
-                        let hw = W * 0.75;
+        // it reads as a fill level without z-fighting.
+        //
+        // The fill GROWS WITH THE ARROW: its tip rides the same `clip`
+        // front, so the very first drawn frame already shows it at the
+        // arrow's root and it extends in lockstep until the arrow tip
+        // passes the progress point — after that the fill stays put while
+        // the arrow keeps growing past it (it never pops in late, waiting
+        // for the ribbon to finish).
+        if let Some(frac) = next_step_progress(grid, &state.units, u, params) {
+            if frac > 0.02 {
+                // Light pink — reads clearly against the red interior.
+                const LIGHT: [f32; 4] = [1.0, 0.70, 0.78, 1.0];
+                let lift = 0.058 + 0.006;
+                let a = chain_pts[0] + Vec3::Y * lift;
+                let b = chain_pts[1] + Vec3::Y * lift;
+                let seg = segs[0];
+                if seg > 1e-4 {
+                    let fwd = (b - a) / seg;
+                    let side = Vec3::new(-fwd.z, 0.0, fwd.x).normalize_or(Vec3::X);
+                    let hw = W * 0.75;
+                    // Fill end = min(arrow tip, progress point) along the
+                    // first segment.
+                    let fill_len = (seg * frac).min(total * clip.clamp(0.0, 1.0));
+                    if fill_len > 0.02 {
+                        let end = a + fwd * fill_len;
                         mbs[1].add_quad(
                             a + side * hw,
                             end + side * hw,
@@ -790,6 +830,7 @@ pub struct CommandLineMeshes {
 pub fn build_command_lines_mesh(
     state: &TacticalState,
     links: &[CommandLink],
+    tag: &str,
     division: &str,
     sel_id: usize,
     sel_hq: bool,
@@ -804,11 +845,14 @@ pub fn build_command_lines_mesh(
     };
     // Line source for Direct/OutOfRange: the division's commanding HQ (a
     // destroyed or undeployed HQ draws nothing; NoHq units get no line).
+    // Matched on the selected unit's (owner tag, division) identity — a
+    // same-name division of another nation is a different formation.
     let hq = state.units.iter().find(|u| {
         u.is_hq()
             && u.is_combat_effective()
             && !u.undeployed
             && u.side == state.player_side
+            && u.tag == tag
             && u.division == division
     });
     const W: f32 = 0.034;
@@ -825,6 +869,7 @@ pub fn build_command_lines_mesh(
     let mut any = [false, false];
     for (i, u) in state.units.iter().enumerate() {
         if u.is_hq()
+            || u.tag != tag
             || u.division != division
             || u.side != state.player_side
             || !u.is_combat_effective()
@@ -994,7 +1039,8 @@ fn spawn_overlay_mesh(
 
 /// Rebuild the chain-of-command overlay on selection change or unit
 /// changes (`units_dirty`, read but NOT consumed — the units pipeline owns
-/// that flag). Selection modes:
+/// that flag). Selection modes (single selection only — a multi-selection
+/// has no single division context):
 /// - HQ selected → the aura ring + every division lane;
 /// - plain battalion → its own lane only (no ring).
 #[allow(clippy::too_many_arguments)]
@@ -1006,11 +1052,12 @@ pub fn sync_command_lines(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     q_lines: Query<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>), With<CommandLines>>,
-    mut last_selected: Local<Option<usize>>,
+    mut last_selected: Local<(Option<usize>, usize)>,
 ) {
-    let sel_changed = state.selected_unit != *last_selected;
+    let sel_key = (state.selected_unit, state.selection.len());
+    let sel_changed = sel_key != *last_selected;
     if sel_changed {
-        *last_selected = state.selected_unit;
+        *last_selected = sel_key;
     }
     if !sel_changed && !state.units_dirty {
         return;
@@ -1027,7 +1074,10 @@ pub fn sync_command_lines(
     let (Some(game), Some(_)) = (game.as_ref(), state.grid.as_ref()) else {
         return;
     };
-    let Some(sel) = state.selected_unit.and_then(|id| state.unit_by_id(id)) else {
+    let Some(sel) = (state.selection.len() == 1)
+        .then(|| state.selected_unit.and_then(|id| state.unit_by_id(id)))
+        .flatten()
+    else {
         return;
     };
     if sel.side != state.player_side || sel.division.is_empty() {
@@ -1039,7 +1089,7 @@ pub fn sync_command_lines(
     let params = game.combat.params();
     let links = compute_command_links(&state.units, params);
     const GOLD: [f32; 4] = [0.62, 0.52, 0.10, 1.0];
-    let m = build_command_lines_mesh(&state, &links, &division, sel_id, sel_hq);
+    let m = build_command_lines_mesh(&state, &links, &sel.tag, &division, sel_id, sel_hq);
     if m.any_solid {
         let ((b_mesh, b_img), (i_mesh, i_img)) = m.solid;
         spawn_overlay_mesh(
@@ -1090,6 +1140,7 @@ pub fn sync_command_lines(
                 && u.is_combat_effective()
                 && !u.undeployed
                 && u.side == state.player_side
+                && u.tag == sel.tag
                 && u.division == division
         }) {
             let (mesh, image) = build_command_ring_mesh(
@@ -1177,14 +1228,16 @@ fn build_div_order_marker_mesh(
     let mut border_mb = MeshBuilder::new();
     let mut core_mb = MeshBuilder::new();
     let mut any = false;
-    for (division, order) in &game.div_orders {
+    for ((tag, division), order) in &game.div_orders {
         let target = match order.pick {
             DivOrderPick::Advance => continue, // directional doctrine, no point
             DivOrderPick::Seize(hex) => hex,
             DivOrderPick::Engage { .. } => order.engage_last_pos.unwrap_or(HexCoord::ZERO),
         };
         // Source: the commanding HQ; once it is gone, the division's
-        // centroid (the order outlives the HQ by design).
+        // centroid (the order outlives the HQ by design). Matched on the
+        // order's (owner tag, division) identity — a same-name division of
+        // another nation must not host this division's marker.
         let src = state
             .units
             .iter()
@@ -1193,6 +1246,7 @@ fn build_div_order_marker_mesh(
                     && u.is_combat_effective()
                     && !u.undeployed
                     && u.side == state.player_side
+                    && u.tag == *tag
                     && u.division == *division
             })
             .map(|u| u.position)
@@ -1202,6 +1256,7 @@ fn build_div_order_marker_mesh(
                     .iter()
                     .filter(|u| {
                         u.side == state.player_side
+                            && u.tag == *tag
                             && u.division == *division
                             && u.is_combat_effective()
                     })
@@ -1339,19 +1394,27 @@ pub fn sync_div_order_markers(
     ));
 }
 
-/// Grow animation state for the route ribbon: set by a newly issued order,
-/// replays the ribbon from the unit to its destination. `last_selected`
-/// tracks selection changes — the ribbon is drawn for the selected unit
-/// only, so switching selection forces a rebuild. `last_filter` tracks the
-/// division-filter mode: selecting an
+/// Grow animation state for the route ribbon: a newly issued order or a
+/// Shift-appended chain leg restarts it and the ribbon is revealed from
+/// `from_clip` (fraction of the NEW chain length already visible when the
+/// animation started — 0 for a fresh order from the unit, >0 for an
+/// append, whose old chain must stay put while the new leg draws on).
+/// `last_selected` tracks selection changes — the ribbons follow the
+/// selection set, so any membership change forces a rebuild.
+/// `last_filter` tracks the division-filter mode: selecting an
 /// ordered division's HQ shows every battalion's ribbon, and a filter
 /// change must rebuild even when no order flag fired.
 #[derive(Resource, Default)]
 pub struct RouteArrowAnim {
     pub t: f32,
     pub active: bool,
-    pub last_selected: Option<usize>,
-    pub last_filter: Option<String>,
+    /// Reveal start: visible fraction of the current chain when the
+    /// animation began (see the struct doc).
+    pub from_clip: f32,
+    /// Selection signature of the last rebuild — the ribbon set follows
+    /// the WHOLE selection (multi-select draws every member's march).
+    pub last_selected: Vec<usize>,
+    pub last_filter: Option<(String, String)>,
 }
 
 /// Despawn entities and remove their per-entity mesh/material/palette-image
@@ -1392,33 +1455,41 @@ pub fn sync_route_arrows(
     time: Res<Time>,
     mut anim: ResMut<RouteArrowAnim>,
 ) {
-    // A newly issued order restarts the grow animation; plain path
-    // advances just rebuild the (shorter) ribbon at full length.
+    // A newly issued order restarts the grow animation from its start
+    // fraction (0 for a fresh order; a Shift-append's from-fraction keeps
+    // the already-visible chain put while the new leg draws on). Plain
+    // path advances just rebuild the (shorter) ribbon at full length.
     if state.arrows_grow {
         state.arrows_grow = false;
+        anim.from_clip = state.arrows_grow_from.clamp(0.0, 1.0);
         anim.t = 0.0;
         anim.active = true;
     }
     // Selecting an HQ whose division has a standing order shows the WHOLE
-    // division's march ribbons; any other selection keeps the
-    // single-unit ribbon. The filter keys the rebuild gate below too —
+    // division's march ribbons (single selection only — the division view
+    // is an HQ-selection exclusive); any other selection keeps the
+    // per-member ribbons. The filter keys the rebuild gate below too —
     // a filter change must rebuild even without a dirty flag.
-    let div_filter = state.selected_unit.and_then(|id| {
-        let u = state.unit_by_id(id)?;
-        if u.is_hq() && u.side == state.player_side && u.is_combat_effective() {
-            let ordered = game
-                .as_ref()
-                .is_some_and(|g| g.div_orders.contains_key(&u.division));
-            ordered.then_some(u.division.clone())
-        } else {
-            None
-        }
-    });
-    // The ribbon is drawn for the SELECTED unit only — selection changes
+    let div_filter = if state.selection.len() == 1 {
+        state.selected_unit.and_then(|id| {
+            let u = state.unit_by_id(id)?;
+            if u.is_hq() && u.side == state.player_side && u.is_combat_effective() {
+                let ordered = game
+                    .as_ref()
+                    .is_some_and(|g| g.div_ordered(&u.tag, &u.division));
+                ordered.then_some((u.tag.clone(), u.division.clone()))
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+    // The ribbons are drawn for the SELECTED set only — selection changes
     // must rebuild even when no order changed.
-    let sel_changed = state.selected_unit != anim.last_selected;
+    let sel_changed = state.selection != anim.last_selected;
     if sel_changed {
-        anim.last_selected = state.selected_unit;
+        anim.last_selected = state.selection.clone();
     }
     let filter_changed = anim.last_filter != div_filter;
     if filter_changed {
@@ -1445,20 +1516,21 @@ pub fn sync_route_arrows(
         return;
     }
     // With a division filter the whole division's march counts; otherwise
-    // only the selected unit's own ribbon.
+    // every selected unit's own ribbon.
     let has_move = match &div_filter {
-        Some(div) => state.units.iter().any(|u| {
+        Some((tag, div)) => state.units.iter().any(|u| {
             u.side == state.player_side
+                && u.tag == *tag
                 && u.division == *div
                 && u.is_combat_effective()
                 && u.move_order.is_some()
         }),
-        None => state
-            .selected_unit
-            .and_then(|id| state.unit_by_id(id))
-            .is_some_and(|u| {
-                u.side == state.player_side && u.is_combat_effective() && u.move_order.is_some()
-            }),
+        None => state.units.iter().any(|u| {
+            state.is_selected(u.id)
+                && u.side == state.player_side
+                && u.is_combat_effective()
+                && u.move_order.is_some()
+        }),
     };
     // Attack lanes render for EVERY player-side registered order.
     let has_attack = state.attack_orders.iter().any(|o| {
@@ -1475,7 +1547,10 @@ pub fn sync_route_arrows(
         if anim.t >= 1.0 {
             anim.active = false;
         }
-        anim.t
+        // Reveal from the stored start fraction to the full chain — an
+        // append therefore draws on from the OLD chain end instead of
+        // re-growing the whole ribbon from the unit.
+        anim.from_clip + (1.0 - anim.from_clip) * anim.t
     } else {
         1.0
     };
@@ -1485,8 +1560,12 @@ pub fn sync_route_arrows(
         .as_ref()
         .map(|g| g.combat.params().clone())
         .unwrap_or_default();
-    let ((b_mesh, b_img), (i_mesh, i_img)) =
-        build_route_arrows_mesh(&state, clip, div_filter.as_deref(), &params);
+    let ((b_mesh, b_img), (i_mesh, i_img)) = build_route_arrows_mesh(
+        &state,
+        clip,
+        div_filter.as_ref().map(|(t, d)| (t.as_str(), d.as_str())),
+        &params,
+    );
     let border_mat = materials.add(StandardMaterial {
         base_color: Color::WHITE,
         base_color_texture: Some(images.add(b_img)),
@@ -2019,6 +2098,858 @@ pub fn pulse_zone_borders(
     }
 }
 
+/// Roads and railways (§4.2): ONE merged static mesh of ground-hugging
+/// ribbons over the terrain — each net decomposed into ordered polyline
+/// runs swept as continuous quad strips with rounded corners; bridge
+/// hexes carry a wider deck strip along the same baseline; rails carry
+/// zebra dashes. Same static-mesh precedent as
+/// the props: built once in `setup_board`, never fog-recolored.
+#[derive(Component)]
+pub struct BoardRoads;
+
+/// One ordered polyline ("run") of hexes through a road or rail net: a
+/// chain walked end to end along the painted edge bits. Runs start/end at
+/// net endpoints and junctions (anything but a clean two-link
+/// pass-through); a pure cycle has no endpoints and comes back `closed`
+/// (open ends are flat-cut; closed runs fillet all around).
+struct NetRun {
+    hexes: Vec<HexCoord>,
+    closed: bool,
+}
+
+// Band colours/geometry. Roads are a MAP-ROAD look — a deliberately
+// different colour family from the command overlays (assault red, hover
+// yellow, route pinks, flag gold): dark casing around a light khaki core.
+// On desert sand the khaki shares the terrain's luminance, but the dark
+// casing edges still carry the road's outline (reviewed trade-off).
+const ROAD_CASING_COL: [f32; 4] = [0.32, 0.26, 0.19, 1.0];
+const ROAD_CASING_W: f32 = 0.11;
+const ROAD_CASING_LIFT: f32 = 0.022;
+const ROAD_CORE_COL: [f32; 4] = [0.80, 0.70, 0.50, 1.0];
+const ROAD_CORE_W: f32 = 0.065;
+const ROAD_CORE_LIFT: f32 = 0.026;
+// Alt road style (FC_ROAD_STYLE=asphalt): one flat grey band.
+const ROAD_ASPHALT_COL: [f32; 4] = [0.42, 0.40, 0.38, 1.0];
+const ROAD_ASPHALT_W: f32 = 0.085;
+const ROAD_ASPHALT_LIFT: f32 = 0.022;
+// Rail: the classic map-railway zebra — a black casing band under a white
+// core band, with black perpendicular dashes riding ON TOP of the white
+// (TIE_COL matches the casing so each dash reads as part of it).
+const RAIL_CASING_COL: [f32; 4] = [0.07, 0.07, 0.08, 1.0];
+const RAIL_CASING_W: f32 = 0.085;
+// The rail stack rides a hair above the road bands (road core 0.026):
+// where a road hex links to a rail hex both are drawn, and the rail reads
+// as crossing OVER the road instead of z-fighting it.
+const RAIL_CASING_LIFT: f32 = 0.030;
+const RAIL_CORE_COL: [f32; 4] = [0.85, 0.85, 0.82, 1.0];
+const RAIL_CORE_W: f32 = 0.055;
+const RAIL_CORE_LIFT: f32 = 0.034;
+const TIE_COL: [f32; 4] = [0.07, 0.07, 0.08, 1.0];
+// Bridge deck strip (§4.2): a wider stone-timber bed swept along the same
+// baseline wherever the route crosses a bridge hex — straight or turning;
+// the road/rail bands ride on top of it.
+const DECK_COL: [f32; 4] = [0.46, 0.34, 0.20, 1.0];
+const DECK_HALF_W: f32 = 0.30;
+// Below the road casing (0.022), floating over the riverbed prism.
+const DECK_LIFT: f32 = 0.018;
+
+/// The net's edge bits of hex `h` (0 off-grid): bit i = HexDirection::ALL[i],
+/// set on both cells of every painted path edge (§4.2). This is the
+/// renderer's ONLY source of truth for which links exist — hex-adjacency
+/// of the flags alone invents links between touching-but-unrelated hexes
+/// (cluster villages, paths passing beside a flagged hex). Movement reads
+/// the hex-level flags, not these bits.
+fn net_bits(grid: &HexGrid, h: HexCoord, road_net: bool) -> u8 {
+    grid.cell(h)
+        .map(|c| if road_net { c.road_edges } else { c.rail_edges })
+        .unwrap_or(0)
+}
+
+/// True when a band may be DRAWN on hex `h`: on-grid, passable, and not
+/// Terrain::Urban (§4.2 — bands never enter cities; a net reaching an
+/// urban cluster clips at the last rural hex).
+fn band_drawable(grid: &HexGrid, h: HexCoord) -> bool {
+    grid.cell(h)
+        .map(|c| c.is_passable && c.terrain != Terrain::Urban)
+        .unwrap_or(false)
+}
+
+/// Walkable links of `h`: set-bit directions whose TARGET hex can be
+/// drawn. Bits into Urban/off-grid/impassable hexes are terminators, not
+/// links (an urban bit still pulls the band to the city edge — see
+/// `smooth_run_polyline`).
+fn net_links(grid: &HexGrid, h: HexCoord, road_net: bool) -> Vec<HexDirection> {
+    let bits = net_bits(grid, h, road_net);
+    HexDirection::ALL
+        .into_iter()
+        .filter(|d| bits & d.bit() != 0 && band_drawable(grid, h.neighbor(*d)))
+        .collect()
+}
+
+/// First edge bit of `h` pointing INTO an Urban hex, if any: paths set
+/// bits into urban anchors, and the band extends to the shared hex edge
+/// instead of stopping half a hex short.
+fn urban_bit_target(grid: &HexGrid, h: HexCoord, road_net: bool) -> Option<HexCoord> {
+    let bits = net_bits(grid, h, road_net);
+    HexDirection::ALL
+        .into_iter()
+        .filter(|d| bits & d.bit() != 0)
+        .map(|d| h.neighbor(d))
+        .find(|&n| grid.cell(n).map(|c| c.terrain == Terrain::Urban) == Some(true))
+}
+
+/// Decompose one net (roads by `road_edges`, rails by `rail_edges` — the
+/// nets stay separate even where adjacent) into runs. Runs start at
+/// endpoints and junctions (anything but a clean two-bit pass-through)
+/// and walk while each hex keeps exactly one walkable link after
+/// discarding the edge just arrived on; a pure cycle has no start and is
+/// walked once back to its origin as a closed run. The walk trusts the
+/// LOCAL bits: a one-sided bit still draws its link. Deterministic:
+/// hexes scan in grid order, directions in HexDirection::ALL order.
+fn net_runs(grid: &HexGrid, road_net: bool) -> Vec<NetRun> {
+    let key = |a: HexCoord, b: HexCoord| {
+        if (a.q, a.r) < (b.q, b.r) {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    };
+    let mut visited: std::collections::HashSet<(HexCoord, HexCoord)> =
+        std::collections::HashSet::new();
+    let mut runs = Vec::new();
+    // Clean pass-through: exactly two bits, both walkable.
+    let through = |h: HexCoord| {
+        net_bits(grid, h, road_net).count_ones() == 2 && net_links(grid, h, road_net).len() == 2
+    };
+    // The single walkable continuation of a pass-through mid-walk, after
+    // discarding the edge back to `prev`; `None` at every run end.
+    let continuation = |cur: HexCoord, prev: HexCoord| -> Option<HexCoord> {
+        let back = cur.direction_to(prev).map(|d| d.bit()).unwrap_or(0);
+        let rem = net_bits(grid, cur, road_net) & !back;
+        let mut links = HexDirection::ALL
+            .into_iter()
+            .filter(|d| rem & d.bit() != 0 && band_drawable(grid, cur.neighbor(*d)));
+        match (links.next(), links.next()) {
+            (Some(d), None) => Some(cur.neighbor(d)),
+            _ => None,
+        }
+    };
+    let nodes: Vec<HexCoord> = grid
+        .iter_coords()
+        .filter(|&h| band_drawable(grid, h) && net_bits(grid, h, road_net) != 0)
+        .collect();
+    // Runs from endpoints/junctions. A node whose bits are ALL terminators
+    // (lone hex linked only into the city, or a bit to nowhere) stays a
+    // one-hex run so the city-edge stub / end disc still draws.
+    for &start in &nodes {
+        if through(start) {
+            continue;
+        }
+        let links = net_links(grid, start, road_net);
+        for d in &links {
+            let n = start.neighbor(*d);
+            if visited.contains(&key(start, n)) {
+                continue;
+            }
+            let mut hexes = vec![start, n];
+            visited.insert(key(start, n));
+            let (mut prev, mut cur) = (start, n);
+            while let Some(next) = continuation(cur, prev) {
+                if !visited.insert(key(cur, next)) {
+                    break;
+                }
+                hexes.push(next);
+                prev = cur;
+                cur = next;
+            }
+            runs.push(NetRun {
+                hexes,
+                closed: false,
+            });
+        }
+        if links.is_empty() {
+            runs.push(NetRun {
+                hexes: vec![start],
+                closed: false,
+            });
+        }
+    }
+    // Pure cycles (every remaining node a clean pass-through): walk each
+    // once back to its start.
+    for &start in &nodes {
+        let Some(d) = net_links(grid, start, road_net)
+            .into_iter()
+            .find(|&d| !visited.contains(&key(start, start.neighbor(d))))
+        else {
+            continue;
+        };
+        let mut hexes = vec![start, start.neighbor(d)];
+        visited.insert(key(start, start.neighbor(d)));
+        let (mut prev, mut cur) = (start, start.neighbor(d));
+        loop {
+            let Some(next) = continuation(cur, prev) else {
+                break;
+            };
+            visited.insert(key(cur, next));
+            if next == start {
+                break;
+            }
+            hexes.push(next);
+            prev = cur;
+            cur = next;
+        }
+        runs.push(NetRun {
+            hexes,
+            closed: true,
+        });
+    }
+    runs
+}
+
+/// Elevation steps: the band climbs over the step in a short TILTED ramp
+/// — the pair straddles the shared-edge midpoint by ±STEP_RAMP_D along
+/// the travel direction, so the strip slopes over the prism edge instead
+/// of sharing a plane with its vertical side (which z-fought). Clamped
+/// to a quarter of the leg so back-to-back steps never interleave.
+const STEP_RAMP_D: f32 = 0.10;
+
+/// Ford dashing (§4.2): a road band across a bridgeless River hex is
+/// drawn as dashes — FORD_DASH_LEN on, FORD_DASH_LEN off (~50% duty) —
+/// the crossing reads as a wading route with water showing through.
+const FORD_DASH_LEN: f32 = 0.35;
+
+/// Dual-track side offset (§4.2): on a hex carrying BOTH the road and
+/// rail flags the two bands run side by side instead of stacking — the
+/// road band shifts this far to the port side of the local tangent, the
+/// rail band to starboard. (Half-widths 0.11 + 0.085 keep both band edges
+/// well inside the hex inradius.)
+const DUAL_TRACK_OFFSET: f32 = 0.14;
+
+/// Corner fillet shape: the quadratic-bezier control point is the corner
+/// hex centre itself, cut back this fraction of BOTH legs, approximated by
+/// this many segments.
+const FILLET_CUT: f32 = 0.35;
+const FILLET_SUBDIV: usize = 3;
+
+/// Bridge deck marking (§4.2): the baseline keeps the plain hex-centre
+/// polyline through BRIDGE stretches — straight or 120°-turn crossings
+/// alike, the deck strip swept from this same baseline always hugs the
+/// route — marks every bridge-hex point `deck`, and ramps deck-point
+/// heights linearly along the polyline between the tops of the last
+/// non-bridge hex before the stretch and the first after it (the
+/// stretch's own end tops at a run tip), so the band rides the deck over
+/// the riverbed instead of sinking into it. Wall-pair insertion
+/// downstream leaves deck-adjacent segments alone (the ramp stays
+/// smooth). Closed runs rotate so no stretch wraps the index seam.
+/// Returns the baseline plus the deck mask.
+fn bridge_deck_baseline(
+    grid: &HexGrid,
+    hexes: &[HexCoord],
+    closed: bool,
+) -> (Vec<Vec3>, Vec<bool>) {
+    let at = |h: HexCoord| {
+        let c = hex_world(h);
+        Vec3::new(c.x, hex_top_y_at(grid, h), c.z)
+    };
+    let is_bridge = |h: HexCoord| grid.cell(h).map(|c| c.bridge).unwrap_or(false);
+    // Rotate a closed list so no stretch wraps the index seam.
+    let mut hexes: Vec<HexCoord> = hexes.to_vec();
+    let n = hexes.len();
+    if closed && n > 1 && hexes.iter().any(|&h| is_bridge(h)) {
+        if let Some(seam) =
+            (0..n).find(|&i| !is_bridge(hexes[i]) && is_bridge(hexes[(i + n - 1) % n]))
+        {
+            hexes.rotate_left(seam);
+        }
+    }
+    // Cumulative arc length along the polyline, for the height ramp.
+    let mut cum = Vec::with_capacity(n);
+    cum.push(0.0_f32);
+    for w in hexes.windows(2) {
+        cum.push(cum.last().unwrap() + (hex_world(w[1]) - hex_world(w[0])).length());
+    }
+    let mut pts: Vec<Vec3> = Vec::with_capacity(n);
+    let mut deck: Vec<bool> = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        if !is_bridge(hexes[i]) {
+            pts.push(at(hexes[i]));
+            deck.push(false);
+            i += 1;
+            continue;
+        }
+        // Stretch [i, j) of consecutive bridge hexes.
+        let mut j = i;
+        while j < n && is_bridge(hexes[j]) {
+            j += 1;
+        }
+        // Ramp anchors: the non-bridge hexes flanking the stretch (its
+        // own ends at a run tip).
+        let lo = if i > 0 { i - 1 } else { i };
+        let hi = if j < n { j } else { j - 1 };
+        let (y_lo, y_hi) = (hex_top_y_at(grid, hexes[lo]), hex_top_y_at(grid, hexes[hi]));
+        let span = (cum[hi] - cum[lo]).max(1e-6);
+        for k in i..j {
+            let mut p = at(hexes[k]);
+            p.y = y_lo + (y_hi - y_lo) * ((cum[k] - cum[lo]) / span);
+            pts.push(p);
+            deck.push(true);
+        }
+        i = j;
+    }
+    (pts, deck)
+}
+
+/// World-space baseline of one run hugging the terrain (the per-pass
+/// lifts are added by the caller): hex centres at their OWN hex tops with
+/// BRIDGE stretches deck-marked and height-ramped (`bridge_deck_baseline`),
+/// each OPEN end whose edge bits reach INTO an Urban hex extended to the
+/// shared hex edge so the band terminates AT the city edge instead of
+/// stopping half a hex short, then ELEVATION STEPS between two adjacent
+/// non-deck points get a RAMP PAIR — two points straddling the
+/// shared-edge midpoint by ±STEP_RAMP_D along the travel direction, first
+/// at the current leg's height then at the next — so the band slopes over
+/// the prism edge like a ground texture instead of either sinking
+/// diagonally into the step or sharing a vertical plane with the prism
+/// side; deck-adjacent segments never get a pair (the bridge ramp stays
+/// smooth). Finally every interior corner is rounded by a quadratic
+/// bezier (control = corner centre, cut back FILLET_CUT on both legs,
+/// FILLET_SUBDIV segments) — ramp-pair points are `hard`: the fillet must
+/// not round the ramp's ends. Closed runs fillet every point and wrap.
+/// `extended` dedups city-edge stubs across the net's runs: when several
+/// runs end on the same city-side hex, only the first draws the stub
+/// (identical overlapping strips would z-fight).
+fn smooth_run_polyline(
+    grid: &HexGrid,
+    run: &NetRun,
+    road_net: bool,
+    extended: &mut std::collections::HashSet<HexCoord>,
+) -> Vec<Vec3> {
+    let (mut base, mut deck) = bridge_deck_baseline(grid, &run.hexes, run.closed);
+    if !run.closed {
+        let at = |h: HexCoord| {
+            let c = hex_world(h);
+            Vec3::new(c.x, hex_top_y_at(grid, h), c.z)
+        };
+        let edge_point =
+            |end: HexCoord| urban_bit_target(grid, end, road_net).map(|u| (at(end) + at(u)) * 0.5);
+        if let Some(p) = edge_point(run.hexes[0]).filter(|_| extended.insert(run.hexes[0])) {
+            base.insert(0, p);
+            deck.insert(0, false);
+        }
+        // A one-hex stub extends once, not twice out the same side.
+        if run.hexes.len() > 1 {
+            let end = *run.hexes.last().unwrap();
+            if let Some(p) = edge_point(end).filter(|_| extended.insert(end)) {
+                base.push(p);
+                deck.push(false);
+            }
+        }
+    }
+    // Ramp pairs at elevation steps (see the fn doc).
+    let n = base.len();
+    if n < 2 {
+        return base;
+    }
+    let segs = if run.closed { n } else { n - 1 };
+    let mut ramped: Vec<Vec3> = Vec::with_capacity(n + 4);
+    let mut hard: Vec<bool> = Vec::with_capacity(n + 4);
+    ramped.push(base[0]);
+    hard.push(false);
+    for i in 0..segs {
+        let j = (i + 1) % n;
+        let (a, b) = (base[i], base[j]);
+        if (b.y - a.y).abs() > 1e-4 && !deck[i] && !deck[j] {
+            let flat = Vec3::new(b.x - a.x, 0.0, b.z - a.z);
+            let d = STEP_RAMP_D.min(flat.length() * 0.25);
+            let dir = flat.normalize_or(Vec3::X);
+            let m = (a + b) * 0.5;
+            let (p1, p2) = (m - dir * d, m + dir * d);
+            ramped.push(Vec3::new(p1.x, a.y, p1.z));
+            ramped.push(Vec3::new(p2.x, b.y, p2.z));
+            hard.push(true);
+            hard.push(true);
+        }
+        if j != 0 {
+            ramped.push(b);
+            hard.push(false);
+        }
+    }
+    fillet_polyline(&ramped, run.closed, &hard)
+}
+
+/// Round the interior corners of a baseline polyline (see
+/// `smooth_run_polyline`); closed polylines fillet every point. `hard`
+/// marks points that must survive UNFILLETED (the ramp-pair corners of an
+/// elevation step — rounding them would mush the crisp slope). An
+/// open baseline of fewer than three points has no corner and passes
+/// through unchanged.
+fn fillet_polyline(base: &[Vec3], closed: bool, hard: &[bool]) -> Vec<Vec3> {
+    let n = base.len();
+    if n < 2 || (!closed && n == 2) {
+        return base.to_vec();
+    }
+    let mut out = Vec::new();
+    if !closed {
+        out.push(base[0]);
+    }
+    let corners: Vec<usize> = if closed {
+        (0..n).collect()
+    } else {
+        (1..n - 1).collect()
+    };
+    for &i in &corners {
+        let p = base[i];
+        if hard.get(i).copied().unwrap_or(false) {
+            out.push(p);
+            continue;
+        }
+        let a = base[(i + n - 1) % n];
+        let b = base[(i + 1) % n];
+        let c1 = p.lerp(a, FILLET_CUT);
+        let c2 = p.lerp(b, FILLET_CUT);
+        out.push(c1);
+        for k in 1..FILLET_SUBDIV {
+            let t = k as f32 / FILLET_SUBDIV as f32;
+            let u = 1.0 - t;
+            out.push(c1 * (u * u) + p * (2.0 * u * t) + c2 * (t * t));
+        }
+        out.push(c2);
+    }
+    if !closed {
+        out.push(base[n - 1]);
+    }
+    out
+}
+
+/// Per-sample side vector for a ribbon sweep: central-difference tangent
+/// rotated flat, so strips flow through fillet arcs without the mitre
+/// gaps per-segment quads leave on a curve. Central differences also keep
+/// the side vector horizontal at a RAMP pair (elevation step): each ramp
+/// point's neighbours include a horizontal leg, so the tilted climb quad
+/// gets a proper non-degenerate width (no zero-area quads).
+fn ribbon_side(pts: &[Vec3], i: usize, closed: bool) -> Vec3 {
+    let n = pts.len();
+    let (a, b) = if closed {
+        (pts[(i + n - 1) % n], pts[(i + 1) % n])
+    } else {
+        (pts[i.saturating_sub(1)], pts[(i + 1).min(n - 1)])
+    };
+    let fwd = (b - a).normalize_or(Vec3::X);
+    Vec3::new(-fwd.z, 0.0, fwd.x).normalize_or(Vec3::X)
+}
+
+/// Side-offset a run baseline where a hex carries BOTH nets (dual-track
+/// shared hexes): road shifts DUAL_TRACK_OFFSET to the NEGATIVE side of a
+/// canonical normal, rail to the positive — so two bands always run side
+/// by side instead of stacking. The normal is direction-INDEPENDENT: each
+/// contiguous shared stretch shares one normal from its chord, sign-
+/// normalized (x < 0, or x ≈ 0 with z < 0, flips), so runs crossing the
+/// same ground in opposite directions still land on opposite sides, and a
+/// U-turn inside the section can't flip sides mid-way (a wrap-around
+/// stretch on a closed run, or a degenerate chord, falls back to the
+/// first sample's tangent). Off-section samples target zero; the offset
+/// fades in/out through a 3-tap moving average (max step ⅓ of the offset
+/// per sample — no kink at section ends). Purely horizontal: Y (terrain
+/// tops, ramp climbs) is untouched, and the deck strip keeps the
+/// un-offset centred baseline.
+fn dual_track_offset(grid: &HexGrid, pts: &[Vec3], road_net: bool, closed: bool) -> Vec<Vec3> {
+    let n = pts.len();
+    if n < 2 {
+        return pts.to_vec();
+    }
+    let sign = if road_net { -1.0 } else { 1.0 };
+    let dual: Vec<bool> = pts
+        .iter()
+        .map(|p| {
+            grid.cell(HexCoord::from_world(p.x, p.z, HEX_SIZE))
+                .map(|c| c.road && c.rail)
+                .unwrap_or(false)
+        })
+        .collect();
+    // Sign-normalized flat side vector.
+    let canon_side = |side: Vec3| -> Vec3 {
+        let side = side.normalize_or(Vec3::X);
+        if side.x < 0.0 || (side.x.abs() < 1e-9 && side.z < 0.0) {
+            -side
+        } else {
+            side
+        }
+    };
+    // Contiguous shared stretches, each with one canonical normal.
+    let mut target = vec![Vec3::ZERO; n];
+    let mut stretches: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < n {
+        if !dual[i] {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < n && dual[j] {
+            j += 1;
+        }
+        stretches.push((i, j));
+        i = j;
+    }
+    // A closed run whose shared stretch wraps the index seam: both end
+    // pieces take the seam tangent's normal.
+    let seam_merge = closed && dual[0] && dual[n - 1] && stretches.len() >= 2;
+    for (idx, &(s, e)) in stretches.iter().enumerate() {
+        let merged = seam_merge && (idx == 0 || idx == stretches.len() - 1);
+        let chord = Vec3::new(pts[e - 1].x - pts[s].x, 0.0, pts[e - 1].z - pts[s].z);
+        let side = if merged || chord.length() < 1e-6 {
+            canon_side(ribbon_side(pts, s, closed))
+        } else {
+            canon_side(Vec3::new(-chord.z, 0.0, chord.x))
+        };
+        for t in target.iter_mut().take(e).skip(s) {
+            *t = side * (sign * DUAL_TRACK_OFFSET);
+        }
+    }
+    let mut out = pts.to_vec();
+    for i in 0..n {
+        let (lo, hi) = if closed {
+            ((i + n - 1) % n, (i + 1) % n)
+        } else {
+            (i.saturating_sub(1), (i + 1).min(n - 1))
+        };
+        let o = (target[lo] + target[i] + target[hi]) / 3.0;
+        if o.length_squared() < 1e-12 {
+            continue;
+        }
+        out[i] = pts[i] + Vec3::new(o.x, 0.0, o.z);
+    }
+    out
+}
+
+/// Sweep a polyline into ONE continuous quad strip of half-width
+/// `half_w`: per-sample side vectors come from central-difference
+/// tangents, so the band flows through the fillet arcs without the mitre
+/// gaps per-segment quads leave on a curve. Closed strips wrap
+/// end-to-start.
+fn sweep_ribbon(mb: &mut MeshBuilder, pts: &[Vec3], half_w: f32, col: [f32; 4], closed: bool) {
+    let n = pts.len();
+    if n < 2 {
+        return;
+    }
+    let quads = if closed { n } else { n - 1 };
+    for i in 0..quads {
+        let j = (i + 1) % n;
+        let (a, b) = (pts[i], pts[j]);
+        let (sa, sb) = (ribbon_side(pts, i, closed), ribbon_side(pts, j, closed));
+        mb.add_quad(
+            a + sa * half_w,
+            b + sb * half_w,
+            b - sb * half_w,
+            a - sa * half_w,
+            Vec3::Y,
+            col,
+        );
+    }
+}
+
+/// Sweep a ROAD run with FORD DASHING (§4.2): a segment touching a
+/// bridgeless River hex that carries the road flag is drawn as dashes —
+/// FORD_DASH_LEN on, FORD_DASH_LEN off along the arc, the phase carried
+/// across each contiguous ford region — so the crossing reads as a wading
+/// route with water showing through the gaps instead of a paved strip.
+/// Both band passes dash identically, keeping the layered look; non-ford
+/// segments are solid. (Rails never dash; bridge crossings carry the deck
+/// strip and stay solid.)
+fn sweep_ribbon_ford_dashed(
+    mb: &mut MeshBuilder,
+    grid: &HexGrid,
+    pts: &[Vec3],
+    half_w: f32,
+    col: [f32; 4],
+    closed: bool,
+) {
+    let n = pts.len();
+    if n < 2 {
+        return;
+    }
+    let is_ford = |p: Vec3| {
+        grid.cell(HexCoord::from_world(p.x, p.z, HEX_SIZE))
+            .map(|c| c.terrain == Terrain::River && c.road && !c.bridge)
+            .unwrap_or(false)
+    };
+    let quads = if closed { n } else { n - 1 };
+    // Dash cycle position within the current contiguous ford region
+    // (reset by solid ground): [0, FORD_DASH_LEN) draws, the rest is a
+    // gap.
+    let mut cycle = 0.0_f32;
+    for i in 0..quads {
+        let j = (i + 1) % n;
+        let (a, b) = (pts[i], pts[j]);
+        let (sa, sb) = (ribbon_side(pts, i, closed), ribbon_side(pts, j, closed));
+        let mut emit = |pa: Vec3, pb: Vec3, sa: Vec3, sb: Vec3| {
+            mb.add_quad(
+                pa + sa * half_w,
+                pb + sb * half_w,
+                pb - sb * half_w,
+                pa - sa * half_w,
+                Vec3::Y,
+                col,
+            );
+        };
+        if !is_ford(a) && !is_ford(b) {
+            cycle = 0.0;
+            emit(a, b, sa, sb);
+            continue;
+        }
+        let len = (b - a).length().max(1e-6);
+        let mut t0 = 0.0;
+        while t0 < 1.0 - 1e-6 {
+            let on = cycle < FORD_DASH_LEN;
+            let room = if on {
+                FORD_DASH_LEN - cycle
+            } else {
+                2.0 * FORD_DASH_LEN - cycle
+            };
+            let arc = room.min((1.0 - t0) * len);
+            let t1 = t0 + arc / len;
+            if on && arc > 1e-6 {
+                emit(
+                    a.lerp(b, t0),
+                    a.lerp(b, t1),
+                    sa.lerp(sb, t0).normalize_or(sa),
+                    sa.lerp(sb, t1).normalize_or(sb),
+                );
+            }
+            cycle = (cycle + arc) % (2.0 * FORD_DASH_LEN);
+            t0 = t1;
+        }
+    }
+}
+
+/// Bridge deck strip (§4.2): along the SAME smoothed baseline the bands
+/// ride, every segment touching a bridge hex is swept as a wider
+/// stone-timber bed — straight or 120°-turn crossings alike, deck and
+/// band share one baseline, so the deck always hugs the route across the
+/// water and the strip's ends fall naturally where the baseline leaves
+/// the bridge hexes.
+fn sweep_deck_strip(mb: &mut MeshBuilder, grid: &HexGrid, pts: &[Vec3], closed: bool) {
+    let n = pts.len();
+    if n < 2 {
+        return;
+    }
+    let on_deck = |p: Vec3| {
+        grid.cell(HexCoord::from_world(p.x, p.z, HEX_SIZE))
+            .map(|c| c.bridge)
+            .unwrap_or(false)
+    };
+    let quads = if closed { n } else { n - 1 };
+    for i in 0..quads {
+        let j = (i + 1) % n;
+        let (a, b) = (pts[i], pts[j]);
+        if !on_deck(a) && !on_deck(b) {
+            continue;
+        }
+        let (sa, sb) = (ribbon_side(pts, i, closed), ribbon_side(pts, j, closed));
+        mb.add_quad(
+            a + sa * DECK_HALF_W,
+            b + sb * DECK_HALF_W,
+            b - sb * DECK_HALF_W,
+            a - sa * DECK_HALF_W,
+            Vec3::Y,
+            DECK_COL,
+        );
+    }
+}
+
+/// Deck-coloured disc under a run end sitting on a bridge hex: covers the
+/// overlap where several deck strips converge on a junction (and rounds
+/// off a dead end), its top kept below the band passes above.
+fn add_deck_disc(mb: &mut MeshBuilder, center: Vec3, top: f32) {
+    mb.add_cylinder(
+        center,
+        DECK_HALF_W + 0.015,
+        top + DECK_LIFT - 0.002,
+        top + DECK_LIFT + 0.003,
+        DECK_COL,
+        10,
+    );
+}
+
+/// Zebra dashes along a rail run: one black cross-dash every ~half hex of
+/// arc length on the smoothed baseline, riding ON TOP of the white core
+/// band (the classic map-railway tie). Open runs keep half a spacing
+/// clear of the tips so no dash pokes past the flat-cut end.
+fn add_ties_along(mb: &mut MeshBuilder, pts: &[Vec3], closed: bool) {
+    /// ~½ hex of arc length between dashes.
+    const TIE_SPACING: f32 = 0.87;
+    /// Height of the dash ABOVE the white core band — on top of the core,
+    /// clear of the black casing below.
+    const TIE_ABOVE: f32 = 0.003;
+    /// Half-length: a hair past the casing edge so the dash covers the
+    /// full railway symbol.
+    const TIE_HALF_LEN: f32 = 0.09;
+    /// Along-track half-thickness: 2 × 0.22 ≈ half the 0.87 pitch, so the
+    /// black segments and the white gaps between them come out the CLASSIC
+    /// railway zebra's equal lengths (a short black tick on a white band
+    /// reads as "white far longer than black").
+    const TIE_HALF_THICK: f32 = 0.22;
+    let n = pts.len();
+    if n < 2 {
+        return;
+    }
+    let segs = if closed { n } else { n - 1 };
+    let seg_len: Vec<f32> = (0..segs)
+        .map(|i| (pts[(i + 1) % n] - pts[i]).length())
+        .collect();
+    let total: f32 = seg_len.iter().sum();
+    let (mut next, end) = if closed {
+        (0.0, total - 1e-4)
+    } else {
+        (TIE_SPACING * 0.5, total - TIE_SPACING * 0.5 + 1e-4)
+    };
+    let mut acc = 0.0;
+    let mut i = 0;
+    while next <= end && i < segs {
+        if next > acc + seg_len[i] {
+            acc += seg_len[i];
+            i += 1;
+            continue;
+        }
+        let t = ((next - acc) / seg_len[i].max(1e-6)).clamp(0.0, 1.0);
+        let p = pts[i].lerp(pts[(i + 1) % n], t);
+        let fwd = (pts[(i + 1) % n] - pts[i]).normalize_or(Vec3::X);
+        let perp = Vec3::new(-fwd.z, 0.0, fwd.x).normalize_or(Vec3::X);
+        let c = p + Vec3::Y * TIE_ABOVE;
+        mb.add_quad(
+            c + perp * TIE_HALF_LEN + fwd * TIE_HALF_THICK,
+            c + perp * TIE_HALF_LEN - fwd * TIE_HALF_THICK,
+            c - perp * TIE_HALF_LEN - fwd * TIE_HALF_THICK,
+            c - perp * TIE_HALF_LEN + fwd * TIE_HALF_THICK,
+            Vec3::Y,
+            TIE_COL,
+        );
+        next += TIE_SPACING;
+    }
+}
+
+/// Road look (preview A/B): `Casing` = dark casing band under a light
+/// khaki core (the map-road default); `Asphalt` = one flat grey band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoadStyle {
+    Casing,
+    Asphalt,
+}
+
+/// Preview-only style knob: FC_ROAD_STYLE is read ONCE at mesh build —
+/// `asphalt` selects the asphalt look, anything else/unset keeps the
+/// default casing look. No settings UI; a change takes effect on the next
+/// battle load.
+fn road_style_from_env() -> RoadStyle {
+    match std::env::var("FC_ROAD_STYLE") {
+        Ok(v) if v.eq_ignore_ascii_case("asphalt") => RoadStyle::Asphalt,
+        _ => RoadStyle::Casing,
+    }
+}
+
+/// Build the merged road+rail ribbon mesh: each net decomposed into runs
+/// along the painted edge bits (`net_runs`), every run swept as one
+/// continuous strip with rounded corners (`smooth_run_polyline` +
+/// `sweep_ribbon`), bridge hexes carrying the wider deck strip along the
+/// same baseline (`sweep_deck_strip`), rails carrying zebra dashes along
+/// the run. Run ends and junctions are FLAT-CUT at the shared hex centre
+/// (no discs — the cuts meet there on their own; only bridge run ends
+/// keep a deck-coloured disc, `add_deck_disc`). `None` when the board
+/// carries no roads or rails at all.
+pub fn build_road_rail_mesh(state: &TacticalState) -> Option<(Mesh, Image)> {
+    build_road_rail_mesh_styled(state, road_style_from_env())
+}
+
+fn build_road_rail_mesh_styled(state: &TacticalState, style: RoadStyle) -> Option<(Mesh, Image)> {
+    let grid = state.grid.as_ref()?;
+    let mut mb = MeshBuilder::new();
+    let road_passes: &[(f32, f32, [f32; 4])] = match style {
+        RoadStyle::Casing => &[
+            (ROAD_CASING_W, ROAD_CASING_LIFT, ROAD_CASING_COL),
+            (ROAD_CORE_W, ROAD_CORE_LIFT, ROAD_CORE_COL),
+        ],
+        RoadStyle::Asphalt => &[(ROAD_ASPHALT_W, ROAD_ASPHALT_LIFT, ROAD_ASPHALT_COL)],
+    };
+    let rail_passes: &[(f32, f32, [f32; 4])] = &[
+        (RAIL_CASING_W, RAIL_CASING_LIFT, RAIL_CASING_COL),
+        (RAIL_CORE_W, RAIL_CORE_LIFT, RAIL_CORE_COL),
+    ];
+    // One net at a time: sweep each run's passes; run ends are FLAT-CUT —
+    // no end/junction discs: every run reaches the shared hex centre, so
+    // the flat cuts meet there on their own. The one surviving disc is
+    // the DECK disc under bridge run ends (part of the deck hug).
+    // `extended` = hexes whose city-edge stub is already drawn.
+    for road_net in [true, false] {
+        let passes = if road_net { road_passes } else { rail_passes };
+        let mut disced: std::collections::HashSet<HexCoord> = std::collections::HashSet::new();
+        let mut extended: std::collections::HashSet<HexCoord> = std::collections::HashSet::new();
+        for run in net_runs(grid, road_net) {
+            let base = smooth_run_polyline(grid, &run, road_net, &mut extended);
+            // Bridge deck bed along the same baseline; the bands ride on
+            // top of it. The deck itself stays CENTRED on the un-offset
+            // baseline (both bands fit on it when side-shifted).
+            let deck_pts: Vec<Vec3> = base.iter().map(|p| *p + Vec3::Y * DECK_LIFT).collect();
+            sweep_deck_strip(&mut mb, grid, &deck_pts, run.closed);
+            // Dual-track shared hexes: road port, rail starboard.
+            let base = dual_track_offset(grid, &base, road_net, run.closed);
+            for &(half_w, lift, col) in passes {
+                let pts: Vec<Vec3> = base.iter().map(|p| *p + Vec3::Y * lift).collect();
+                if road_net {
+                    // Road bands dash across bridgeless fords.
+                    sweep_ribbon_ford_dashed(&mut mb, grid, &pts, half_w, col, run.closed);
+                } else {
+                    sweep_ribbon(&mut mb, &pts, half_w, col, run.closed);
+                }
+            }
+            if !road_net {
+                // Zebra dashes once per run (not per pass), on the white
+                // core's baseline.
+                let pts: Vec<Vec3> = base.iter().map(|p| *p + Vec3::Y * RAIL_CORE_LIFT).collect();
+                add_ties_along(&mut mb, &pts, run.closed);
+            }
+            if run.closed {
+                continue;
+            }
+            // Deck disc under run ends sitting on a bridge hex: covers
+            // the overlap where deck strips converge on a junction (and
+            // rounds off a dead end on the water). Same end rule as the
+            // bands once used: junctions (3+) and dead ends, never a
+            // clean two-bit pass-through, never a city-clipped end (the
+            // strip runs on to the edge stub).
+            for &end in [run.hexes.first(), run.hexes.last()].into_iter().flatten() {
+                if !grid.cell(end).map(|c| c.bridge).unwrap_or(false) {
+                    continue;
+                }
+                let want_disc = match net_bits(grid, end, road_net).count_ones() {
+                    2 => false,
+                    1 => !extended.contains(&end),
+                    _ => true,
+                };
+                if want_disc && disced.insert(end) {
+                    // The deck disc rides the strip's own ramp height at
+                    // the end, not the occlusion-floored band top.
+                    let c_end = hex_world(end);
+                    let top = base
+                        .iter()
+                        .min_by(|a, b| {
+                            let da = (a.x - c_end.x).abs() + (a.z - c_end.z).abs();
+                            let db = (b.x - c_end.x).abs() + (b.z - c_end.z).abs();
+                            da.partial_cmp(&db).unwrap()
+                        })
+                        .map(|p| p.y)
+                        .unwrap_or_else(|| hex_top_y_at(grid, end));
+                    add_deck_disc(&mut mb, c_end, top);
+                }
+            }
+        }
+    }
+    if mb.positions.is_empty() {
+        return None;
+    }
+    Some(mb.build())
+}
+
 /// ONE merged static mesh for every prop on the board: props used to be
 /// one ENTITY per tree/building — thousands of draw calls per
 /// frame on forested maps, the steady-state GPU cost when panning. They are
@@ -2030,7 +2961,8 @@ pub fn pulse_zone_borders(
 #[derive(Component)]
 pub struct BoardProps;
 
-/// Merge all props (trees/buildings/rocks/ponds) into one mesh — sparse on
+/// Merge all props (trees/buildings/rocks/ponds, plus the §4.2 factory
+/// blocks) into one mesh — sparse on
 /// purpose: 1–2 pieces per hex, purely for terrain readability. `None` when
 /// the board has no prop-bearing terrain at all.
 pub fn build_props_mesh(state: &TacticalState) -> Option<(Mesh, Image)> {
@@ -2083,6 +3015,12 @@ pub fn build_props_mesh(state: &TacticalState) -> Option<(Mesh, Image)> {
                 add_pond(&mut mb, at + offset(j1, 0.40));
             }
             _ => {}
+        }
+        // §4.2 overlays on top of the terrain props: a factory district
+        // stamps an industrial block beside the village hamlet (j2 keeps
+        // clear of the hamlet's j1 offset).
+        if cell.factory {
+            add_factory(&mut mb, at + offset(j2, 0.42));
         }
     }
     if mb.positions.is_empty() {
@@ -2171,6 +3109,29 @@ fn add_pond(mb: &mut MeshBuilder, at: Vec3) {
     mb.add_hex_plate(at, 0.28, at.y, at.y + 0.02, [0.20, 0.32, 0.40, 1.0]);
 }
 
+/// Factory district (§4.2): a broad grey hall with a raised clerestory
+/// strip and one thin tall chimney — muted industrial tones so it reads
+/// as a plant next to the village hamlet without drowning it.
+fn add_factory(mb: &mut MeshBuilder, at: Vec3) {
+    let hall = [0.46, 0.47, 0.50, 1.0];
+    let chimney = [0.38, 0.30, 0.26, 1.0];
+    mb.add_box(
+        at + Vec3::new(-0.22, 0.0, -0.16),
+        at + Vec3::new(0.14, 0.22, 0.16),
+        hall,
+    );
+    mb.add_box(
+        at + Vec3::new(-0.22, 0.22, -0.16),
+        at + Vec3::new(-0.10, 0.30, 0.16),
+        scale_color(hall, 0.85),
+    );
+    mb.add_box(
+        at + Vec3::new(0.16, 0.0, 0.02),
+        at + Vec3::new(0.24, 0.52, 0.10),
+        chimney,
+    );
+}
+
 /// Startup system: board + props + lighting.
 pub fn setup_board(
     mut commands: Commands,
@@ -2215,6 +3176,25 @@ pub fn setup_board(
             MeshMaterial3d(props_mat),
             Transform::default(),
             BoardProps,
+        ));
+    }
+    // Roads / railways: ONE merged static ribbon mesh, same built-once
+    // discipline as the props. cull_mode None like the other ground
+    // overlays; no shadow casting — a flat overlay casts nothing visible.
+    if let Some((road_mesh, road_img)) = build_road_rail_mesh(&state) {
+        let road_mat = materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(images.add(road_img)),
+            perceptual_roughness: 0.95,
+            cull_mode: None,
+            ..default()
+        });
+        commands.spawn((
+            Mesh3d(meshes.add(road_mesh)),
+            MeshMaterial3d(road_mat),
+            Transform::default(),
+            BoardRoads,
+            NotShadowCaster,
         ));
     }
 
@@ -2302,6 +3282,7 @@ mod tests {
                 HexCoord::new(q, r),
             );
             u.division = "D".to_string();
+            u.tag = "GER".to_string();
             u
         };
         // Two battalions near the HQ (solid), one far out (dashed).
@@ -2310,20 +3291,28 @@ mod tests {
         synthesize_hqs(&mut state.units, &mut next_id, Side::Attacker, |_| {
             HexCoord::new(2, 3)
         });
+        // Production stamps the division's owner tag on EVERY unit, HQs
+        // included (scenario.rs) — mirror that here.
+        for u in &mut state.units {
+            u.tag = "GER".to_string();
+        }
         let params = CombatParams::default();
         let links = compute_command_links(&state.units, &params);
         // Plain battalion selected: only its own solid lane.
-        let m = build_command_lines_mesh(&state, &links, "D", 0, false);
+        let m = build_command_lines_mesh(&state, &links, "GER", "D", 0, false);
         assert!(m.any_solid && !m.any_dashed);
         assert!(vertex_count(&m.solid.1 .0) > 0);
         // HQ selected: every lane, including the dashed outlier.
-        let m = build_command_lines_mesh(&state, &links, "D", 100, true);
+        let m = build_command_lines_mesh(&state, &links, "GER", "D", 100, true);
         assert!(m.any_solid && m.any_dashed);
         // Out-of-range battalion selected: only its own dashed lane.
-        let m = build_command_lines_mesh(&state, &links, "D", 2, false);
+        let m = build_command_lines_mesh(&state, &links, "GER", "D", 2, false);
         assert!(!m.any_solid && m.any_dashed);
         // Unknown division: nothing.
-        let m = build_command_lines_mesh(&state, &links, "nope", 0, false);
+        let m = build_command_lines_mesh(&state, &links, "GER", "nope", 0, false);
+        assert!(!m.any_solid && !m.any_dashed);
+        // Same division NAME under another owner: not this formation.
+        let m = build_command_lines_mesh(&state, &links, "FRA", "D", 0, false);
         assert!(!m.any_solid && !m.any_dashed);
     }
 
@@ -2466,6 +3455,7 @@ mod tests {
                 HexCoord::new(10, 3),
             ],
             hours: 0.0,
+            queue: Default::default(),
         });
         let b = BattalionUnit::new(
             2,
@@ -2493,7 +3483,7 @@ mod tests {
         // 1. Player selects A.
         app.world_mut()
             .resource_mut::<TacticalState>()
-            .selected_unit = Some(1);
+            .select_only(1);
         app.world_mut().resource_mut::<TacticalState>().units_dirty = true;
         step_frames(&mut app, 1);
         // 2. Issue the move order (sets arrows_grow; first grow frame).
@@ -2508,13 +3498,13 @@ mod tests {
         // 4. Select unit B.
         app.world_mut()
             .resource_mut::<TacticalState>()
-            .selected_unit = Some(2);
+            .select_only(2);
         app.world_mut().resource_mut::<TacticalState>().units_dirty = true;
         step_frames(&mut app, 1);
         // 5. Re-select unit A.
         app.world_mut()
             .resource_mut::<TacticalState>()
-            .selected_unit = Some(1);
+            .select_only(1);
         app.world_mut().resource_mut::<TacticalState>().units_dirty = true;
         step_frames(&mut app, 1);
         let (n_resel, v_resel) = ribbon_stats(&mut app);
@@ -2546,18 +3536,18 @@ mod tests {
         // Order issued, animation started mid-grow (3 frames in).
         app.world_mut()
             .resource_mut::<TacticalState>()
-            .selected_unit = Some(1);
+            .select_only(1);
         app.world_mut().resource_mut::<TacticalState>().arrows_grow = true;
         app.world_mut().resource_mut::<TacticalState>().orders_dirty = true;
         step_frames(&mut app, 3);
         // Select B mid-animation, then immediately re-select A mid-animation.
         app.world_mut()
             .resource_mut::<TacticalState>()
-            .selected_unit = Some(2);
+            .select_only(2);
         step_frames(&mut app, 2);
         app.world_mut()
             .resource_mut::<TacticalState>()
-            .selected_unit = Some(1);
+            .select_only(1);
         step_frames(&mut app, 2);
         // Let the animation finish.
         step_frames(&mut app, 20);
@@ -2578,7 +3568,7 @@ mod tests {
     #[test]
     fn route_ribbon_shows_step_progress() {
         let mut app = ribbon_app();
-        app.world_mut().resource_mut::<TacticalState>().selected_unit = Some(1);
+        app.world_mut().resource_mut::<TacticalState>().select_only(1);
         app.world_mut().resource_mut::<TacticalState>().orders_dirty = true;
         step_frames(&mut app, 20); // grow window (0.45 s) finishes
         let (n0, v0) = ribbon_stats(&mut app);
@@ -2589,7 +3579,7 @@ mod tests {
             state.orders_dirty = true;
         }
         step_frames(&mut app, 2);
-        let (n1, v1) = ribbon_stats(&mut app);
+        let (_, v1) = ribbon_stats(&mut app);
         assert!(
             v1 > v0,
             "the progress mark must add geometry: {v0} -> {v1} verts"
@@ -2737,5 +3727,966 @@ mod tests {
         let mut empty = TacticalState::default();
         empty.grid = Some(Arc::new(HexGrid::new(4, 4, Terrain::Plains)));
         assert!(build_props_mesh(&empty).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // §4.2 road/rail rendering: net → run decomposition, rounded ribbons,
+    // urban clipping, style knob.
+    // -----------------------------------------------------------------------
+
+    /// Paint path edges into the road/rail edge bits — BOTH cells of every
+    /// consecutive pair, the generator's invariant — plus the hex-level
+    /// flag on every hex each path touches.
+    fn paint_paths(g: &mut HexGrid, paths: &[&[(i32, i32)]], road: bool) {
+        for path in paths {
+            for &(q, r) in path.iter() {
+                let c = g.cell_mut(HexCoord::new(q, r)).unwrap();
+                if road {
+                    c.road = true;
+                } else {
+                    c.rail = true;
+                }
+            }
+            for pair in path.windows(2) {
+                let (a, b) = (
+                    HexCoord::new(pair[0].0, pair[0].1),
+                    HexCoord::new(pair[1].0, pair[1].1),
+                );
+                let (da, db) = (a.direction_to(b).unwrap(), b.direction_to(a).unwrap());
+                let c = g.cell_mut(a).unwrap();
+                if road {
+                    c.road_edges |= da.bit();
+                } else {
+                    c.rail_edges |= da.bit();
+                }
+                let c = g.cell_mut(b).unwrap();
+                if road {
+                    c.road_edges |= db.bit();
+                } else {
+                    c.rail_edges |= db.bit();
+                }
+            }
+        }
+    }
+
+    /// A straight two-bit pass-through chain is ONE open run spanning
+    /// every hex.
+    #[test]
+    fn straight_chain_is_one_run() {
+        let mut g = HexGrid::new(6, 1, Terrain::Plains);
+        paint_paths(&mut g, &[&[(1, 0), (2, 0), (3, 0), (4, 0)]], true);
+        let runs = net_runs(&g, true);
+        assert_eq!(runs.len(), 1);
+        assert!(!runs[0].closed);
+        assert_eq!(runs[0].hexes.len(), 4);
+    }
+
+    /// A 3-arm fork decomposes into three runs, each linking one arm tip
+    /// to the junction hex (the shared junction collects 3 edge bits).
+    /// Arms at 120° — E/SW/NW — so no two arms are themselves hex-adjacent.
+    #[test]
+    fn fork_splits_into_three_runs_at_the_junction() {
+        let mut g = HexGrid::new(7, 7, Terrain::Plains);
+        paint_paths(
+            &mut g,
+            &[
+                &[(5, 3), (4, 3), (3, 3)],
+                &[(1, 5), (2, 4), (3, 3)],
+                &[(3, 1), (3, 2), (3, 3)],
+            ],
+            true,
+        );
+        let runs = net_runs(&g, true);
+        assert_eq!(runs.len(), 3);
+        let j = HexCoord::new(3, 3);
+        let mut tips = vec![
+            HexCoord::new(5, 3),
+            HexCoord::new(1, 5),
+            HexCoord::new(3, 1),
+        ];
+        for run in &runs {
+            assert!(!run.closed);
+            assert_eq!(run.hexes.len(), 3, "tip → mid → junction");
+            let (a, b) = (run.hexes[0], run.hexes[run.hexes.len() - 1]);
+            assert!(a == j || b == j, "every run meets the junction");
+            tips.retain(|&t| t != a && t != b);
+        }
+        assert!(tips.is_empty(), "each arm tip ends exactly one run");
+    }
+
+    /// A pure ring (every node a clean two-bit pass-through, no endpoints)
+    /// is ONE closed run.
+    #[test]
+    fn ring_is_one_closed_run() {
+        let mut ring: Vec<(i32, i32)> = HexCoord::new(5, 5)
+            .ring(1)
+            .iter()
+            .map(|h| (h.q, h.r))
+            .collect();
+        assert_eq!(ring.len(), 6);
+        ring.push(ring[0]); // close the loop: the last edge lands back on ring[0]
+        let mut g = HexGrid::new(12, 12, Terrain::Plains);
+        paint_paths(&mut g, &[&ring], true);
+        let runs = net_runs(&g, true);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].closed);
+        assert_eq!(runs[0].hexes.len(), 6);
+    }
+
+    /// Flag adjacency alone invents NO links: a cluster of three
+    /// pairwise-adjacent flagged hexes with zero edge bits spawns no run
+    /// (no triangle weaving — they render as node discs), and a path
+    /// passing BESIDE a flagged hex does not link to it.
+    #[test]
+    fn flag_adjacency_invents_no_links() {
+        let mut g = HexGrid::new(3, 3, Terrain::Plains);
+        for (q, r) in [(1, 1), (2, 1), (1, 2)] {
+            g.cell_mut(HexCoord::new(q, r)).unwrap().road = true;
+        }
+        assert!(net_runs(&g, true).is_empty(), "cluster without bits");
+        // The pass-by: (1,1)/(2,1) sit adjacent to the path's hexes.
+        paint_paths(&mut g, &[&[(0, 0), (1, 0), (2, 0)]], true);
+        let runs = net_runs(&g, true);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].hexes.iter().all(|h| h.r == 0));
+    }
+
+    /// Robustness: a bit set on only ONE side of a pair still draws its
+    /// link — the walk trusts the local bits. Ends are flat-cut: no disc
+    /// geometry at all.
+    #[test]
+    fn one_sided_edge_bits_still_draw() {
+        let mut g = HexGrid::new(3, 1, Terrain::Plains);
+        for q in 1..=2 {
+            g.cell_mut(HexCoord::new(q, 0)).unwrap().road = true;
+        }
+        g.cell_mut(HexCoord::new(1, 0)).unwrap().road_edges = HexDirection::E.bit();
+        let runs = net_runs(&g, true);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].hexes,
+            vec![HexCoord::new(1, 0), HexCoord::new(2, 0)]
+        );
+        // Mesh: exactly the band strips (2 passes × 4 verts), no discs.
+        let mut state = TacticalState::default();
+        state.grid = Some(Arc::new(g));
+        let (mesh, _img) =
+            build_road_rail_mesh_styled(&state, RoadStyle::Casing).expect("ribbons exist");
+        assert_eq!(vertex_count(&mesh), 2 * 4);
+    }
+
+    /// A lone flagged hex no path touched (zero edge bits) renders
+    /// NOTHING: no run, no fallback disc (flat-cut ruling — settlements
+    /// without a connecting path stay bare).
+    #[test]
+    fn isolated_flag_hex_renders_nothing() {
+        let mut g = HexGrid::new(3, 3, Terrain::Plains);
+        g.cell_mut(HexCoord::new(1, 1)).unwrap().road = true;
+        assert!(net_runs(&g, true).is_empty());
+        let mut state = TacticalState::default();
+        state.grid = Some(Arc::new(g));
+        assert!(build_road_rail_mesh_styled(&state, RoadStyle::Casing).is_none());
+    }
+
+    /// The road and rail nets decompose separately even where adjacent:
+    /// two parallel paths one hex apart are one run each, never merged.
+    #[test]
+    fn road_and_rail_nets_stay_separate() {
+        let mut g = HexGrid::new(4, 2, Terrain::Plains);
+        paint_paths(&mut g, &[&[(0, 0), (1, 0), (2, 0)]], true);
+        paint_paths(&mut g, &[&[(0, 1), (1, 1), (2, 1)]], false);
+        let road_runs = net_runs(&g, true);
+        let rail_runs = net_runs(&g, false);
+        assert_eq!(road_runs.len(), 1);
+        assert_eq!(rail_runs.len(), 1);
+        assert!(road_runs[0].hexes.iter().all(|h| h.r == 0));
+        assert!(rail_runs[0].hexes.iter().all(|h| h.r == 1));
+    }
+
+    /// Urban exclusion: a path through an Urban hex is CUT there — the
+    /// city hex joins no run even though it carries edge bits (paths set
+    /// bits into urban anchors), and each surviving run's city-side end is
+    /// extended to the shared hex edge (the band terminates AT the city
+    /// boundary; no sample sits on the urban hex itself).
+    #[test]
+    fn urban_hex_cuts_the_run_at_the_city_edge() {
+        let mut g = HexGrid::new(5, 1, Terrain::Plains);
+        paint_paths(&mut g, &[&[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)]], true);
+        g.set_terrain(HexCoord::new(2, 0), Terrain::Urban);
+        let runs = net_runs(&g, true);
+        assert_eq!(runs.len(), 2, "cut into one run per side of the city");
+        assert!(runs.iter().all(|r| !r.hexes.contains(&HexCoord::new(2, 0))));
+        assert!(runs.iter().all(|r| r.hexes.len() == 2));
+        let urban_c = hex_world(HexCoord::new(2, 0));
+        let mut extended = std::collections::HashSet::new();
+        // The run on the (0,0) side: walks grid order → [(0,0), (1,0)].
+        let run = runs
+            .iter()
+            .find(|r| r.hexes.contains(&HexCoord::new(1, 0)))
+            .unwrap();
+        let pts = smooth_run_polyline(&g, run, true, &mut extended);
+        assert!(
+            pts.iter()
+                .all(|p| (p.x - urban_c.x).abs() > 1e-4 || (p.z - urban_c.z).abs() > 1e-4),
+            "no ribbon sample on the urban hex"
+        );
+        // City-side tip lands on the shared edge: the midpoint of the last
+        // rural hex and the urban hex centres.
+        let mid = (hex_world(HexCoord::new(1, 0)) + urban_c) * 0.5;
+        let tip = pts.last().unwrap();
+        assert!((tip.x - mid.x).abs() < 1e-4 && (tip.z - mid.z).abs() < 1e-4);
+        // The far end is NOT extended.
+        let c00 = hex_world(HexCoord::new(0, 0));
+        let first = pts.first().unwrap();
+        assert!((first.x - c00.x).abs() < 1e-4 && (first.z - c00.z).abs() < 1e-4);
+        // The other side's run, [(3,0),(4,0)], extends from its FRONT.
+        let run = runs
+            .iter()
+            .find(|r| r.hexes.contains(&HexCoord::new(3, 0)))
+            .unwrap();
+        let pts = smooth_run_polyline(&g, run, true, &mut extended);
+        let mid = (hex_world(HexCoord::new(3, 0)) + urban_c) * 0.5;
+        let tip = pts.first().unwrap();
+        assert!((tip.x - mid.x).abs() < 1e-4 && (tip.z - mid.z).abs() < 1e-4);
+    }
+
+    /// Bridge deck marking: bridge-hex baseline points stay on the hex
+    /// centres (the deck hugs the route through turns), marked deck, with
+    /// heights ramped along the polyline between the anchor tops flanking
+    /// the stretch — exempt from the occlusion floor.
+    #[test]
+    fn bridge_baseline_marks_deck_and_ramps_heights() {
+        // Plains bank → river deck → hills bank.
+        let mut g = HexGrid::new(4, 1, Terrain::Plains);
+        paint_paths(&mut g, &[&[(0, 0), (1, 0), (2, 0), (3, 0)]], true);
+        g.set_terrain(HexCoord::new(2, 0), Terrain::River);
+        g.set_terrain(HexCoord::new(3, 0), Terrain::Hills);
+        g.cell_mut(HexCoord::new(2, 0)).unwrap().bridge = true;
+        let runs = net_runs(&g, true);
+        assert_eq!(runs.len(), 1);
+        let (base, deck) = bridge_deck_baseline(&g, &runs[0].hexes, false);
+        assert_eq!(base.len(), 4, "hex-centre polyline kept, no collapse");
+        assert_eq!(deck, vec![false, false, true, false]);
+        let (plains, riverbed, hills) = (
+            Terrain::elevation_render_height(0),
+            Terrain::elevation_render_height(-1),
+            Terrain::elevation_render_height(1),
+        );
+        // Midpoint of the ramp between the plains and hills anchor tops.
+        let ramp_y = (plains + hills) * 0.5;
+        assert!((base[2].y - ramp_y).abs() < 1e-4, "ramp y={}", base[2].y);
+        assert!(base[2].y > riverbed, "not sunk into the riverbed");
+        assert!(base[2].y < hills, "not floating above the higher bank");
+        // Post-fillet: points near the deck keep ramp heights (they ride
+        // the deck — never the riverbed below nor the banks beside).
+        let mut extended = std::collections::HashSet::new();
+        let pts = smooth_run_polyline(&g, &runs[0], true, &mut extended);
+        let c = hex_world(HexCoord::new(2, 0));
+        let near = pts
+            .iter()
+            .min_by(|a, b| {
+                let da = (a.x - c.x).abs() + (a.z - c.z).abs();
+                let db = (b.x - c.x).abs() + (b.z - c.z).abs();
+                da.partial_cmp(&db).unwrap()
+            })
+            .unwrap();
+        assert!(
+            near.y > riverbed + 0.1 && near.y < hills - 0.05,
+            "deck-adjacent sample keeps ramp height: y={}",
+            near.y
+        );
+    }
+
+    /// (palette RGB, position) of every vertex of a palette mesh.
+    fn coloured_vertices(mesh: &Mesh, img: &Image) -> Vec<([u8; 3], Vec3)> {
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+            VertexAttributeValues::Float32x3(v) => v.clone(),
+            _ => panic!("position attribute missing"),
+        };
+        let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap() {
+            VertexAttributeValues::Float32x2(v) => v.clone(),
+            _ => panic!("uv attribute missing"),
+        };
+        let width = img.texture_descriptor.size.width as usize;
+        positions
+            .iter()
+            .zip(uvs.iter())
+            .map(|(p, uv)| {
+                let slot = (uv[0] * width as f32) as usize;
+                let rgb = [
+                    img.data[slot * 4],
+                    img.data[slot * 4 + 1],
+                    img.data[slot * 4 + 2],
+                ];
+                (rgb, Vec3::new(p[0], p[1], p[2]))
+            })
+            .collect()
+    }
+
+    /// Min XZ distance from `v` to the polyline (point-to-segment).
+    fn xz_dist_to_polyline(v: Vec3, pts: &[Vec3]) -> f32 {
+        let mut best = f32::MAX;
+        for w in pts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let abx = b.x - a.x;
+            let abz = b.z - a.z;
+            let len2 = abx * abx + abz * abz;
+            let t = if len2 < 1e-12 {
+                0.0
+            } else {
+                (((v.x - a.x) * abx + (v.z - a.z) * abz) / len2).clamp(0.0, 1.0)
+            };
+            let dx = v.x - (a.x + abx * t);
+            let dz = v.z - (a.z + abz * t);
+            best = best.min((dx * dx + dz * dz).sqrt());
+        }
+        best
+    }
+
+    /// Deck strip hugging: every deck-strip vertex lies within the strip
+    /// half-width of the SAME baseline the band rides — straight or
+    /// 120°-turn crossings alike, the deck and the band can never
+    /// separate. Wide-river turns get the same rounded fillet as any bend.
+    #[test]
+    fn deck_strip_hugs_band_straight_and_turning() {
+        const DECK_RGB: [u8; 3] = [117, 87, 51];
+        const CASING_RGB: [u8; 3] = [82, 66, 48];
+        fn assert_hug(g: &HexGrid) {
+            let runs = net_runs(g, true);
+            assert_eq!(runs.len(), 1);
+            let mut extended = std::collections::HashSet::new();
+            let pts = smooth_run_polyline(g, &runs[0], true, &mut extended);
+            let mut state = TacticalState::default();
+            state.grid = Some(Arc::new(g.clone()));
+            let (mesh, img) = build_road_rail_mesh_styled(&state, RoadStyle::Casing).expect("mesh");
+            // Run-end discs share the strip colours but bulge wider than
+            // the bands by design — exclude their footprint from the hug
+            // check (the strips themselves converge on the same centres).
+            let ends: Vec<Vec3> = [runs[0].hexes.first(), runs[0].hexes.last()]
+                .into_iter()
+                .flatten()
+                .map(|&h| hex_world(h))
+                .collect();
+            let near_end = |v: Vec3, r: f32| {
+                ends.iter()
+                    .any(|c| (v.x - c.x).abs() < r && (v.z - c.z).abs() < r)
+            };
+            let mut deck_n = 0;
+            for (rgb, v) in coloured_vertices(&mesh, &img) {
+                if rgb == DECK_RGB {
+                    if near_end(v, DECK_HALF_W + 0.02) {
+                        continue;
+                    }
+                    deck_n += 1;
+                    let d = xz_dist_to_polyline(v, &pts);
+                    assert!(
+                        d <= DECK_HALF_W + 1e-3,
+                        "deck vertex {d} from the band baseline at {v:?}"
+                    );
+                } else if rgb == CASING_RGB {
+                    if near_end(v, ROAD_CASING_W + 0.02) {
+                        continue;
+                    }
+                    let d = xz_dist_to_polyline(v, &pts);
+                    assert!(
+                        d <= ROAD_CASING_W + 1e-3,
+                        "casing vertex {d} from the band baseline at {v:?}"
+                    );
+                }
+            }
+            assert!(deck_n > 0, "deck strip drawn");
+        }
+        // Straight W–E crossing, one river hex (regression).
+        let mut g = HexGrid::new(5, 3, Terrain::Plains);
+        paint_paths(&mut g, &[&[(0, 1), (1, 1), (2, 1), (3, 1), (4, 1)]], true);
+        g.set_terrain(HexCoord::new(2, 1), Terrain::River);
+        g.cell_mut(HexCoord::new(2, 1)).unwrap().bridge = true;
+        assert_hug(&g);
+        // 120°-turn crossing ON the bridge hex (legs E then NW).
+        let mut g = HexGrid::new(4, 3, Terrain::Plains);
+        paint_paths(&mut g, &[&[(1, 1), (2, 1), (2, 0)]], true);
+        g.set_terrain(HexCoord::new(2, 1), Terrain::River);
+        g.cell_mut(HexCoord::new(2, 1)).unwrap().bridge = true;
+        assert_hug(&g);
+        // Two-bridge-hex wide river with the turn ON the decks: the
+        // polyline rounds the corner (fillet samples land inside the
+        // stretch) and the strip still hugs.
+        let mut g = HexGrid::new(5, 3, Terrain::Plains);
+        paint_paths(&mut g, &[&[(0, 1), (1, 1), (2, 1), (2, 0), (3, 0)]], true);
+        for h in [HexCoord::new(2, 1), HexCoord::new(2, 0)] {
+            g.set_terrain(h, Terrain::River);
+            g.cell_mut(h).unwrap().bridge = true;
+        }
+        let runs = net_runs(&g, true);
+        let mut extended = std::collections::HashSet::new();
+        let pts = smooth_run_polyline(&g, &runs[0], true, &mut extended);
+        let on_bridge = pts
+            .iter()
+            .filter(|p| {
+                let h = HexCoord::from_world(p.x, p.z, HEX_SIZE);
+                g.cell(h).map(|c| c.bridge).unwrap_or(false)
+            })
+            .count();
+        assert!(on_bridge >= 2, "rounded fillet samples on the decks");
+        assert_hug(&g);
+    }
+
+    /// Rail zebra on a turn bridge: the dashes ride the same curved
+    /// baseline across the deck — a dash lands on the turn-bridge hex at
+    /// its proper height above the white core.
+    #[test]
+    fn zebra_dashes_follow_band_across_turn_bridge() {
+        let mut g = HexGrid::new(4, 3, Terrain::Plains);
+        paint_paths(&mut g, &[&[(1, 1), (2, 1), (2, 0)]], false);
+        g.set_terrain(HexCoord::new(2, 1), Terrain::River);
+        g.cell_mut(HexCoord::new(2, 1)).unwrap().bridge = true;
+        let mut state = TacticalState::default();
+        state.grid = Some(Arc::new(g));
+        let (mesh, img) = build_road_rail_mesh_styled(&state, RoadStyle::Casing).expect("mesh");
+        // Plains banks on both sides → the ramp is flat at plains top.
+        let tie_y = Terrain::elevation_render_height(0) + RAIL_CORE_LIFT + 0.003;
+        let c = hex_world(HexCoord::new(2, 1));
+        const BLACK_RGB: [u8; 3] = [18, 18, 20];
+        let found = coloured_vertices(&mesh, &img).iter().any(|(rgb, p)| {
+            *rgb == BLACK_RGB
+                && (p.x - c.x).abs() < 0.7
+                && (p.z - c.z).abs() < 0.7
+                && (p.y - tie_y).abs() < 0.0015
+        });
+        assert!(found, "no zebra dash riding the turn bridge");
+    }
+
+    /// Ground-hug ruling: the band rides its OWN hex top — a plains path
+    /// beside hills is NOT lifted toward the neighbouring higher prisms;
+    /// every sample sits at its hex's top (per-pass lifts added
+    /// downstream).
+    #[test]
+    fn band_hugs_own_hex_tops() {
+        let mut g = HexGrid::new(6, 2, Terrain::Plains);
+        g.set_terrain(HexCoord::new(2, 1), Terrain::Hills);
+        g.set_terrain(HexCoord::new(3, 1), Terrain::Hills);
+        paint_paths(
+            &mut g,
+            &[&[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0)]],
+            true,
+        );
+        let runs = net_runs(&g, true);
+        let mut extended = std::collections::HashSet::new();
+        let pts = smooth_run_polyline(&g, &runs[0], true, &mut extended);
+        let plains_top = Terrain::elevation_render_height(0);
+        for p in &pts {
+            assert!(
+                (p.y - plains_top).abs() < 1e-4,
+                "sample must hug its own hex top, not float: {p:?}"
+            );
+        }
+    }
+
+    /// Elevation step: between two adjacent hexes of different heights the
+    /// baseline carries a RAMP PAIR — straddling the shared-edge midpoint
+    /// by ±STEP_RAMP_D along the travel direction, first the current
+    /// leg's height then the next — so the strip slopes over the prism
+    /// edge (never a vertical, plane-sharing quad). Flat ground gets no
+    /// pair; deck-adjacent segments spread their height change across the
+    /// whole bridge ramp (no short steep ramp segment); the swept mesh
+    /// carries no NaN or zero-area triangles.
+    #[test]
+    fn step_inserts_tilted_ramp_pair_and_mesh_stays_sane() {
+        let mut g = HexGrid::new(3, 1, Terrain::Plains);
+        g.set_terrain(HexCoord::new(1, 0), Terrain::Hills);
+        paint_paths(&mut g, &[&[(0, 0), (1, 0), (2, 0)]], true);
+        let runs = net_runs(&g, true);
+        let mut extended = std::collections::HashSet::new();
+        let pts = smooth_run_polyline(&g, &runs[0], true, &mut extended);
+        let (plains, hills) = (
+            Terrain::elevation_render_height(0),
+            Terrain::elevation_render_height(1),
+        );
+        // Up-ramp at (0,0)→(1,0), down-ramp at (1,0)→(2,0): each pair
+        // straddles the leg midpoint by ±STEP_RAMP_D along the travel
+        // direction, at the two heights, adjacent in the polyline (the
+        // fillet must not round the ramp ends).
+        let ramp_at = |a: HexCoord, b: HexCoord, y_a: f32, y_b: f32| {
+            let (ca, cb) = (hex_world(a), hex_world(b));
+            let dir = (cb - ca).normalize();
+            let m = (ca + cb) * 0.5;
+            let (p1, p2) = (m - dir * STEP_RAMP_D, m + dir * STEP_RAMP_D);
+            pts.windows(2).any(|w| {
+                (w[0].x - p1.x).abs() < 1e-4
+                    && (w[0].z - p1.z).abs() < 1e-4
+                    && (w[0].y - y_a).abs() < 1e-4
+                    && (w[1].x - p2.x).abs() < 1e-4
+                    && (w[1].z - p2.z).abs() < 1e-4
+                    && (w[1].y - y_b).abs() < 1e-4
+            })
+        };
+        assert!(ramp_at(
+            HexCoord::new(0, 0),
+            HexCoord::new(1, 0),
+            plains,
+            hills
+        ));
+        assert!(ramp_at(
+            HexCoord::new(1, 0),
+            HexCoord::new(2, 0),
+            hills,
+            plains
+        ));
+        // No vertical (same-XZ) segments anywhere — nothing shares a plane
+        // with a prism side.
+        assert!(pts
+            .windows(2)
+            .all(|w| { (w[0].x - w[1].x).abs() > 1e-6 || (w[0].z - w[1].z).abs() > 1e-6 }));
+        // Mesh sanity: finite vertices, no zero-area triangles (the tilted
+        // ramp quads included).
+        let mut state = TacticalState::default();
+        state.grid = Some(Arc::new(g));
+        let (mesh, _img) = build_road_rail_mesh_styled(&state, RoadStyle::Casing).expect("mesh");
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+            VertexAttributeValues::Float32x3(v) => v.clone(),
+            _ => panic!("position attribute missing"),
+        };
+        for p in &positions {
+            assert!(p.iter().all(|f| f.is_finite()), "NaN vertex {p:?}");
+        }
+        let idx: Vec<usize> = mesh.indices().expect("indexed mesh").iter().collect();
+        for tri in idx.chunks(3) {
+            let (a, b, c) = (
+                Vec3::from_array(positions[tri[0]]),
+                Vec3::from_array(positions[tri[1]]),
+                Vec3::from_array(positions[tri[2]]),
+            );
+            let area2 = (b - a).cross(c - a).length();
+            assert!(area2 > 1e-7, "zero-area triangle {a:?} {b:?} {c:?}");
+        }
+        // Flat ground: no ramp pairs anywhere.
+        let mut flat = HexGrid::new(4, 1, Terrain::Plains);
+        paint_paths(&mut flat, &[&[(0, 0), (1, 0), (2, 0), (3, 0)]], true);
+        let runs = net_runs(&flat, true);
+        let mut extended = std::collections::HashSet::new();
+        let pts = smooth_run_polyline(&flat, &runs[0], true, &mut extended);
+        assert!(
+            pts.windows(2).all(|w| (w[0].y - w[1].y).abs() < 1e-4),
+            "flat ground must not insert ramp pairs"
+        );
+        // Deck-adjacent segments: plains bank → bridge ramp → hills bank —
+        // the height change spreads across the whole deck ramp; the
+        // steepest window is far gentler than a ramp pair (0.35 over 0.2
+        // ≈ slope 1.75).
+        let mut g = HexGrid::new(4, 1, Terrain::Plains);
+        paint_paths(&mut g, &[&[(0, 0), (1, 0), (2, 0), (3, 0)]], true);
+        g.set_terrain(HexCoord::new(2, 0), Terrain::River);
+        g.set_terrain(HexCoord::new(3, 0), Terrain::Hills);
+        g.cell_mut(HexCoord::new(2, 0)).unwrap().bridge = true;
+        let runs = net_runs(&g, true);
+        let mut extended = std::collections::HashSet::new();
+        let pts = smooth_run_polyline(&g, &runs[0], true, &mut extended);
+        let max_slope = pts
+            .windows(2)
+            .map(|w| {
+                let dxz = ((w[1].x - w[0].x).powi(2) + (w[1].z - w[0].z).powi(2)).sqrt();
+                (w[1].y - w[0].y).abs() / dxz.max(1e-6)
+            })
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_slope < 0.5,
+            "no tilted ramp pair on deck-adjacent segments: {max_slope}"
+        );
+    }
+
+    /// Ford: the band through a (bridgeless) River hex sinks to the
+    /// riverbed top — texture-flat against the water, still visible; the
+    /// banks get ramp pairs as the route climbs down and up.
+    #[test]
+    fn ford_band_sinks_to_riverbed_top() {
+        let mut g = HexGrid::new(3, 1, Terrain::Plains);
+        g.set_terrain(HexCoord::new(1, 0), Terrain::River);
+        paint_paths(&mut g, &[&[(0, 0), (1, 0), (2, 0)]], true);
+        let runs = net_runs(&g, true);
+        let mut extended = std::collections::HashSet::new();
+        let pts = smooth_run_polyline(&g, &runs[0], true, &mut extended);
+        let riverbed = Terrain::elevation_render_height(-1);
+        let c = hex_world(HexCoord::new(1, 0));
+        let near = pts
+            .iter()
+            .min_by(|a, b| {
+                let da = (a.x - c.x).abs() + (a.z - c.z).abs();
+                let db = (b.x - c.x).abs() + (b.z - c.z).abs();
+                da.partial_cmp(&db).unwrap()
+            })
+            .unwrap();
+        assert!(
+            (near.y - riverbed).abs() < 1e-4,
+            "band through the ford rides the riverbed top: y={}",
+            near.y
+        );
+    }
+
+    /// Dual-track shared hexes: where a hex carries both flags the road
+    /// band shifts port and the rail band starboard — side by side, no
+    /// stacking. Off the shared section the offset is zero; the fade
+    /// never steps more than a third of the offset per sample.
+    #[test]
+    fn dual_track_offsets_split_shared_hexes() {
+        // Road straight along row 0; rail joins row 0 for the middle
+        // three hexes and leaves at both ends.
+        let mut g = HexGrid::new(7, 2, Terrain::Plains);
+        paint_paths(
+            &mut g,
+            &[&[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0)]],
+            true,
+        );
+        paint_paths(
+            &mut g,
+            &[&[(1, 1), (2, 1), (2, 0), (3, 0), (4, 0), (4, 1), (5, 1)]],
+            false,
+        );
+        let polyline = |road_net: bool| {
+            let runs = net_runs(&g, road_net);
+            assert_eq!(runs.len(), 1);
+            let mut extended = std::collections::HashSet::new();
+            let base = smooth_run_polyline(&g, &runs[0], road_net, &mut extended);
+            dual_track_offset(&g, &base, road_net, runs[0].closed)
+        };
+        let (road, rail) = (polyline(true), polyline(false));
+        let nearest_z = |pts: &[Vec3], h: HexCoord| {
+            let c = hex_world(h);
+            pts.iter()
+                .min_by(|a, b| {
+                    let da = (a.x - c.x).abs() + (a.z - c.z).abs();
+                    let db = (b.x - c.x).abs() + (b.z - c.z).abs();
+                    da.partial_cmp(&db).unwrap()
+                })
+                .unwrap()
+                .z
+        };
+        // Both runs travel +x through the shared section (side = +z):
+        // road (port) lands at NEGATIVE z, rail (starboard) positive.
+        let mid = HexCoord::new(3, 0);
+        let z_mid = hex_world(mid).z;
+        let (road_z, rail_z) = (nearest_z(&road, mid), nearest_z(&rail, mid));
+        assert!(road_z < z_mid - 0.1, "road shifts port: {road_z}");
+        assert!(rail_z > z_mid + 0.1, "rail shifts starboard: {rail_z}");
+        assert!(
+            rail_z - road_z > 0.1,
+            "bands separated: {} apart",
+            rail_z - road_z
+        );
+        // Off the shared section (beyond the one-sample fade): exactly
+        // zero offset.
+        let west = nearest_z(&road, HexCoord::new(0, 0));
+        assert!(
+            (west - hex_world(HexCoord::new(0, 0)).z).abs() < 1e-4,
+            "road-only hex keeps the centreline: {west}"
+        );
+        let rail_west = nearest_z(&rail, HexCoord::new(1, 1));
+        assert!(
+            (rail_west - hex_world(HexCoord::new(1, 1)).z).abs() < 1e-4,
+            "rail-only hex keeps the centreline: {rail_west}"
+        );
+        // Fade: the road run is straight, so its z IS the offset;
+        // adjacent samples never step more than a third of it.
+        let max_step = road
+            .windows(2)
+            .map(|w| (w[1].z - w[0].z).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_step <= DUAL_TRACK_OFFSET / 3.0 + 1e-4,
+            "offset fade step {max_step}"
+        );
+        // The merged mesh builds fine with both nets offset.
+        let mut state = TacticalState::default();
+        state.grid = Some(Arc::new(g));
+        let (mesh, _img) = build_road_rail_mesh_styled(&state, RoadStyle::Casing).expect("mesh");
+        assert!(vertex_count(&mesh) > 0);
+    }
+
+    /// Reversed-direction dual track: the rail run crosses the shared
+    /// section WESTWARD while the road run crosses it eastward — the
+    /// canonical normal (per-stretch chord, sign-normalized) still puts
+    /// the two bands on opposite sides: road on the normal's negative
+    /// side, rail positive. (The regression fixture above covers the
+    /// same-direction case.)
+    #[test]
+    fn dual_track_offsets_reversed_runs_split() {
+        // Road straight east along row 0; rail enters the shared section
+        // from the EAST tail ending at (4,2) and leaves west into
+        // (2,3) — grid order makes (4,2) the rail run's start, so it
+        // travels WEST through the shared hexes.
+        let mut g = HexGrid::new(7, 4, Terrain::Plains);
+        paint_paths(
+            &mut g,
+            &[&[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0)]],
+            true,
+        );
+        paint_paths(
+            &mut g,
+            &[&[
+                (4, 2),
+                (4, 1),
+                (4, 0),
+                (3, 0),
+                (2, 0),
+                (2, 1),
+                (2, 2),
+                (2, 3),
+            ]],
+            false,
+        );
+        let polyline = |road_net: bool| {
+            let runs = net_runs(&g, road_net);
+            assert_eq!(runs.len(), 1);
+            let mut extended = std::collections::HashSet::new();
+            let base = smooth_run_polyline(&g, &runs[0], road_net, &mut extended);
+            dual_track_offset(&g, &base, road_net, runs[0].closed)
+        };
+        let (road, rail) = (polyline(true), polyline(false));
+        // Sanity: the rail run really does start at its east tail.
+        let rail_runs = net_runs(&g, false);
+        assert_eq!(rail_runs[0].hexes[0], HexCoord::new(4, 2));
+        let nearest_z = |pts: &[Vec3], h: HexCoord| {
+            let c = hex_world(h);
+            pts.iter()
+                .min_by(|a, b| {
+                    let da = (a.x - c.x).abs() + (a.z - c.z).abs();
+                    let db = (b.x - c.x).abs() + (b.z - c.z).abs();
+                    da.partial_cmp(&db).unwrap()
+                })
+                .unwrap()
+                .z
+        };
+        // Canonical normal of the shared chord (±x) is +z: road negative
+        // side, rail positive — OPPOSITE sides despite the reversal.
+        let mid = HexCoord::new(3, 0);
+        let z_mid = hex_world(mid).z;
+        let (road_z, rail_z) = (nearest_z(&road, mid), nearest_z(&rail, mid));
+        assert!(road_z < z_mid - 0.1, "road on the negative side: {road_z}");
+        assert!(rail_z > z_mid + 0.1, "rail on the positive side: {rail_z}");
+        assert!(
+            rail_z - road_z > 0.1,
+            "bands separated: {} apart",
+            rail_z - road_z
+        );
+        let mut state = TacticalState::default();
+        state.grid = Some(Arc::new(g));
+        let (mesh, _img) = build_road_rail_mesh_styled(&state, RoadStyle::Casing).expect("mesh");
+        assert!(vertex_count(&mesh) > 0);
+    }
+
+    /// (palette RGB, four corner positions) per quad of a palette mesh.
+    /// (MeshBuilder emits quads as four consecutive vertices; the ford
+    /// fixtures below carry no discs/cylinders, so the grouping holds.)
+    fn coloured_quads(mesh: &Mesh, img: &Image) -> Vec<([u8; 3], [Vec3; 4])> {
+        coloured_vertices(mesh, img)
+            .chunks(4)
+            .map(|q| (q[0].0, [q[0].1, q[1].1, q[2].1, q[3].1]))
+            .collect()
+    }
+
+    /// Ford dashing: a road band crossing a bridgeless River hex runs as
+    /// ~50%-duty dashes over the ford arc (water shows through), while the
+    /// same crossing WITH a bridge deck stays solid — and so does every
+    /// non-ford segment.
+    #[test]
+    fn ford_band_dashes() {
+        /// Polyline + per-sample arc positions + the arc span of samples
+        /// landing on the River hex.
+        fn ford_span(g: &HexGrid) -> (Vec<Vec3>, Vec<f32>, f32, f32, f32) {
+            let runs = net_runs(g, true);
+            assert_eq!(runs.len(), 1);
+            let mut extended = std::collections::HashSet::new();
+            let pts = smooth_run_polyline(g, &runs[0], true, &mut extended);
+            let mut arcs = Vec::with_capacity(pts.len());
+            arcs.push(0.0f32);
+            for w in pts.windows(2) {
+                arcs.push(arcs.last().unwrap() + (w[1] - w[0]).length());
+            }
+            let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+            for (p, &s) in pts.iter().zip(&arcs) {
+                let h = HexCoord::from_world(p.x, p.z, HEX_SIZE);
+                if g.cell(h).map(|c| c.terrain == Terrain::River) == Some(true) {
+                    lo = lo.min(s);
+                    hi = hi.max(s);
+                }
+            }
+            let total = *arcs.last().unwrap();
+            (pts, arcs, lo, hi, total)
+        }
+        /// Fraction of an arc span covered by casing-coloured quads (each
+        /// quad's arc extent = its four corners' projected min..max).
+        fn casing_coverage(g: &HexGrid, lo: f32, hi: f32) -> f32 {
+            let runs = net_runs(g, true);
+            let mut extended = std::collections::HashSet::new();
+            let pts = smooth_run_polyline(g, &runs[0], true, &mut extended);
+            let mut arcs = Vec::with_capacity(pts.len());
+            arcs.push(0.0f32);
+            for w in pts.windows(2) {
+                arcs.push(arcs.last().unwrap() + (w[1] - w[0]).length());
+            }
+            let project = |v: Vec3| -> f32 {
+                let (mut best_d, mut best_s) = (f32::MAX, 0.0);
+                for (i, w) in pts.windows(2).enumerate() {
+                    let (a, b) = (w[0], w[1]);
+                    let (abx, abz) = (b.x - a.x, b.z - a.z);
+                    let len2 = (abx * abx + abz * abz).max(1e-12);
+                    let t = (((v.x - a.x) * abx + (v.z - a.z) * abz) / len2).clamp(0.0, 1.0);
+                    let (dx, dz) = (v.x - (a.x + abx * t), v.z - (a.z + abz * t));
+                    let d = dx * dx + dz * dz;
+                    if d < best_d {
+                        best_d = d;
+                        best_s = arcs[i] + (b - a).length() * t;
+                    }
+                }
+                best_s
+            };
+            let mut state = TacticalState::default();
+            state.grid = Some(Arc::new(g.clone()));
+            let (mesh, img) = build_road_rail_mesh_styled(&state, RoadStyle::Casing).expect("mesh");
+            let mut covered = 0.0_f32;
+            for (rgb, quad) in coloured_quads(&mesh, &img) {
+                if rgb != [82, 66, 48] {
+                    continue;
+                }
+                let (mut qlo, mut qhi) = (f32::MAX, f32::MIN);
+                for v in quad {
+                    let s = project(v);
+                    qlo = qlo.min(s);
+                    qhi = qhi.max(s);
+                }
+                covered += (qhi.min(hi) - qlo.max(lo)).max(0.0);
+            }
+            covered / (hi - lo).max(1e-6)
+        }
+        let mut g = HexGrid::new(5, 1, Terrain::Plains);
+        g.set_terrain(HexCoord::new(2, 0), Terrain::River);
+        paint_paths(&mut g, &[&[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)]], true);
+        let (_, _, lo, hi, total) = ford_span(&g);
+        assert!(hi > lo, "some samples land on the river hex");
+        // Dashed ford: gaps cut the coverage to roughly the duty cycle.
+        let ford_frac = casing_coverage(&g, lo, hi);
+        assert!(
+            (0.2..0.7).contains(&ford_frac),
+            "ford coverage {ford_frac} outside 0.2..0.7"
+        );
+        // Solid elsewhere: the off-ford arcs stay fully paved.
+        let off_frac = {
+            let before = casing_coverage(&g, 0.0, lo);
+            let after = casing_coverage(&g, hi, total);
+            (before * lo + after * (total - hi)) / (lo + (total - hi)).max(1e-6)
+        };
+        assert!(off_frac > 0.9, "non-ford coverage {off_frac} below 0.9");
+        // Same crossing WITH a bridge deck: solid throughout.
+        g.cell_mut(HexCoord::new(2, 0)).unwrap().bridge = true;
+        let solid_frac = casing_coverage(&g, lo, hi);
+        assert!(
+            solid_frac > 0.9,
+            "bridged crossing stays solid: {solid_frac}"
+        );
+    }
+
+    /// Mesh smoke: a painted grid builds a non-empty ribbon whose palette
+    /// carries the map-road colours (casing + khaki core, rail bed, ties);
+    /// an all-Urban grid builds NOTHING for the road net.
+    #[test]
+    fn road_rail_mesh_smoke_and_palette() {
+        let has_near = |img: &Image, rgb: [i32; 3]| {
+            img.data.chunks(4).any(|p| {
+                (p[0] as i32 - rgb[0]).abs() <= 1
+                    && (p[1] as i32 - rgb[1]).abs() <= 1
+                    && (p[2] as i32 - rgb[2]).abs() <= 1
+            })
+        };
+        let mut state = TacticalState::default();
+        let mut grid = HexGrid::new(8, 4, Terrain::Plains);
+        paint_paths(
+            &mut grid,
+            &[&[(1, 1), (2, 1), (3, 1), (4, 1), (5, 1)]],
+            true,
+        );
+        paint_paths(
+            &mut grid,
+            &[&[(1, 3), (2, 3), (3, 3), (4, 3), (5, 3)]],
+            false,
+        );
+        state.grid = Some(Arc::new(grid));
+        let (mesh, img) =
+            build_road_rail_mesh_styled(&state, RoadStyle::Casing).expect("ribbons exist");
+        assert!(vertex_count(&mesh) > 0);
+        assert!(has_near(&img, [82, 66, 48]), "road casing brown in palette");
+        assert!(
+            has_near(&img, [204, 178, 128]),
+            "road khaki core in palette"
+        );
+        // Rail zebra: black casing + white core; the dashes share the
+        // casing black (palette dedupes the identical colour).
+        assert!(has_near(&img, [18, 18, 20]), "rail black casing in palette");
+        assert!(
+            has_near(&img, [217, 217, 209]),
+            "rail white core in palette"
+        );
+        assert!(!has_near(&img, [77, 74, 84]), "old rail bed gone");
+        assert!(!has_near(&img, [71, 61, 46]), "old tie brown gone");
+        // Zebra geometry: dashes ride above the white core.
+        let top = Terrain::elevation_render_height(0);
+        let tie_y = top + RAIL_CORE_LIFT + 0.003;
+        let ys: Vec<f32> = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(VertexAttributeValues::Float32x3(v)) => v.iter().map(|p| p[1]).collect(),
+            _ => panic!("position attribute missing"),
+        };
+        assert!(
+            ys.iter().any(|&y| (y - tie_y).abs() < 1e-4),
+            "no zebra dash at white-core height + 0.003"
+        );
+        // Asphalt alt-style: single flat grey band, no casing/core.
+        let (mesh, img) =
+            build_road_rail_mesh_styled(&state, RoadStyle::Asphalt).expect("ribbons exist");
+        assert!(vertex_count(&mesh) > 0);
+        assert!(has_near(&img, [107, 102, 97]), "asphalt grey in palette");
+        assert!(!has_near(&img, [204, 178, 128]), "no khaki core pass");
+        // No road/rail flags at all → no mesh (the props precedent).
+        let mut empty = TacticalState::default();
+        empty.grid = Some(Arc::new(HexGrid::new(4, 4, Terrain::Plains)));
+        assert!(build_road_rail_mesh(&empty).is_none());
+        // All-Urban grid: flagged AND edge-bitted, but bands never enter
+        // cities → no runs, no fallback discs, no mesh.
+        let mut urban = TacticalState::default();
+        let mut ug = HexGrid::new(3, 1, Terrain::Urban);
+        paint_paths(&mut ug, &[&[(0, 0), (1, 0), (2, 0)]], true);
+        urban.grid = Some(Arc::new(ug));
+        assert!(build_road_rail_mesh(&urban).is_none());
+    }
+
+    /// §4.2 infrastructure overlays: a grid carrying road/rail/bridge/
+    /// factory flags builds the ribbon mesh (with the deck strip along the
+    /// bridge crossing) and the props mesh without panicking, with real
+    /// geometry in both.
+    #[test]
+    fn road_rail_bridge_factory_meshes_build() {
+        let mut state = TacticalState::default();
+        let mut grid = HexGrid::new(8, 8, Terrain::Plains);
+        grid.set_terrain(HexCoord::new(3, 3), Terrain::River);
+        grid.set_terrain(HexCoord::new(5, 3), Terrain::Village);
+        paint_paths(
+            &mut grid,
+            &[&[(1, 3), (2, 3), (3, 3), (4, 3), (5, 3), (6, 3)]],
+            true,
+        );
+        paint_paths(
+            &mut grid,
+            &[&[(1, 5), (2, 5), (3, 5), (4, 5), (5, 5), (6, 5)]],
+            false,
+        );
+        grid.cell_mut(HexCoord::new(3, 3)).unwrap().bridge = true;
+        grid.cell_mut(HexCoord::new(5, 3)).unwrap().factory = true;
+        state.grid = Some(Arc::new(grid));
+        let (ribbon, ribbon_img) = build_road_rail_mesh(&state).expect("ribbons exist");
+        assert!(vertex_count(&ribbon) > 0);
+        // The deck strip rides along the bridge crossing.
+        assert!(coloured_vertices(&ribbon, &ribbon_img)
+            .iter()
+            .any(|(rgb, _)| *rgb == [117, 87, 51]));
+        let (props, _img) = build_props_mesh(&state).expect("props exist");
+        // Village hamlet (4 boxes) + factory (3 boxes), 24 verts per box.
+        assert_eq!(vertex_count(&props), 96 + 72);
     }
 }

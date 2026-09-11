@@ -65,14 +65,15 @@ pub fn aura_radius_of(hq: &BattalionUnit, params: &CombatParams) -> i32 {
 
 /// Compute every unit's command link in one pass (aligned by unit index),
 /// so the fire phase does not re-run the scan per strike. Divisions are
-/// keyed per side — attacker and defender may share a division name.
+/// keyed per side AND per owner tag — a battle can field same-name
+/// divisions under several nations, and each answers to its own HQ.
 pub fn compute_command_links(units: &[BattalionUnit], params: &CombatParams) -> Vec<CommandLink> {
-    // Commanding HQs by (side, division) (a retreating/surrendered/destroyed
-    // HQ commands nothing).
-    let mut hqs: HashMap<(Side, &str), &BattalionUnit> = HashMap::new();
+    // Commanding HQs by (side, owner tag, division) (a retreating /
+    // surrendered / destroyed HQ commands nothing).
+    let mut hqs: HashMap<(Side, &str, &str), &BattalionUnit> = HashMap::new();
     for u in units {
         if u.is_hq() && u.is_combat_effective() && !u.division.is_empty() {
-            hqs.insert((u.side, u.division.as_str()), u);
+            hqs.insert((u.side, u.tag.as_str(), u.division.as_str()), u);
         }
     }
     units
@@ -81,7 +82,7 @@ pub fn compute_command_links(units: &[BattalionUnit], params: &CombatParams) -> 
             if u.is_hq() || u.division.is_empty() {
                 return CommandLink::NoHq;
             }
-            let Some(hq) = hqs.get(&(u.side, u.division.as_str())) else {
+            let Some(hq) = hqs.get(&(u.side, u.tag.as_str(), u.division.as_str())) else {
                 return CommandLink::NoHq;
             };
             if u.position.distance(hq.position) <= aura_radius_of(hq, params) {
@@ -136,32 +137,34 @@ pub fn synthesize_hqs(
     // even a combat-ineffective remnant (org 0) still on the roster,
     // otherwise a repeated call after the HQ was mauled would grow a second
     // HQ (compute_command_links would silently pick one and the roster
-    // would carry two).
-    let mut divisions: Vec<String> = Vec::new();
+    // would carry two). A division is the (owner tag, division name) pair:
+    // a battle can field same-name divisions under several nations, and
+    // each of those fields its own HQ.
+    let mut divisions: Vec<(String, String)> = Vec::new();
     for u in units.iter() {
-        if u.side == side
-            && !u.is_hq()
-            && !u.division.is_empty()
-            && !divisions.contains(&u.division)
-        {
-            divisions.push(u.division.clone());
+        if u.side == side && !u.is_hq() && !u.division.is_empty() {
+            let key = (u.tag.clone(), u.division.clone());
+            if !divisions.contains(&key) {
+                divisions.push(key);
+            }
         }
     }
-    let has_hq = |division: &str| {
+    let has_hq = |tag: &str, division: &str| {
         units
             .iter()
-            .any(|u| u.side == side && u.is_hq() && u.division == division)
+            .any(|u| u.side == side && u.is_hq() && u.tag == tag && u.division == division)
     };
-    divisions.retain(|d| !has_hq(d));
+    divisions.retain(|(tag, d)| !has_hq(tag, d));
     let n_div = divisions.len();
-    for (n, division) in divisions.into_iter().enumerate() {
+    for (n, (tag, division)) in divisions.into_iter().enumerate() {
         let members: Vec<&BattalionUnit> = units
             .iter()
-            .filter(|u| u.side == side && !u.is_hq() && u.division == division)
+            .filter(|u| u.side == side && !u.is_hq() && u.tag == tag && u.division == division)
             .collect();
         let (chassis, armored) = hq_chassis_for_division(&members);
         let mut hq =
             BattalionUnit::new(*next_id, "HQ", UnitType::Headquarters, side, position_of(n));
+        hq.tag = tag;
         hq.division = division;
         hq.set_chassis(chassis);
         if armored {
@@ -180,10 +183,14 @@ pub fn synthesize_hqs(
     // attachment the data source placed on a battalion moves to the division
     // HQ, where it extends the aura radius (see [`aura_radius_of`]).
     for hi in (units.len() - n_div)..units.len() {
-        let (side, division) = (units[hi].side, units[hi].division.clone());
+        let (side, tag, division) = (
+            units[hi].side,
+            units[hi].tag.clone(),
+            units[hi].division.clone(),
+        );
         let mut moved = Vec::new();
         for u in units.iter_mut() {
-            if u.side == side && !u.is_hq() && u.division == division {
+            if u.side == side && !u.is_hq() && u.tag == tag && u.division == division {
                 let mut i = 0;
                 while i < u.support.len() {
                     if u.support[i].kind == SupportKind::Signal {
@@ -260,6 +267,28 @@ mod tests {
         // Fixed §6.13 stat line, support-company-class org/strength.
         assert_eq!(pz_hq.max_org, 20.0);
         assert_eq!(pz_hq.soft_attack, HQ_SOFT_ATTACK);
+    }
+
+    #[test]
+    fn hq_never_initiates_attacks_but_stays_a_defender() {
+        // §6.13: the HQ is a command element — no attack order, no assault,
+        // no fire mission ever registers for it, so a division stripped of
+        // its line battalions cannot be turned into a spearhead through its
+        // command unit. Its DEFENSE is untouched: still a live, targetable
+        // unit that returns counter-fire (`add_counter` has no HQ gate).
+        let mut units = vec![inf(0, "Div", HexCoord::ZERO)];
+        deploy(&mut units, Side::Attacker);
+        let hq = units.iter().find(|u| u.is_hq()).expect("HQ synthesized");
+        assert!(hq.is_combat_effective());
+        assert!(hq.is_targetable());
+        assert!(!hq.can_attack_order());
+        assert!(!hq.can_assault());
+        assert!(!hq.can_fire_support());
+        // Line battalions keep every gate they had.
+        let line = units.iter().find(|u| !u.is_hq()).unwrap();
+        assert!(line.can_attack_order());
+        assert!(line.can_assault());
+        assert!(line.can_fire_support());
     }
 
     #[test]
@@ -364,5 +393,53 @@ mod tests {
         deploy(&mut units, Side::Attacker);
         let hqs = units.iter().filter(|u| u.is_hq()).count();
         assert_eq!(hqs, 1, "a broken HQ remnant still blocks re-synthesis");
+    }
+
+    /// Same-name divisions under two owner tags: each fields its OWN HQ
+    /// (stamped with its owner) and the command links never cross the pair —
+    /// the aura of one nation's HQ must not cover the other's battalions.
+    #[test]
+    fn same_name_divisions_keep_their_own_hq_and_command_links() {
+        let p = CombatParams::default();
+        let tagged = |id: usize, tag: &str, pos: HexCoord| {
+            let mut u = inf(id, "2. Inf", pos);
+            u.tag = tag.to_string();
+            u
+        };
+        let mut units = vec![
+            // The GER and FRA copies sit far apart; each HQ lands next to
+            // its own battalion (position_of gets the per-division index).
+            tagged(0, "GER", HexCoord::ZERO),
+            tagged(1, "FRA", HexCoord::new(9, 0)),
+        ];
+        let mut next_id = 100;
+        synthesize_hqs(&mut units, &mut next_id, Side::Attacker, |n| {
+            if n == 0 {
+                HexCoord::new(1, 0)
+            } else {
+                HexCoord::new(8, 0)
+            }
+        });
+        let hqs: Vec<&BattalionUnit> = units.iter().filter(|u| u.is_hq()).collect();
+        assert_eq!(hqs.len(), 2, "one HQ per (tag, division)");
+        assert_eq!(hqs.iter().filter(|u| u.tag == "GER").count(), 1);
+        assert_eq!(hqs.iter().filter(|u| u.tag == "FRA").count(), 1);
+        assert_eq!(hqs[0].division, "2. Inf");
+        assert_eq!(hqs[1].division, "2. Inf");
+
+        let links = compute_command_links(&units, &p);
+        assert_eq!(links[0], CommandLink::Direct, "linked to its own HQ");
+        assert_eq!(links[1], CommandLink::Direct, "linked to its own HQ");
+
+        // Kill the GER HQ: only the GER battalion loses command.
+        let ger_hq = units
+            .iter_mut()
+            .find(|u| u.is_hq() && u.tag == "GER")
+            .unwrap();
+        ger_hq.strength = 0.0;
+        ger_hq.state = crate::unit::UnitState::Eliminated;
+        let links = compute_command_links(&units, &p);
+        assert_eq!(links[0], CommandLink::NoHq, "its own HQ is gone");
+        assert_eq!(links[1], CommandLink::Direct, "the FRA copy still has its HQ");
     }
 }

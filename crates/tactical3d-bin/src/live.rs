@@ -52,9 +52,15 @@ pub fn run(dry: bool) {
                     tag,
                     attack_dirs,
                     is_player_attacker,
+                    ver,
                     ts,
                     ..
                 } => {
+                    // Version handshake (§3.3): the mod advertises its own
+                    // version; the verdict decides what the battle injects.
+                    let verdict =
+                        crate::version::verdict(env!("CARGO_PKG_VERSION"), ver.as_deref());
+                    println!("mod version: {ver:?} (verdict: {verdict:?})");
                     println!("[{ts}] tac_start: province={province} tag={tag} dirs={attack_dirs:?} player_atk={is_player_attacker}");
                     // The mod emits tac_enemy_tactic in the same tick right
                     // after tac_start — the same log flush usually lands it
@@ -156,6 +162,7 @@ pub fn run(dry: bool) {
                                 crate::battle::LiveCtx {
                                     tag: tag.clone(),
                                     dry,
+                                    mod_ver: ver.clone(),
                                 },
                             );
                             // Drain whatever the mod logged WHILE the battle

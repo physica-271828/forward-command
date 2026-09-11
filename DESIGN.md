@@ -108,17 +108,24 @@ forward-command/
 │                                          #   (file not yet provided)
 ├── common/
 │   ├── decisions/
+│   │   ├── categories/tac_categories.txt  # The decision category row
 │   │   └── tac_entry.txt                  # Tactical entry decision (clicked from
 │   │                                      #   the decision panel; HOI4 decisions
 │   │                                      #   cannot be hotkey-bound)
-│   ├── scripted_effects/
-│   │   ├── d_tac_apply_damage.txt         # d_ prefix → console command
-│   │   ├── d_tac_sync_hourly.txt          # Hourly sync receiver
-│   │   └── d_tac_end_battle.txt           # Battle termination
-│   └── on_actions/
-│       └── tac_on_actions.txt             # Hourly heartbeat on_action source
+│   ├── dynamic_modifiers/
+│   │   └── tac_dynamic_modifiers.txt      # tac_freeze (frozen battle state)
+│   ├── on_actions/
+│   │   └── tac_on_actions.txt             # Daily heartbeat + watchdog pulse
+│   └── scripted_effects/                  # `d_` prefix → console-callable effects
+│       ├── d_tac_sync_hourly.txt          # Hourly sync receiver + handshake check
+│       ├── d_tac_freeze.txt               # Battle-state freeze / unfreeze
+│       ├── d_tac_end_battle.txt           # Battle termination
+│       ├── d_tac_clear_tactical.txt       # Shared tactical-mode cleanup
+│       └── d_tac_version.txt              # Version-handshake verdict effects
 ├── events/
-│   └── tac_sync_events.txt                # tac_sync.1, tac_abort.1, tac_complete.99
+│   ├── tac_sync_events.txt                # tac_sync.1, tac_abort.1, tac_quiet.1,
+│   │                                      #   tac_watchdog.1, tac_notice.1, tac_complete.99
+│   └── tac_version_events.txt             # tac_version.1 (stale-program popup)
 └── localisation/
     ├── english/
     │   └── tac_l_english.yml
@@ -139,7 +146,7 @@ status overlay) and `interface/mapicons.gui` (battle bubble → tactical entry)
 Every message is one line of valid JSON. The external program listens to `game.log` for new lines matching `{"type":"tac_...",...}`.
 
 ```
-{"type":"tac_start",  "ts":"1940.5.13.15","province":3560,  "tag":"GER","leader_id":3,      "attack_dirs":["E","NE"],"is_player_attacker":true}
+{"type":"tac_start",  "ts":"1940.5.13.15","province":3560,  "tag":"GER","leader_id":3,      "attack_dirs":["E","NE"],"is_player_attacker":true,"ver":"0.3.2"}
 {"type":"tac_abort",  "ts":"1939.9.1.09","tag":"GER"}
 {"type":"tac_heartbeat","ts":"1939.9.1.10","tag":"GER","hour":3}
 {"type":"tac_state",  "ts":"1939.9.1.10","tag":"GER","hour":3,"phase":"active"}
@@ -164,7 +171,7 @@ the real game hour from the log line's own `[yyyy.mm.dd.hh]` prefix
 
 | Type | Fields | Triggers |
 |------|--------|----------|
-| `tac_start` | `ts`, `province`, `tag`, `leader_id`, `attack_dirs`, `is_player_attacker` | Player picks a battle state in the attack/defend state-target decision (§10.1); `province` stays 0 in the log — the external program resolves the real one from the post-click snapshot's `tac_pick=1` state; `is_player_attacker` is real per decision |
+| `tac_start` | `ts`, `province`, `tag`, `leader_id`, `attack_dirs`, `is_player_attacker`, `ver` | Player picks a battle state in the attack/defend state-target decision (§10.1); `province` stays 0 in the log — the external program resolves the real one from the post-click snapshot's `tac_pick=1` state; `is_player_attacker` is real per decision; `ver` advertises the mod's own version for the version handshake (§3.3) and is absent on pre-handshake mods |
 | `tac_refresh` | `ts` (prefix only) | (REMOVED — daily-pulse lag made the refresh loop structural; listener keeps parsing it for old logs) |
 | `tac_abort` | `ts`, `tag` | Player uses "Force Exit Tactical Mode" decision |
 | `tac_heartbeat` | `ts`, `tag`, `hour` | `on_hourly` during tactical mode (proves mod alive) |
@@ -291,6 +298,46 @@ fn inject(cmds: &[&str]) {
 }
 ```
 
+### 3.3 Version Handshake (mod ↔ program) (revised)
+
+The mod and the exe ship as one package, but players update the two halves
+at different times — a Workshop-subscribed mod against a not-yet-replaced
+exe is the normal failure mode, and before the handshake it was silent.
+The handshake makes a mismatch visible, never blocking play:
+
+- **Acceptance rule: the program must not lag the mod.** The reverse
+  (program ahead — e.g. the previous formal release's mod with this
+  cycle's beta exe) is allowed and stays silent.
+- **Mod → program**: `tac_start` carries `"ver":"<mod version>"` (§3.1) —
+  a literal in the entry decision's log line. The release scripts bump it
+  together with `Cargo.toml` and `descriptor.mod`; a listener test pins it
+  to `CARGO_PKG_VERSION`, so a package can never ship a mod that
+  advertises a different version.
+- **Program → mod**: every injected batch carries ONE verdict line at its
+  FRONT (prepended by the battle window; empty batches stay empty, and the
+  clock-probe / snapshot single-liners never carry it):
+  `eval_effect <TAG> = { d_tac_ver_ok = yes }` when the pair is
+  acceptable, `... d_tac_ver_prog_stale = yes` when the mod is newer than
+  the program. `d_tac_ver_prog_stale` (mod side) raises the visible
+  `tac_version.1` popup once per battle (`tac_ver_warned`; both handshake
+  flags reset in `d_tac_clear_tactical`). A mod that advertises no version
+  — or one the program cannot parse — gets NO line: unknown versions are
+  never guessed about.
+- **Program-ahead floor** (`tactical3d-bin::version::MOD_FLOOR_LADDER`):
+  an append-only ladder of (from → min_mod, reason) rows; a row takes
+  effect once the build's own version reaches `from`, and the first row
+  starts at the handshake release itself. A mod below the floor gets an
+  exe-internal notice only (battle-log line + notice-bar flash + menu
+  status line) and still receives `d_tac_ver_ok` — an exe-internal problem
+  must never turn into the player popup. A row is bumped only when an exe
+  change makes newer mod content mandatory.
+- **Pre-handshake program**: `d_tac_sync_hourly` / `d_tac_end_battle` are
+  only ever invoked by an exe-injected batch, so running at all proves a
+  program is driving the battle; with no verdict ever seen
+  (`tac_ver_seen` unset), `d_tac_ver_check` fires the same `tac_version.1`
+  popup — that is the path an exe from before the handshake is caught on,
+  at its first sync hour or at battle end.
+
 ---
 
 ## 4. Tactical Map Generation
@@ -302,9 +349,11 @@ fn inject(cmds: &[&str]) {
 | `provinces.bmp` | Pixel color → province ID mapping |
 | `definition.csv` | Province ID → type (land/sea/lake), terrain, RGB color |
 | `adjacencies.csv` | River crossings, strait data (four adjacency types parsed; the generator currently consumes only River) |
-| `rivers.bmp` | River strokes (index < 254 = river) |
-| `history/states/*.txt` | Victory points (province id → level) |
+| `rivers.bmp` | River strokes (blue palette 3-4 small / 6-7 medium / 9-11 large; green 0 = source, red 1 = merge, yellow 2 = split — riverbed markers carrying the channel across junctions, width inherited from the strokes they join) |
+| `history/states/*.txt` | Victory points (province id → level); state_category (village-density scaling); industrial levels (factory districts) |
 | `map/unitstacks.txt` | Unit stack positions per province (index-0 stack → VP city anchor) |
+| `map/railways.txt` | Railway lines (level + province-id path, the 1936 baseline network) |
+| Save `provinces` block | Live railway levels (`buildings.rail_way.level` per province — the built network incl. player construction; a damaged-but-built line still counts) |
 | `localisation/<lang>/victory_points_l_<lang>.yml` | VP names (`VICTORY_POINTS_<pid>`) for floating city labels (the UI language's file, English as fallback) |
 | `MAP_SCALE_PIXEL_TO_KM = 7.114` | Scale factor from `defines.lua` |
 | Attack directions | Live: derived from the attacking divisions' source provinces (save `land_combat` attacker locations); fallback `tac_start.attack_dirs` / script `dirs:` |
@@ -392,6 +441,24 @@ fn inject(cmds: &[&str]) {
      River hexes are passable shallows, not blockers: movement cost ×3,
      a unit standing in a river hex takes ×2 damage, and they are not
      deployable (combat rules in §6.6; only generation is covered here).
+     WIDTH BANDS: width IS the difference — the palette split (blue 3-4
+     small / 6-7 medium / 9-11 large) rides the grid as the cell's
+     `river_band`, and the centreline widens to the band's PHYSICAL
+     strip: 1 hex (Small,
+     the legacy river) / 2 hexes (Medium) / 3 hexes (Large). The strip
+     grows by flooding the centreline along a fixed axial pair (E+SE) for
+     width−1 rings — straight courses reach exactly that many
+     rows/columns, bends round to a continuous band of the same order.
+     A cell keeps the widest band that painted it (a tributary merges
+     into the wider water of its main river); band-less data defaults to
+     small. SOURCE/JUNCTION MARKERS (green 0 at a source, red 1 at a
+     merge, yellow 2 at a split) ARE the riverbed: they join the
+     centreline like strokes (smoothing + joining) so the channel never
+     breaks at junctions, but they own no width — their band is inherited
+     from the strokes within one pixel of them (widest connected course;
+     an isolated source dot falls back to small). Province-border river
+     edges (adjacencies.csv) stay cosmetic strips with their uniform
+     crossing surcharge, independent of bands.
    - Urban hexes from victory_points: hex count N = int((VP + 2) × U),
      with U = 1.2 when the province's own definition.csv terrain is urban,
      else 1.0. Anchored at the province's index-0 unit-stack position from
@@ -417,11 +484,146 @@ fn inject(cmds: &[&str]) {
     their own bases: rivers → −1, VP urban → 0. The field drives LOS
     (ridge rule, §6.6) and the per-hex 3D relief (every prism renders at
     its own elevation) — single source of truth for headless, AI and the
-    renderer. Mountain hexes also carry their elevation in COLOUR
+    renderer. Mountain hexes also carry their elevation in COLOUR:
     five discrete contour bands (terrain.rs
     `banded_color` — L0 dark valley floor up to L4 near-white peak, hard
     band edges matching the blocky prisms), so the colour IS the height on
     both the board and the minimap.
+ 8c. Road-network overlays (pipeline inverted — ROADS FIRST,
+    villages second): once terrain, rivers and
+    urban are final, the road net is generated and the villages DERIVE
+    from it (the old terrain-scatter-then-weave model is retired). Flag
+    overlays ride the grid (GridCell road/rail/bridge/bridge_edges/
+    factory; deployment zones stay last):
+    - ROADS: one border stub per LAND neighbour (the shared-border
+      centroid — identical from both sides, so networks read continuous
+      across battles; sea/lake shores have no road continuation and get
+      no stub; EVERY land neighbour connects, no distance admission).
+      Stub placement: a neighbour outside the playable mask is met at
+      the battle province's own border; a neighbour folded in as the
+      origin strip is met at the strip's FAR outer rim — the
+      seam → strip-mass direction is extrapolated through the band so
+      the radial visibly crosses the stitched territory and leaves the
+      map instead of dying at the invisible seam.
+      Main roads: with a city, the VP anchor radiates one A* to every
+      stub ("主路以城市为中心随机向地图边缘辐射"); without a city, the
+      stubs pair off in seeded order — not necessarily adjacent pairs, an
+      odd one out links to its nearest paired stub — and the pairs are
+      bridged into one component. Then seeded branches fork off the
+      painted net: long branches and short spurs, count =
+      clamp(province area / 150, 2, 5) each (start = seeded in-province
+      non-bridge non-Urban non-stub road hex; end = seeded ring pick at
+      8..12 / 5..7 hexes — branches are never shorter than 5 hexes —
+      passable, off-road, not Water/River/Urban, ≥3 from other ends, and
+      never ADJACENT to the existing net (a hugging end reads as a
+      stub-length fork)),
+      plus 1–2 waterside spurs AND 1–2
+      COASTAL spurs (the end hugging the shore at distance 1
+      from Water — a seaside-village site) when the province has water.
+      Water-side spurs pick their end FIRST (seeded among the eligible
+      shore hexes) and anchor at the NEAREST road hex (reach caps 12 /
+      24 — a genuinely remote coast yields no spur). Separately, a
+      province whose playable edge touches water gets up to 3 COAST
+      STUBS — one per DISTINCT water-bearing direction: shore hexes are
+      bucketed by their dominant adjacent-Water direction (ties to the
+      lower direction index), buckets of ≥3 hexes count as coasts (no
+      slivers), the 3 largest buckets each seed-pick one stub — joined
+      as main-road destinations — the road ends at the waterline and the
+      stub grows
+      a seaside village (the no-road-into-the-sea rule bars off-map
+      continuation only).
+      Rasterization: terrain-cost A* (mountains
+      detour, rivers cross at cost 3) with three adjustments — Urban
+      hexes ATTRACT at cost 0.5 (the path dives to the city boundary and
+      re-emerges, reading as connecting to the city's corners); an
+      already-painted road hex attracts at ×0.35 (floor 0.3), so later
+      paths merge into real junctions instead of parallels; and a step
+      BESIDE the painted net without joining it is surcharged +1.5
+      (anti-skim — paths merge truly or keep ≥2 hexes of clearance; the
+      straight line_to fallback and rail lines are exempt), so a skim
+      can't fake a junction. Turning
+      inside a River hex is surcharged by turn angle (straight free,
+      120° +1.0, 60°/U-turn +4.0), so bridges cross straight or in a
+      gentle arc (A* state = (q, r, entry-dir)).
+      RIVER CROSSINGS (three-way rule): railways always bridge; MAIN
+      roads roll per contiguous River segment against the battle state's
+      infrastructure (history/states `buildings.infrastructure`, 1936
+      baseline) — p = level/5, full infrastructure = 100%, 1/5 = 20%, 0
+      = no decks; a failed roll leaves a FORD (road flag stays on the
+      River hexes, no deck — waded at the river movement price); the
+      adjacency-river bridge_edges stamp rolls the same domain per road
+      hex (rail hexes exempt). A crossing segment is only considered
+      when it is COMPLETE — the path hexes before and after the run
+      exist, are paintable and are not River (both banks continue): an
+      incomplete border ford gets NO deck and NO road/rail flag on its
+      River hexes (the route ends at the near bank — no partial bridge
+      hanging off the map edge; edge bits are recorded only between
+      hexes painted this pass, so no single-side residual links).
+      BRANCHES/spurs never cross a river at
+      all — River is impassable to their A* and a window with no
+      river-free route yields no branch (no straight-line fallback).
+      After all painting, a deterministic cleanup pass
+      (prune_road_hex_triangles) clears residual hex-level road-edge
+      3-cycles left by merge skims (lexicographically largest
+      unprotected edge of the trio, both cells' bits; edges touching a
+      bridge deck or a River hex are protected; road flags = movement
+      are never touched).
+    - VILLAGES DERIVED (place_road_villages): SCATTER villages sit
+      BESIDE the net, never on a road hex; STRUCTURAL villages stamp ON
+      their structure hex (junctions and branch/spur endpoints are road
+      hexes by nature, flag kept). Candidates take the MAX of their
+      class probabilities
+      (never stack) × terrain weight (the old scatter's relative rates,
+      Plains-normalized: Plains 1.0 / Clearing 1.25 / Hills 0.5 /
+      Desert 0.5 / Forest 0.375 / Marsh 0.25 / Jungle 0.25 /
+      Mountain 0.125; Urban/River/Water excluded) × the battle state's
+      state_category density (rural ×1.0, pastoral ×0.6, town ×0.7,
+      large_town ×0.5, city tier and above ×0.6, wasteland ×0.15,
+      islands/enclave ×0.3), capped at 0.95. Classes: branch/spur
+      endpoints GUARANTEED (p=1.0, structural); junctions (road_edges
+      3+ bits) p=0.55; road-adjacent scatter p=0.12; waterside (2..=3
+      from water, off-road allowed) p=0.05. Near the city (anchor ring
+      ≤4): roll ×3 and the accepted village CONSUMES one factory budget
+      (industry/4, cap 3) to stamp as a factory district (显示为工厂) —
+      budget exhausted → a plain village; industry 0 → no factories
+      anywhere. Road-free compliant hexes ALSO roll a low WILDLAND
+      scatter (terrain base rate × density: Plains 0.004 / Clearing
+      0.003 / Hills 0.002 / Desert 0.002 / Forest 0.0015 / Marsh 0.001 /
+      Jungle 0.001 / Mountain 0.0005 — never zero, never dense; road and
+      bridge hexes excluded, near-city ×3 and the factory budget apply).
+      Spacing: ascending-roll order, an accepted village
+      rejects later scatter-class candidates within 2 hexes (structural
+      classes ignore spacing but occupy it). Stamps Terrain::Village
+      directly (elevation kept — a hills village keeps its slope),
+      never on River/Water/Urban/bridge hexes.
+    - FACTORY DISTRICTS (top-up): the ring 2–4 around the VP anchor is
+      topped up to industry/4 (cap 3) factory hexes — road-derived
+      factory villages in the ring already count, existing factory
+      hexes are never re-picked; candidates stay villages-preferred —
+      Village base + factory flag + road node (village-grade cover 0.30,
+      no LoS block, §6.6). No anchor or no industry → none.
+    - RAILWAYS: railways.txt paths anchored through unitstacks pixels,
+      routed by a rail-mode A* (flat 1.0/hex, no pricing adjustments) —
+      straight where it can, around impassable SEA where it must
+      (Water barred; a window with no route drops the line), painted
+      in-province as rail flags. Live battles
+      gate each segment on the save's rail_way.level (both endpoint
+      provinces > 0 — a built-but-damaged line still counts; only
+      strategic scheduling cares about connectivity), and a battle
+      province with rail but no static line links to railed neighbours
+      (player-built lines). Railways always bridge their river
+      crossings.
+    - BRIDGES (movement-only, no combat modifiers): every River hex a
+      RAIL path enters gets a bridge deck; a ROAD path's River segments
+      deck per the infrastructure roll above; road/rail hexes sitting
+      on adjacency river edges get the matching bridge_edges bit (road
+      rolls, rail exempt).
+    Both overlays paint EDGE-EXPLICITLY: each consecutive pair of a
+    painted path records the crossed hex edge on both cells
+    (road_edges/rail_edges, bit i = HexDirection::ALL[i]) — the renderer
+    draws these explicit links, not flag-adjacency guesses (clustered
+    village hexes and pass-bys would otherwise invent links); movement
+    keeps reading the hex-level road/rail flags.
  9. Determine frontlines from attack_dirs (dynamic frontline placement):
    - Stitched: attacker deploys on origin-province soil, defender in the
      battle province's central third (MIN_ZONE_DISTANCE no-man's land).
@@ -479,6 +681,7 @@ equipments registry → ───────┤  merge ────────
   designs (modules/upgrades) │   [1]                        │   stats
 technologies → tech_level  ──┤                              └─ equipment_ratio
 active_ideas → modifiers         [1]
+doctrine → bonuses               [2]
 leader → traits+skills             [3]
 division → org, str, exp
 ```
@@ -874,6 +1077,8 @@ Mobility classes: **leg** (infantry, cavalry, bicycle, support companies) vs **m
 - **One action per turn** per unit (`acted` flag): assault, fire support, emplace, or limber each consume the turn's action. A unit that acted does not march at the end of that turn.
 - Assault consumes the unit's turn and cancels its move order. Fire support consumes the turn's action but not the order (a firing unit simply does not march that turn — towed guns are emplaced anyway and cannot march).
 - Selected-unit ETA: remaining travel time of the standing order, displayed in whole turns (§9.2).
+- **Waypoint chains**: holding Shift while right-clicking APPENDS the destination to the standing move order as the next waypoint of a multi-leg chain; a plain right-click replaces the whole chain. The chain lives inside the order, so every "order is over" event (contact, interception, stand-by, Hold, emplacement, attack supersede, retreat) clears it with the same single `move_order = None`, and the manual-override lifecycle spans the chain. Each leg is RE-PLANNED from the live board when the previous leg completes — a queued route is never replayed, and an intermediate waypoint is silent (no arrival log, no release) until the LAST leg ends the order. A leg completed while the turn's march budget remains keeps the unit marching into the next leg the same turn.
+- **Player progress retention**: right-clicking the CURRENT destination re-affirms the standing order untouched (silent — the AI side's same rule); re-pointing to a NEW destination keeps the invested hours while the fresh route shares the first step; only a genuinely different first step restarts the progress bar.
 
 | Action | Cost |
 |--------|------|
@@ -1109,7 +1314,11 @@ destruction is possible, and a dying unit still shoots back.
     each victim's own hex decides its terrain/cover/crest. Only a zone
     with NO targetable unit at all fizzles target-lost. Dashed arc + the
     whole 7-hex blast zone outlined in the same dim hue (the outline IS
-    the friendly-fire warning). Intel-goal fire is always area.
+    the friendly-fire warning). Intel-goal fire is always area. The AI
+    side never aims an area mission at its own troops: a candidate whose
+    blast (aim hex + ring 1) holds a same-side targetable battalion is
+    refused or traded for a clean one — tube and rocket alike; a tube's
+    combat-effective target resolves precise and needs no gate.
   - Rockets: only 覆盖射击 — a right-click also resolves as an
     area salvo; a launcher can never single out a target. The salvo
     strikes EVERY unit in the zone at FULL tube-artillery strength (no
@@ -1136,8 +1345,10 @@ destruction is possible, and a dying unit still shoots back.
   selection ring shows an orange dashed minimum-range circle.
   NB: fire missions are NOT re-validated at resolution — a friendly unit
   moving into the blast zone after registration gets hit (kept as a
-  realistic battlefield accident; the AI only
-  avoids friends at PLANNING time).
+  realistic battlefield accident; the AI avoids
+  friends at PLANNING time, and registration re-checks the zone once
+  more before an AI area order sticks — a plan can age while the turn's
+  movements unfold; after registration nothing is re-validated).
 - **Emplacement (towed guns)**: towed artillery / AT / AA must be emplaced
   before firing; (un)limbering consumes the turn.
 
@@ -1155,12 +1366,12 @@ the division HQ and extends its command aura radius (3 → 6 km).
 
 ### 6.4 Encirclement (progressive attrition model; redesigned)
 
-The flanking damage bonus is **retired** — a multi-directional attack is already rewarded by the Lanchester concentration itself (each attacker resolves its own strike), so the old ×1.25/×0.90 flank terms double-counted the pincer. Encirclement is now a pure attrition/surrender model with two levels. Both require an **isolated** target: an adjacent combat-effective enemy must be present (impassable terrain alone never encircles — the old rule bled units standing in water corridors with zero contact), and no combat-effective friend may be adjacent (a contiguous friendly line cannot be pocketed one battalion at a time).
+The flanking damage bonus is **retired** — a multi-directional attack is already rewarded by the Lanchester concentration itself (each attacker resolves its own strike), so the old ×1.25/×0.90 flank terms double-counted the pincer. Encirclement is a pure attrition/surrender model with two levels, judged on **pockets**: the connected group of same-side battalions still holding ground (adjacent hexes). A pocket is **fully** encircled when it has **no liberties** (Go-style) — every passable hex next to the group is held by a combat-effective enemy — so a cluster of battalions is surrounded as a whole, never battalion by battalion. Two guards keep it honest: some adjacent combat-effective enemy must be present (impassable terrain alone never encircles — the old rule bled units standing in water corridors with zero contact), and a pocket holding a **live HQ** never seals (§6.13) — the command element is the pocket's morale anchor, so a force under one is simply not encircled at all (kill the HQ and the very same pocket collapses). Below the pocket rule sit the per-unit pressure rules for ISOLATED units and an adjacent friend covers (a contiguous friendly line cannot be pocketed one battalion at a time).
 
 | Level | Condition | Effects |
 |-------|-----------|---------|
-| **Partial encirclement** | ≤2 free adjacent edges, OR an opposite adjacent enemy pair | -2.5% max org/turn |
-| **Full encirclement** | 0 free edges | -5% max org/turn. Cannot retreat — org at 0 = surrender instead of retreat. Equipment captured (planned — not yet implemented) |
+| **Partial encirclement** | an isolated unit with ≤2 free adjacent edges, or an opposite adjacent enemy pair | -2.5% max org/turn |
+| **Full encirclement** | a sealed pocket (0 liberties) with an adjacent enemy and NO live HQ | -5% max org/turn. Cannot retreat — org at 0 = surrender instead of retreat. The ring is re-read every full turn for every unresolved unit, so a rout broken before the ring closed surrenders too. Equipment capture is out of scope: the injection channel cannot express it |
 
 The pace follows the 10-minute turn (§8.1): a static partial pocket collapses in ~40 turns (≈7 strategic hours), a full pocket in ~20 (≈3.3 h) — encirclement is a siege clock, not a death sentence. The HQ command aura (+2% max org/turn, §6.13) visibly sustains a pocket. Board status icons (§9): blue **↓** = partial attrition, blue **↓↓** = full attrition, red **↑** = HQ-aura recovery.
 
@@ -1191,7 +1402,8 @@ The pace follows the 10-minute turn (§8.1): a static partial pocket collapses i
 - **v3.3 shape**: cover — damage taken by the OCCUPANT of the hex, negative = exposed — is the only uniform terrain combat layer. The old per-terrain attack/defense modifier columns were linear duplicates of this channel (both read the target's hex), and vanilla terrain carries no defense bonus anyway. Per-terrain rationale: Forest 15% (trees conceal but splinter under shellfire); Hills 20% (slopes; the melee elevation rule adds the dynamic part); Mountain 40% (rock and relief — assaults belong to specialists); Urban 50% (dense masonry, hardest on the map; vehicles canalized); Jungle 20% (dense vegetation, no hard cover); Marsh 10% (open wetland); Desert −10% (exposed, fire superiority tells); River −50% (caught mid-ford in open water); Village 30% (masonry farmsteads, the classic Eastern-Front strongpoint — above forest/hills, below dense urban; capped there because villages are seeded scatter on real provinces).
 - **Battalion terrain adjusters**: the unit-class terrain game rides on the per-battalion modifiers from the HOI4 unit files (`unit_templates.json`, values verbatim, §5.4), baked into `BattalionUnit::terrain_adj` at assembly — per save TOKEN on the live path (rangers keep their forest identity even mapped to Infantry), per canonical template key on script/preset/demo paths. Strike-role semantics (§6.3): the firer's `attack` adjuster multiplies its damage as a standalone linear factor against the target's hex (floored at 0); the absorber's `defense` adjuster multiplies its D on its own hex. Line infantry/militia/paratroopers define zero adjusters in vanilla (the baseline); specialists carry bonuses (mountaineers +35%/+10% mountain, marines +30% river/marsh attack, rangers forest/jungle, engineers +25% defense on rough ground/river); vehicle and towed classes carry penalties (medium armor −40% urban, mech −30% jungle, towed guns −20% forest, …). `terrain_modifier_scale` (CombatParams, default 1.0) is the global dial. The `amphibious`/`fort` keys are dropped (no counterpart hex) and the `movement` key is not consumed (mobility classes already price terrain).
 - Move Cost is the leg-class value; **motor-class units pay 1 + (cost − 1) × 1.5** (the excess over the 1 km baseline is multiplied, §6.1 mobility classes).
-- **River hexes are fords, not roads** (revised rule): crossable and may be held, but never deployable; a unit standing in a river hex is exposed via the −50% cover above — the old ×2 damage special case is retired (one number per terrain).
+- **Road network**: a road or rail hex costs `road_base_km` (default 1.0) plus `road_elev_step_km` (default 0.3) per POSITIVE elevation level of the entered hex — the terrain type under the pavement is irrelevant (plains, forest, jungle, desert, marsh and village roads all pay the same; hexes at or below sea level clamp to the base). Relief is the only road surcharge left: hill roads 1.3/1.6, mountain roads 1.9/2.2. Every mobility class pays it (the motor excess multiplier is waived, so vehicles belong on roads); a FORD (road across River without a deck) carries no bonus and prices like open river. Every other hex pays the off-road row: terrain cost plus the flat `off_road_surcharge_km` (default 0.5) for legs, motor amplified through the same excess multiplier (motor = 1 + (base + 0.5 − 1) × 1.5 — the rougher the ground, the worse for vehicles). Urban streets are roads by definition (no surcharge). A bridge deck costs a flat 1.0 for every class (movement-only, no combat modifiers), and a bridged river edge waives the +2 km crossing surcharge. A factory district grants village-grade cover (+30%) whatever the base terrain says.
+- **River hexes are fords, not roads** (revised rule): crossable and may be held, but never deployable; a unit standing in a river hex is exposed via the −50% cover above — the old ×2 damage special case is retired (one number per terrain). **Width bands are PURE GEOMETRY**: a Medium/Large river is a WIDER strip (2/3 hexes, §4.2) of the SAME ford — every river hex keeps the uniform rows above, so the crossing difficulty difference comes from wading two or three hexes of water, never from per-band numbers. The band only names the hover terrain (小河/中河/大河).
 - River *edges* (from `adjacencies.csv`) instead levy a flat **+2 km surcharge** on the crossing step only.
 - **Water** is the only fully impassable terrain (map border / coastal flavour from the province bitmap) — no combat rules.
 - **Line of sight**: terrain no longer hard-blocks LOS except **Urban** (buildings; street fighting). Mountain relief is carried by the per-hex elevation field (§4.2 step 8b): an intermediate hex blocks only when it stands **strictly higher than BOTH endpoints** (ridge rule — peaks see over saddles, valleys are shut in, equal elevation never blocks). Sight range from the table above stays the HARD CAP (§6.1): LOS only shortens it, never extends it.
@@ -1245,7 +1457,7 @@ until the host dies (§6.3 Support Companies). Current effects:
   one hex per turn toward its own edge (Attacker → its entry edges, §4.2
   step 9; Defender → the far map edge). Path auto-selected hex-by-hex
   (nearest safe step, respecting stacking and impassable terrain).
-- **Pursuit**: retreating units remain valid attack targets — they take damage normally, never counter, and are annihilated when strength reaches 0. (The older "only flanking/fresh attackers can annihilate" rule was dropped with the Lanchester rework, .)
+- **Pursuit**: retreating units remain valid attack targets — they take damage normally, never counter, and are annihilated when strength reaches 0. (The older "only flanking/fresh attackers can annihilate" rule was dropped with the Lanchester rework.)
 - Units that successfully retreat to a deployment-zone edge hex are removed from the tactical map. "Deployment-zone edge" is implemented literally — the DEFENDER's routs aim at the EASTERN RIM of its own deployment zone (the reachable province boundary; the map edge can lie outside the battle province on stitched maps) and walk the BFS shortest path to it (one hex per turn), so a rout trapped against the province boundary or in a terrain dead-end still exits instead of freezing forever (the old greedy single-step descent froze on score plateaus and in pockets).
 
 #### Hold (Take Cover)
@@ -1388,9 +1600,16 @@ Two paths end a battle: the annihilation path (legacy) and the
 
 Every division fields exactly one **HQ unit**, synthesized at roster build
 time (save mapper, battle scripts and presets alike — never parsed from
-save data). The HQ fights with basic self-defense fire only and is fragile
-(org 20, strength 3, soft attack 3, defense 6), but it keeps its division
-effective:
+save data). The HQ is a COMMAND element, not a fighting one: fragile
+(org 20, strength 3, soft attack 3, defense 6) and it **never initiates
+combat** — no attack order, no assault, no fire mission ever registers for
+it. Its own defense is untouched: it stays a live, targetable unit that
+returns counter-fire, and it still dies to everything aimed at it. Its
+strength carries the same min(manpower ratio, equipment ratio) clamp every
+line battalion gets, measured against the DIVISION's own fill — the HQ asks
+for no equipment of its own — so a division with no equipment to its name
+fields a 0-strength HQ and gets no free command unit out of it. What it
+does do:
 
 - **Command aura** (radius `hq_aura_radius` = 3 hexes, same side AND same
   division only): battalions in command get ±10% attack/defense — a LINEAR
@@ -1537,7 +1756,7 @@ a future "leader skill → AI aggression" parameter may separate them.
 - Outnumbered 3:1 locally → refuse assault, go defensive.
 - Artillery stays 1-2 hexes behind frontline.
 - **Defender fire bases**: a DEFENDING towed gun with no enemy in its envelope emplaces IN PLACE instead of creeping after far-away visible enemies — on a sparse long front the creep goal drifted every turn, the re-issued order reset the march hours, and the battery never emplaced nor fired all battle (Warsaw trace: guns 20+ hexes from the nearest visible enemy). The enemy comes to a defender; only the ATTACKER creeps its guns forward (§7.3) and limbers to follow the advance.
-- **Blind bombardment**: an emplaced attacker battery with no visible target shells its intel goal (the besieged city / the enemy deployment zone) when in range — a siege must bleed, and before this the Warsaw garrison hid behind fog + urban LoS while NOTHING fired (300-turn staring match). The attacker gun also stays emplaced instead of limbering away while the intel zone is in range.
+- **Blind bombardment**: an emplaced attacker battery with no visible target shells its intel goal (the besieged city / the enemy deployment zone) when in range — a siege must bleed, and before this the Warsaw garrison hid behind fog + urban LoS while NOTHING fired (300-turn staring match). The attacker gun also stays emplaced instead of limbering away while the intel zone is in range. The blast zone (aim hex + ring 1) must be free of same-side targetable battalions: own troops standing on the seized point (the Seize hold-back phase) or inside the intel/flag zone close the blind fire — the gun holds rather than shell its own side.
 - **Storm rule**: the besieger may assault an urban garrison beaten below 40% org or locally outnumbered ≥3:1 despite the hopeless-trade math AND the local-odds gate — a broken garrison's packed neighbors no longer protect it (the 26 Sep Warsaw general assault after days of bombardment).
 - **Blind-march gate**: the attacker's hold-role blind march keys on "no COMBAT-EFFECTIVE enemy visible" — a RETREATING unit in view previously filled the enemy list and parked the whole force at the city edge forever.
 - **Intel tie-break toward the zone centre**: among equally-near intel-ring hexes the blind march prefers the one closest to the deployment-zone centroid — the old (q, r) tie-break drifted the sweep toward the zone's NW corner and a besieging force wheeled PAST the city (Warsaw: front parked at q16-18 for 150 turns while the city sat at q30-35).
@@ -1602,7 +1821,17 @@ a march ends when it arrives or is consumed (contact stop), an attack
 resolves in the fire phase (1-turn protection; re-issue to continue), Hold
 and an emplaced gun are open-ended (until stand by), and right-clicking
 the unit (stand by) releases it immediately. `refresh_turn` clears the
-override when the command is done.
+override when the command is done. An optional setting
+(`keep_manual_override`) keeps the battalion manual instead: the override
+then survives command completion (arrival / attack resolution) and only
+the player's stand-by — right-clicking the battalion itself, with or
+without a standing order — returns it to the division order. Under that
+setting the right-click is a two-way switch: right-clicking an
+AI-commanded battalion takes it manual, cancelling its standing orders
+at the hand-over (an AI order must not keep running under the manual
+flag). The choice is a persistent setting, toggleable mid-battle from
+the checkbox below the end-turn control: a flip applies at the next
+turn rollover and saves to settings.json for later battles.
 
 **Division sensor radius** (`div_sensor_radius` = 10): a division-order plan reacts only to enemies within 10 hexes of
 its own battalions — an Advance pushes and searches its OWN front instead
@@ -1683,8 +1912,10 @@ friendlies, behavior unchanged).
   tag carries the contingent's tactic — one nation, one planner, one
   card). `GameController.allies` + `division_tags` hold them; the single
   commandability predicate is `GameController::commands(unit)` =
-  `side == player_side && !allied` — with no contingents it degenerates to
-  the old side check, so unscripted battles are byte-identical.
+  `side == player_side && !allied` (allied matched on the owner tag plus the
+  division name — same-name divisions across nations stay apart) — with no
+  contingents it degenerates to the old side check, so unscripted battles
+  are byte-identical.
 - **Deployment**: allied divisions wait OFFBOARD (they never block the
   Begin Battle button). The player may drag a deployment SUGGESTION
   rectangle per allied division (the sector flow storing
@@ -1744,14 +1975,27 @@ friendlies, behavior unchanged).
   9/10 wins T194–269 (mean ~230, one known stall class), so the
   uncoordinated per-nation planners cost nothing in balance.
 
-P3 (live-mode multi-tag interface, symmetric damage writeback) is pending.
-Live interim behavior: NO
-allied-AI split — every co-belligerent division on the player's side
-assembles under the player's direct command (whole-side single planner),
-each battalion keeping its owning country's national modifiers and
-base-plate color; the damage write-back splits one `damage_units` line
-per participating tag (§3.2), so allied losses book to the allied
-country's own divisions.
+P3 (live-mode multi-tag interface) is pending. Live allied AI: `assemble_live`
+registers the same command split a script `divisions:` block does — every
+player-side division whose owning country is not the player's groups into one
+`AllyContingent` per tag (first-appearance order; the side default tactic:
+attacker → `assault`, defender → `elastic_defense`), and the player keeps
+command of her own divisions. Contingent membership is keyed on **(owner
+tag, division name)** — a live battle can field same-name divisions under
+several nations, and a player-owned division is never handed to an ally's
+AI. Allied live divisions wait OFFBOARD and deploy through
+`deploy_allied_nations` at BeginBattle exactly like script allies; each
+battalion keeps its owning country's national modifiers and base-plate
+color, and the damage write-back still splits one `damage_units` line per
+participating tag (§3.2), so allied losses book to the allied country's own
+divisions. `division_tags` stays empty on the live path (every unit carries
+its owner tag from assembly). The **(owner tag, division name)** identity
+spans the whole chain
+— commandability, the deployment path (auto-deploy exclusion, sector drags
+and suggestions, the BeginBattle allied passes), division orders
+(`div_orders`), the HQ / command-link tables and the OOB + order UI — so a
+same-name division fielded by another nation can never be claimed, planned,
+ordered or displayed as another's.
 
 ---
 
@@ -2021,13 +2265,54 @@ log became a standalone window.
 The mouse IS the command interface; the right panel carries no command
 buttons anymore (§9.2).
 
-1. **Select unit (non-sticky)**: left-click a friendly unit on the hex map or
-   in the Order of Battle window (which also pans the camera to it).
-   Left-clicking empty ground, an enemy, or anything else releases the
-   selection. Enemies are never selectable.
+1. **Select units (non-sticky; multi-select)**: left-click a friendly unit
+   on the hex map or in the Order of Battle window (which also pans the
+   camera to it). Left-clicking empty ground, an enemy, or anything else
+   releases the selection. Enemies are never selectable.
+   **Box select**: left-DRAG past 6 px on the map draws a selection
+   rectangle (translucent egui overlay); the release selects every
+   player-commanded battalion whose projected position falls inside —
+   allied battalions are never box-selected (they answer to their own
+   staff), and a sub-threshold drag stays a plain click. **Shift+left-click
+   toggles** a unit in/out of the selection set, and **Shift+box unions**
+   — the boxed battalions append to the set instead of replacing it
+   (shift-clicking ground keeps the set — additive mode, which a starting
+   Shift+drag relies on; shift+RIGHT-click stays the waypoint queue, the
+   two are orthogonal). Esc or a plain click elsewhere clears
+   the whole set. The last-clicked unit is the PRIMARY member — the radial
+   ring anchors on it — and every member wears the gold selection ring,
+   draws its own route ribbon, and is underlined in the OOB; the command
+   panel shows the set size. The max/min range rings and the HQ
+   chain-of-command overlay stay single-selection readouts.
+   **Control groups**: Ctrl+1..9 stores the current selection under the
+   slot; a bare 1..9 re-selects the group (members that died or left the
+   board are dropped first). Groups live for the battle only — never
+   persisted. **C = manual-control toggle for the whole set**: when every
+   commanded member is manual the set stands by together; otherwise every
+   non-manual member is taken manual (standing orders cancelled at the
+   hand-over, same rule as right-click take-manual). Single selection =
+   the same two-way switch as right-click-self but UNGATED by the
+   keep-manual setting (§7.4) — C is an explicit command; an idle manual
+   battalion is handed back at the next turn refresh as usual.
 2. **Move**: right-click the destination hex → standing move order; the
    route ribbon (black edge, red core) grows out from the unit and the
    hover card shows the ETA in turns (the panel is static now).
+   **Shift-click chains waypoints**: Shift+right-click appends the
+   destination to the standing order as the next waypoint of a multi-leg
+   chain (plain clicks replace the whole chain). The ribbon draws the
+   WHOLE chain as one continuous red arrow (the queued legs' previews
+   simply extend the same polyline — the HOI4 queued-order look; the
+   arrowhead marks the chain's last waypoint), each leg is re-routed
+   from the live board when reached, and the hover ETA sums the whole
+   chain. The per-step progress fill grows WITH the arrow: it starts at
+   the unit the moment the ribbon appears and its tip rides the grow
+   front until the arrow passes the progress point. Re-issuing the
+   current destination keeps the order — and its invested march progress
+   — untouched. With a MULTI-selection the right-click broadcasts (§9.3
+   item 1): the clicked hex goes to the first battalion and the rest fan
+   out to the nearest unclaimed passable hexes around it (blocking is
+   still judged at execution); Shift+right-click appends the spread
+   destinations as a new leg on each battalion's chain.
 3. **Attack**: right-click a visible enemy — the order splits by weapon:
     - Indirect artillery (tube / rocket): always a fire mission (精确射击 on
       a right-clicked visible enemy, 覆盖射击 via the F button), never an assault.
@@ -2035,9 +2320,14 @@ buttons anymore (§9.2).
      AT guns, range 2) → direct fire (fire support without counter-attack).
    - Failures pop an orange reason floater on the target hex (Out of range /
      Too close / Emplace first / Holding stance / Already acted).
+   - Multi-selection: every commanded battalion registers its OWN standing
+     order on the same target (the attack-order pool is one slot per
+     attacker, so focus fire is native); ineligible members are skipped.
 4. **Stand by**: right-click the selected unit itself → cancels the unit's
    standing orders — move AND attack. Stance, emplacement and the
-   acted flag are untouched.
+   acted flag are untouched. Single-selection only: with a multi-selection,
+   right-clicking a member's own hex is ignored (a per-set stand-by has no
+   meaning — the battalions rarely share a stance).
 5. **Radial menu**: selecting a unit pops an arc of circular buttons above
    it — **H** = Hold stance (any INFANTRY-attribute unit, including
    motorized/mechanized infantry; cavalry and vehicle crews excluded),
@@ -2048,7 +2338,13 @@ buttons anymore (§9.2).
    Unavailable buttons are HIDDEN, not greyed: an acted unit shows no arc
    at all and its model renders at 35% opacity (the "spent for this turn"
    signal, refreshed solid at the next turn). Placeholder capital
-   letters until proper icons are drawn.
+   letters until proper icons are drawn. With a multi-selection the ring
+   anchors on the primary member and a button appears when ANY commanded
+   member is eligible: H/E/L/R fan out per battalion (each toggles its own
+   stance / emplacement / retreat — dug-in members stand up while the rest
+   take cover), ineligible members are skipped, and the battle log collapses
+   the broadcast into one summary line (+ one per rejection reason). F and
+   the HQ division bar stay single-selection interfaces.
 6. **Fire-mission picking**: after F, left-click a target hex inside the
    fire envelope (visible enemies inside it are marked) → one barrage; the
    unit is spent for the turn. Right-click or Esc cancels without spending
@@ -2524,7 +2820,11 @@ or built-in value) when missing/blank, so a fresh install "just works".
   "hoi4_dir": "D:/Steam/steamapps/common/Hearts of Iron IV",
   "saves_dir": "C:/Users/<user>/Documents/Paradox Interactive/Hearts of Iron IV/save games",
   "log_path": "C:/Users/<user>/Documents/Paradox Interactive/Hearts of Iron IV/logs/game.log",
-  "language": "zh",            // "en" | "zh" (§15); blank/unknown → zh (CN closed-beta default)
+  "language": "zh",            // "en" | "zh" (§15). FIRST launch (no settings.json yet):
+                               //   a dedicated language-picker page opens before the settings
+                               //   page, pre-selected from the OS UI language (Chinese systems →
+                               //   zh, everything else → en); detection failure → zh. Existing
+                               //   files keep their stored value; blank/unknown → zh.
   "writeback": "org_str",      // org_str | off — damage write-back mode
                                //   no per-division script knob
                                //   exists. org_str = org+str at
@@ -2606,6 +2906,7 @@ Current values:
 | `hq_aura_radius` | 3 | | |
 | `melee_elevation_gain` | 0.15/level (≤1 hex) | `melee_elevation_cap` | 0.45 (3 levels) |
 | `exposed_crest_mult` | 1.5 (indirect, step lower) | `defilade_mult` | 0.5 (indirect, step higher) |
+| `river_edge_surcharge_km` | 2.0 (§6.6 river row; uniform across bands) | | |
 | `hq_org_regen_frac` | 0.02 (out of contact) | `hq_death_org_frac` | 0.20 |
 | `hq_combat_bonus` | 0.10 | `hq_signal_radius_bonus` | 3 |
 | `flag_progress_cap` | 12 | `flag_capture_ratio` | 2.0 |
@@ -2698,12 +2999,12 @@ AFTER that first full live-loop test. (The signal-company effect shipped with §
 - [x] Flag-capture victory (siege conclusion, §6.11/§7.3): flag zones, control-ratio progress, collapse + retreat flow (zone-rim BFS, §6.8), flag-aware AI, progress-bar UI, `d_tac_collapse` injection
 - [x] Doctrine/tech integration — doctrine factors + researched techs applied in the save→unit pipeline (§5)
 - [ ] Allied support request system
-- [~] Allied (friendly-nation) AI in tactical battles — **P1 + P2 (§7.5)** — scripted battles (per-nation planners, division-granularity control split, player may issue division orders to allied HQs, deployment suggestions); P2: menu nation selector (`div_control=` overrides), per-tag base-plate colors, headless split evaluation (Narvik battery 10/10); live interim: NO allied-AI split — allied divisions assemble under the player's direct command with per-tag damage write-back lines (§7.5); remaining: P3 live-mode interface (multi-tag `tac_start`, war-relation roster split, allied-AI takeover slices, optional command-mode setting)
+- [~] Allied (friendly-nation) AI in tactical battles — **P1 + P2 + P3 live split (§7.5)** — scripted battles (per-nation planners, division-granularity control split, player may issue division orders to allied HQs, deployment suggestions); P2: menu nation selector (`div_control=` overrides), per-tag base-plate colors, headless split evaluation (Narvik battery 10/10); live: allied divisions split per owner nation under each allied AI's own planner — the player commands their own divisions and may still issue division-level orders to allied HQs, with per-tag damage write-back lines (§7.5); remaining: optional command-mode setting
 - [ ] Advanced stances + movement modes
 - [ ] Balance testing
 - [ ] Installer / auto-config utility (mod half covered by `install-mod.ps1`)
 - [ ] Runtime data extraction — the exe reads the HOI4 install directly, replacing the pre-extracted `data/` tables (also removes `data/`+`extractor/` from the public release)
-- [ ] Open-source release — GitHub public repo + Actions-built release exe + GPL-3.0 (scheduled after the first full live-loop test)
+- [x] Open-source release — GitHub public repo + Actions-built release exe + GPL-3.0 (shipped with v0.3.0)
 
 ---
 
@@ -2711,7 +3012,7 @@ AFTER that first full live-loop test. (The signal-company effect shipped with §
 
 | Risk | Mitigation |
 |------|------------|
-| `save_as_binary=no` not set | `install-mod.ps1` inspects `settings.txt` and warns when binary saves are on; the player toggles the setting manually (no auto-fixer exists) |
+| `save_as_binary=no` not set | `install-mod.ps1` inspects `settings.txt` and warns when binary saves are on, and the program's settings page rewrites it in one click (`Set save_as_binary=no`; restart HOI4 to apply) |
 | Console injection timing | `SetForegroundWindow` + generous sleep (50-150ms); test across hardware; `--dry` injector mode writes batch files without `SendInput` |
 | jomini save parsing edge cases | jomini is the ONLY parser (no regex fallback exists); mitigated by the text-save requirement, table validation, and HOI4-install smoke tests (`--ignored`) |
 | External program crash | Manual abort via HOI4 decision; re-enter tactical mode for fresh state; the main menu stays resident while a battle child process runs |
@@ -2871,4 +3172,3 @@ add languages without recompiling.
 | `documentation/dynamic_variables_documentation.md` | Dynamic variable reference |
 | `%USERPROFILE%/Documents/Paradox Interactive/Hearts of Iron IV/save games/` | Save file directory |
 | `%USERPROFILE%/Documents/Paradox Interactive/Hearts of Iron IV/logs/game.log` | Log file |
-

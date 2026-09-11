@@ -52,6 +52,7 @@ mod snapshot;
 mod splash;
 mod theme;
 mod tray;
+mod version;
 mod window;
 
 /// Apply `hoi4_dir=` / `saves_dir=` / `log_path=` CLI overrides onto loaded
@@ -305,6 +306,10 @@ fn main() {
             // tag may be omitted/empty: the live assembler then takes the
             // played country from the save's `player="TAG"` key.
             let tag = get("tag").unwrap_or_default();
+            // Version handshake (§3.3): the mod's advertised version rides
+            // along from the parent menu/CLI listener; absent = pre-handshake
+            // mod = inject nothing.
+            let mod_ver = get("modver");
             let dirs: Vec<String> = get("dirs")
                 .map(|d| d.split(',').map(|s| s.trim().to_string()).collect())
                 .unwrap_or_default();
@@ -338,7 +343,14 @@ fn main() {
                                     num("seed", 42),
                                 );
                             } else {
-                                battle::run_live(spec, battle::LiveCtx { tag, dry })
+                                battle::run_live(
+                                    spec,
+                                    battle::LiveCtx {
+                                        tag,
+                                        dry,
+                                        mod_ver,
+                                    },
+                                )
                             }
                         }
                         Err(e) => {

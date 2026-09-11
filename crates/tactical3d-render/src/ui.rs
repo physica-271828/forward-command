@@ -90,6 +90,7 @@ impl Plugin for TacticalUiPlugin {
                         draw_oob_window,
                         draw_unit_labels.after(crate::camera::rts_camera_controller),
                         draw_radial_menu,
+                        draw_box_select_rect,
                     )
                         .chain()
                         // With the render gate closed nothing is
@@ -266,6 +267,11 @@ pub(crate) const WARN_RED: egui::Color32 = egui::Color32::from_rgb(224, 82, 70);
 /// (the player's side keeps white + gold HQ).
 const ENEMY_RED: egui::Color32 = egui::Color32::from_rgb(255, 166, 92);
 const ENEMY_HQ_RED: egui::Color32 = egui::Color32::from_rgb(255, 82, 70);
+/// Manual-command marker color (map-label M): a bright cyan so the
+/// "player is personally commanding this" read never collides with the
+/// gold stance letters, the red retreat marker or the blue/red morale
+/// arrows.
+const MANUAL_CYAN: egui::Color32 = egui::Color32::from_rgb(120, 220, 255);
 
 /// Minimap window geometry (the only floating window left, pinned
 /// to the top-LEFT corner — the Enemy tactic card it used to mirror merged
@@ -649,6 +655,30 @@ fn draw_command_panel(
                     });
                 }
             }
+            // §7.4 manual-command retention — a battle RULE, not turn
+            // automation (kept out of the automation panel on purpose):
+            // checked = a manually commanded battalion stays manual after
+            // its command completes, until stood by. The checkbox mirrors
+            // GameController; the SetManualKeep command applies it to the
+            // loop and mirrors it into BattleSettings, whose change
+            // detection persists it to settings.json (bin side).
+            let mut keep_manual = game.keep_manual_override;
+            // The tooltip describes the state the box is IN right now
+            // (hover reads the current value): checked = keep-manual
+            // semantics, unchecked = the default return-when-done rules.
+            let keep_tip = if keep_manual {
+                "battle.tooltip.manual.keep.checked"
+            } else {
+                "battle.tooltip.manual.keep.unchecked"
+            };
+            if tip(
+                ui.checkbox(&mut keep_manual, loc.tr("battle.manual.keep").as_ref()),
+                loc.tr(keep_tip),
+            )
+            .changed()
+            {
+                pending.0.push(PlayerCommand::SetManualKeep(keep_manual));
+            }
             // Session-scoped turn automation (auto-skip / auto-close /
             // auto-sync), always in the same slot under the action button.
             draw_automation_panel(ui, automation, game.session.phase, loc);
@@ -958,7 +988,7 @@ fn draw_hover_card(
                 if let Some(u) = hovered_unit {
                     unit_card(ui, &game, &state, u, &loc);
                 } else if let Some(h) = state.hover_hex {
-                    hex_card(ui, &state, h, &loc, game.combat.params().oob_leaving_turns);
+                    hex_card(ui, &state, h, &loc, game.combat.params());
                 }
             });
         });
@@ -997,6 +1027,17 @@ fn unit_card(
         state_line.push_str(loc.tr("battle.hover.state_emplaced").as_ref());
     }
     ui.label(state_line);
+    // Division-order control status: who commands this battalion right now —
+    // a manual override keeps the division AI off it; otherwise the
+    // division AI re-plans it whenever the division order (re)fires.
+    if u.side == game.session.player_side && game.div_ordered(&u.tag, &u.division) {
+        let key = if u.manual_override {
+            "battle.hover.cmd_manual"
+        } else {
+            "battle.hover.cmd_div_ai"
+        };
+        ui.label(egui::RichText::new(loc.tr(key).as_ref()).small());
+    }
     // §6.14: out-of-bounds dwell countdown — the recall window
     // before the unit slips away for good must be visible at a glance.
     if u.oob_turns > 0 {
@@ -1089,9 +1130,16 @@ fn unit_card(
         ));
     }
     // ETA lives ONLY here — computed against the player's view so
-    // hidden enemies neither block nor project ZOC.
+    // hidden enemies neither block nor project ZOC. A waypoint chain
+    // shows its FINAL destination and the whole-chain estimate (active
+    // segment + queued legs' previews).
     if let Some(order) = &u.move_order {
-        if let Some(dest) = order.path.last() {
+        let dest = order
+            .queue
+            .back()
+            .map(|leg| leg.dest)
+            .or_else(|| order.path.last().copied());
+        if let Some(dest) = dest {
             let view: Vec<tactical_core::unit::BattalionUnit> = state
                 .units
                 .iter()
@@ -1103,7 +1151,7 @@ fn unit_card(
                 .cloned()
                 .collect();
             let eta = state.grid.as_ref().and_then(|g| {
-                tactical_core::movement::order_eta_hours(g, u, &view, game.combat.params())
+                tactical_core::movement::chain_eta_hours(g, u, &view, game.combat.params())
             });
             if let Some(hrs) = eta {
                 let turns = tactical_core::movement::eta_turns(hrs, game.combat.params());
@@ -1195,7 +1243,7 @@ fn hex_card(
     state: &TacticalState,
     h: tactical_core::hex::HexCoord,
     loc: &LocaleRes,
-    oob_max: u8,
+    params: &tactical_core::params::CombatParams,
 ) {
     ui.label(
         egui::RichText::new(loc.trf(
@@ -1206,7 +1254,41 @@ fn hex_card(
     );
     if let Some(g) = &state.grid {
         if let Some(c) = g.cell(h) {
-            ui.label(loc.terrain_name(c.terrain).as_ref());
+            // River hexes name their width band (小河 / 中河 / 大河) — the
+            // band is the physical strip width, the rule rows below stay
+            // the uniform ford values for every band.
+            let tname = match (c.terrain, c.river_band) {
+                (tactical_core::terrain::Terrain::River, tactical_core::RiverBand::Small) => {
+                    loc.tr("terrain.river_small")
+                }
+                (tactical_core::terrain::Terrain::River, tactical_core::RiverBand::Medium) => {
+                    loc.tr("terrain.river_medium")
+                }
+                (tactical_core::terrain::Terrain::River, tactical_core::RiverBand::Large) => {
+                    loc.tr("terrain.river_large")
+                }
+                _ => loc.terrain_name(c.terrain),
+            };
+            ui.label(tname.as_ref());
+            // §4.2 infrastructure on the cell — several flags can stack
+            // (a bridge always rides a road/rail link; a factory district
+            // is a road-network node), so they join into one line.
+            let mut feats = Vec::new();
+            if c.road {
+                feats.push(loc.tr("battle.hover.road"));
+            }
+            if c.rail {
+                feats.push(loc.tr("battle.hover.rail"));
+            }
+            if c.bridge {
+                feats.push(loc.tr("battle.hover.bridge"));
+            }
+            if c.factory {
+                feats.push(loc.tr("battle.hover.factory"));
+            }
+            if !feats.is_empty() {
+                ui.label(feats.join(" · "));
+            }
             // §6.14: impassability and the
             // out-of-bounds leaving rule get a PROMINENT colored line, not
             // just an implicit 99.0 movement cost — water is uncrossable,
@@ -1221,22 +1303,24 @@ fn hex_card(
                 ui.label(
                     egui::RichText::new(loc.trf(
                         "battle.hover.out_of_bounds",
-                        &[("max", &oob_max.to_string())],
+                        &[("max", &params.oob_leaving_turns.to_string())],
                     ))
                     .strong()
                     .color(GOLD),
                 );
             }
+            // §4.2 move cost (generic LEG row — the amplified motor row is
+            // per-unit and stays out of the hover card). One source of truth
+            // with step_km: bridge deck flat, surfaced hex by relief, Urban
+            // street by the terrain row, everything else off-road.
+            let move_km = tactical_core::pathfinding::cell_move_km(c, params);
             ui.label(loc.trf(
                 "battle.hover.terrain_mods",
-                &[("move", &format!("{:.1}", c.terrain.movement_cost()))],
+                &[("move", &format!("{move_km:.1}"))],
             ));
             ui.label(loc.trf(
                 "battle.hover.cover",
-                &[(
-                    "cover",
-                    &format!("{:+.0}", c.terrain.cover_percent() * 100.0),
-                )],
+                &[("cover", &format!("{:+.0}", c.cover_percent() * 100.0))],
             ));
         }
     }
@@ -1313,13 +1397,28 @@ fn draw_minimap(
                     // yellow-green hills — same source as the 3D board);
                     // out-of-bounds cells — land AND water alike — fade to
                     // one dim grey, matching the board's sky-haze retreat.
+                    // §4.2 infrastructure flags override the terrain
+                    // colour (bridge deck > rail bed > paved road), synced
+                    // with the 3D ribbons: the khaki road core, the
+                    // near-black rail casing; a
+                    // factory district keeps its road pixel (the network
+                    // stays continuous) and adds the dark centre marker
+                    // below instead.
                     let color = if !c.out_of_bounds {
-                        let rgb = c.terrain.banded_color(c.elevation);
-                        egui::Color32::from_rgb(
-                            (rgb[0] * 200.0) as u8,
-                            (rgb[1] * 200.0) as u8,
-                            (rgb[2] * 200.0) as u8,
-                        )
+                        if c.bridge {
+                            egui::Color32::from_rgb(188, 168, 128)
+                        } else if c.rail {
+                            egui::Color32::from_rgb(30, 30, 34)
+                        } else if c.road {
+                            egui::Color32::from_rgb(204, 178, 128)
+                        } else {
+                            let rgb = c.terrain.banded_color(c.elevation);
+                            egui::Color32::from_rgb(
+                                (rgb[0] * 200.0) as u8,
+                                (rgb[1] * 200.0) as u8,
+                                (rgb[2] * 200.0) as u8,
+                            )
+                        }
                     } else {
                         egui::Color32::from_rgb(58, 58, 64)
                     };
@@ -1330,6 +1429,20 @@ fn draw_minimap(
                             let (x, y) = (px + dx, py + dy);
                             if x < tw && y < th {
                                 img.pixels[y * tw + x] = color;
+                            }
+                        }
+                    }
+                    // Factory district: dark centre dot (the middle 2×2 of
+                    // the hex's 4×4 block) so the district shows on the
+                    // minimap without breaking the road run it sits on.
+                    if c.factory && !c.out_of_bounds {
+                        let dark = egui::Color32::from_rgb(40, 36, 44);
+                        for dy in 1..3 {
+                            for dx in 1..3 {
+                                let (x, y) = (px + dx, py + dy);
+                                if x < tw && y < th {
+                                    img.pixels[y * tw + x] = dark;
+                                }
                             }
                         }
                     }
@@ -1578,6 +1691,15 @@ fn draw_unit_labels(
                 GOLD,
             );
         }
+        // Manual-command marker: the player personally commands this
+        // battalion ("手操中") — a cyan frame around the whole counter,
+        // visible without hovering and collision-free with every letter
+        // slot (H/E/S/W top-left, R top-right, morale arrows right edge).
+        // Player-side only — manual overrides exist only on battalions the
+        // player commands.
+        if u.side == state.player_side && u.manual_override {
+            painter.rect_stroke(rect.expand(1.0), 2.0, egui::Stroke::new(1.5_f32, MANUAL_CYAN));
+        }
         // Retreating marker — faux-bold double draw + light shadow so the R
         // carries weight next to the thinner stance letters (the letter
         // stays — it belongs to the H/E/S/W family; the morale arrows are
@@ -1731,9 +1853,10 @@ enum RadialAct {
 /// no cavalry), E/L = Emplace/Limber (towed guns, same slot), F = fire
 /// mission picking (indirect artillery only), R = retreat (only in contact
 /// with the enemy). Unavailable buttons are hidden, not greyed — an acted
-/// unit shows no ring at all (its model renders translucent instead), with
-/// one exception: an acted unit that is HOLDING keeps a single-button ring
-/// (H = stand up), since leaving cover is free.
+/// unit shows no ring at all (its model renders translucent instead): spent
+/// is spent, and the ring returns with the next turn's refresh.
+/// A multi-selection swaps this for the broadcast ring
+/// (`draw_broadcast_ring`): same arc, per-battalion fan-out, no F.
 fn draw_radial_menu(
     mut contexts: EguiContexts,
     game: Option<Res<GameController>>,
@@ -1789,12 +1912,20 @@ fn draw_radial_menu(
         return;
     }
 
+    // Multi-select (§9.3): the ring anchors on the primary member and
+    // broadcasts — a button appears when ANY commanded member is eligible
+    // and the click fans out per battalion (the handlers do the gating).
+    // The HQ division bar and the F fire-picking stay single-selection
+    // interfaces.
+    if state.selection.len() > 1 {
+        draw_broadcast_ring(ctx, &state, game, center, screen, &loc, &mut pending);
+        return;
+    }
+
     // Unavailable buttons are HIDDEN, not greyed: the ring teaches causality
     // by appearing (E → F after emplacing) and disappears entirely once the
     // unit has acted — pairing with the translucent "spent" model as the
     // done-for-turn signal.
-    // EXCEPTION: stand-up (H on a holding unit) stays visible after acting —
-    // leaving cover is free and its handler has no acted gate.
     let mut btns: Vec<(&str, String, RadialAct)> = Vec::new();
 
     // An HQ selection swaps the battalion ring for the DIVISION
@@ -1815,11 +1946,20 @@ fn draw_radial_menu(
     if !game.commands(u) {
         return;
     }
+    // §6.2: an acted battalion's ring is gone ENTIRELY — the turn's
+    // action is spent and the translucent model says so. No stand-up
+    // exception: leaving cover is free, but (like every other command)
+    // it waits for the next turn's refresh, when the ring reappears
+    // normally — a holding battalion then shows H = stand up again.
+    // The HQ bar above is unaffected: staff units never spend a turn.
+    if u.acted {
+        return;
+    }
 
-    if u.is_holding || (!u.acted && u.can_hold()) {
+    if u.is_holding || u.can_hold() {
         // Cover costs the turn to take, is free to leave, and
-        // drops on moving / attacking (no assault restriction). Standing up
-        // stays available after acting (see the ring comment above).
+        // drops on moving / attacking (no assault restriction); a
+        // holding battalion's H means stand up.
         let tip = if u.is_holding {
             loc.tr("battle.radial.stand_up").into_owned()
         } else {
@@ -1859,6 +1999,18 @@ fn draw_radial_menu(
         ));
     }
 
+    draw_radial_buttons(ctx, center, screen, &btns, &mut pending);
+}
+
+/// The shared arc layout for the radial command ring: the buttons fan
+/// across the top half above `center` and push their PlayerCommand.
+fn draw_radial_buttons(
+    ctx: &egui::Context,
+    center: egui::Pos2,
+    screen: egui::Rect,
+    btns: &[(&str, String, RadialAct)],
+    pending: &mut PendingCommands,
+) {
     let n = btns.len();
     for (i, (letter, tip, act)) in btns.iter().enumerate() {
         // Top-half arc above the unit — the old full-ring spread
@@ -1895,6 +2047,93 @@ fn draw_radial_menu(
     }
 }
 
+/// The broadcast ring (§9.3 multi-select): same arc language as the
+/// single-unit ring, but a button appears when ANY commanded member of
+/// the selection is eligible and the command fans out to each battalion
+/// (per-member gating lives in the handlers — an acted gun simply skips).
+/// No F (fire-mission picking is a single-unit mode) and no HQ division
+/// bar.
+fn draw_broadcast_ring(
+    ctx: &egui::Context,
+    state: &TacticalState,
+    game: &GameController,
+    center: egui::Pos2,
+    screen: egui::Rect,
+    loc: &LocaleRes,
+    pending: &mut PendingCommands,
+) {
+    let members = state.selection.iter().filter_map(|&id| {
+        let u = state.unit_by_id(id)?;
+        (game.commands(u) && u.is_combat_effective() && !u.undeployed).then_some(u)
+    });
+    let mut any_hold = false;
+    let mut any_emplace = false;
+    let mut all_emplaced = true;
+    let mut any_retreat = false;
+    for u in members {
+        if u.is_holding || u.can_hold() {
+            any_hold = true;
+        }
+        if !u.acted && u.requires_emplacement() {
+            any_emplace = true;
+            if !u.is_emplaced {
+                all_emplaced = false;
+            }
+        }
+        let in_contact = !u.acted
+            && state.units.iter().any(|e| {
+                e.side != u.side && e.is_combat_effective() && e.position.distance(u.position) == 1
+            });
+        if in_contact {
+            any_retreat = true;
+        }
+    }
+    let mut btns: Vec<(&str, String, RadialAct)> = Vec::new();
+    if any_hold {
+        // Cover costs the turn to take, is free to leave — with a mixed
+        // set each battalion toggles its own stance.
+        btns.push(("H", loc.tr("battle.radial.take_cover").into_owned(), RadialAct::Hold));
+    }
+    if any_emplace {
+        let (letter, tip) = if all_emplaced {
+            ("L", loc.tr("battle.radial.limber").into_owned())
+        } else {
+            ("E", loc.tr("battle.radial.emplace").into_owned())
+        };
+        btns.push((letter, tip, RadialAct::Emplace));
+    }
+    if any_retreat {
+        btns.push(("R", loc.tr("battle.radial.retreat").into_owned(), RadialAct::Retreat));
+    }
+    draw_radial_buttons(ctx, center, screen, &btns, pending);
+}
+
+/// The box-select rectangle (§9.3): a translucent fill + border over the
+/// dragged area while the left-drag is past the click threshold.
+fn draw_box_select_rect(mut contexts: EguiContexts, state: Res<TacticalState>) {
+    let Some(drag) = state.box_select else { return };
+    if !drag.active {
+        return;
+    }
+    // On window-close frames the egui context is already torn
+    // down — ctx_mut() would panic; skip the frame instead.
+    let Some(ctx) = contexts.try_ctx_mut() else {
+        return;
+    };
+    let (min, max) = drag.rect();
+    let rect = egui::Rect::from_min_max(egui::pos2(min.x, min.y), egui::pos2(max.x, max.y));
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("box_select"),
+    ));
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(90, 140, 220, 30));
+    painter.rect_stroke(
+        rect,
+        0.0,
+        egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(150, 190, 240)),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Division command bar: horizontal SQUARE buttons with full
 // names over the selected HQ — deliberately distinct from the battalion
@@ -1912,7 +2151,9 @@ fn draw_division_command_bar(
     pending: &mut ResMut<PendingCommands>,
 ) {
     let division = hq.division.clone();
-    let order = game.div_orders.get(&division);
+    // The order lookup rides the HQ's own (owner tag, division) identity,
+    // so a same-name division of another nation's bar stays clean.
+    let order = game.div_order(&hq.tag, &division);
 
     // Every button carries a localized hover tooltip explaining
     // what the order does (the badge of the ACTIVE order shows its kind's
@@ -1937,7 +2178,10 @@ fn draw_division_command_bar(
                     loc.tr("div_order.cancel").into_owned(),
                     IconId::Cross,
                     egui::Color32::from_rgb(255, 150, 110),
-                    Some(PlayerCommand::CancelDivOrder(division.clone())),
+                    Some(PlayerCommand::CancelDivOrder {
+                        tag: hq.tag.clone(),
+                        division: division.clone(),
+                    }),
                     "div_order.cancel.tooltip",
                 ),
             ]
@@ -1948,6 +2192,7 @@ fn draw_division_command_bar(
                 IconId::Advance,
                 GOLD,
                 Some(PlayerCommand::DivOrder {
+                    tag: hq.tag.clone(),
                     division: division.clone(),
                     pick: DivOrderPick::Advance,
                 }),
@@ -1958,6 +2203,7 @@ fn draw_division_command_bar(
                 IconId::Flag,
                 GOLD,
                 Some(PlayerCommand::DivPick {
+                    tag: hq.tag.clone(),
                     division: division.clone(),
                     kind: DivPickKind::Seize,
                 }),
@@ -1968,6 +2214,7 @@ fn draw_division_command_bar(
                 IconId::Target,
                 GOLD,
                 Some(PlayerCommand::DivPick {
+                    tag: hq.tag.clone(),
                     division: division.clone(),
                     kind: DivPickKind::Engage,
                 }),
@@ -1988,8 +2235,9 @@ fn draw_division_command_bar(
     );
     // An ALLIED HQ's bar carries a provenance badge above it —
     // division orders are accepted here, but the battalions otherwise fight
-    // under their own staff's control.
-    if let Some(ally) = game.allied_division(&division) {
+    // under their own staff's control. The badge answers to the HQ's own
+    // (owner tag, division) identity, not to the name alone.
+    if let Some(ally) = game.allied_division_of(&hq.tag, &division) {
         let pos = egui::pos2(
             bar_center.x.clamp(10.0, (screen.width() - 10.0).max(10.0)),
             (bar_center.y - 30.0).clamp(10.0, (screen.height() - 10.0).max(10.0)),
@@ -2249,7 +2497,9 @@ fn draw_esc_menu(
                             && u.is_combat_effective()
                             && match &kind {
                                 RecallKind::All => true,
-                                RecallKind::Division(d) => &u.division == d,
+                                RecallKind::Division { tag, division } => {
+                                    &u.tag == tag && &u.division == division
+                                }
                             }
                     })
                     .count()
@@ -2257,11 +2507,11 @@ fn draw_esc_menu(
             .unwrap_or(0);
         let title = match &kind {
             RecallKind::All => loc.tr("battle.button.recall_all").into_owned(),
-            RecallKind::Division(d) => {
-                let name = if d.is_empty() {
+            RecallKind::Division { division, .. } => {
+                let name = if division.is_empty() {
                     loc.tr("oob.unattached").into_owned()
                 } else {
-                    d.clone()
+                    division.clone()
                 };
                 loc.trf("battle.dialog.recall_title", &[("name", &name)])
             }
@@ -2284,8 +2534,11 @@ fn draw_esc_menu(
                             RecallKind::All => {
                                 pending.0.push(PlayerCommand::RecallAll);
                             }
-                            RecallKind::Division(d) => {
-                                pending.0.push(PlayerCommand::RecallDivision(d.clone()));
+                            RecallKind::Division { tag, division } => {
+                                pending.0.push(PlayerCommand::RecallDivision {
+                                    tag: tag.clone(),
+                                    division: division.clone(),
+                                });
                             }
                         }
                         ui_win.confirm_recall = None;
@@ -2910,16 +3163,18 @@ fn draw_oob_window(
                 })
                 .unwrap_or_default();
             // Group own battalions by division, first-appearance order.
-            // The group key doubles as the sector-pick / recall identifier,
-            // so the "(unattached)" stand-in is the localized string (same
+            // The group key is the (owner tag, division) command identity
+            // (§7.5) — it doubles as the sector-pick / recall identifier, so
+            // the "(unattached)" stand-in is the localized string (same
             // sentinel semantics as before — comparisons stay internal).
-            let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+            let mut groups: Vec<((String, String), Vec<usize>)> = Vec::new();
             for u in state.units.iter().filter(|u| u.side == player) {
-                let key = if u.division.is_empty() {
+                let division = if u.division.is_empty() {
                     loc.tr("oob.unattached").into_owned()
                 } else {
                     u.division.clone()
                 };
+                let key = (u.tag.clone(), division);
                 match groups.iter_mut().find(|(k, _)| *k == key) {
                     Some((_, v)) => v.push(u.id),
                     None => groups.push((key, vec![u.id])),
@@ -2929,12 +3184,12 @@ fn draw_oob_window(
             // first-appearance order, unchanged); each ALLIED contingent
             // then gets its own section in `game.allies` order, introduced
             // by a tag header line. The section tag rides along as Option.
-            let mut own: Vec<(String, Vec<usize>)> = Vec::new();
-            let mut allied: Vec<(String, Vec<usize>)> = Vec::new();
+            let mut own: Vec<((String, String), Vec<usize>)> = Vec::new();
+            let mut allied: Vec<((String, String), Vec<usize>)> = Vec::new();
             for (key, ids) in groups {
                 let is_ally = game
                     .as_ref()
-                    .map(|g| g.allied_division(&key).is_some())
+                    .map(|g| g.allied_division_of(&key.0, &key.1).is_some())
                     .unwrap_or(false);
                 if is_ally {
                     allied.push((key, ids));
@@ -2942,16 +3197,16 @@ fn draw_oob_window(
                     own.push((key, ids));
                 }
             }
-            let mut ordered: Vec<(Option<String>, String, Vec<usize>)> =
-                own.into_iter().map(|(d, ids)| (None, d, ids)).collect();
+            let mut ordered: Vec<(Option<String>, (String, String), Vec<usize>)> =
+                own.into_iter().map(|(k, ids)| (None, k, ids)).collect();
             let allies_list = game.as_ref().map(|g| g.allies.clone()).unwrap_or_default();
             for ally in &allies_list {
                 let mut header = Some(ally.tag.clone());
                 let mut i = 0;
                 while i < allied.len() {
-                    if ally.divisions.contains(&allied[i].0) {
-                        let (div, ids) = allied.remove(i);
-                        ordered.push((header.take(), div, ids));
+                    if allied[i].0.0 == ally.tag && ally.divisions.contains(&allied[i].0.1) {
+                        let (key, ids) = allied.remove(i);
+                        ordered.push((header.take(), key, ids));
                     } else {
                         i += 1;
                     }
@@ -2959,14 +3214,14 @@ fn draw_oob_window(
             }
             // An allied division no contingent claims (should not happen)
             // trails at the end without a header.
-            ordered.extend(allied.into_iter().map(|(d, ids)| (None, d, ids)));
+            ordered.extend(allied.into_iter().map(|(k, ids)| (None, k, ids)));
             egui::ScrollArea::vertical()
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    for (section_tag, div, ids) in ordered {
-                        if let Some(tag) = &section_tag {
+                    for (section_tag, (tag, div), ids) in ordered {
+                        if let Some(t) = &section_tag {
                             ui.label(
-                                egui::RichText::new(loc.trf("ui.allies.section", &[("tag", tag)]))
+                                egui::RichText::new(loc.trf("ui.allies.section", &[("tag", t)]))
                                     .strong()
                                     .color(GOLD),
                             );
@@ -3060,7 +3315,7 @@ fn draw_oob_window(
                         // kind name in brackets — plus the cancel affordance
                         // in the header row (works even after the HQ fell:
                         // the OOB header is the guaranteed cancel path).
-                        let div_order = game.as_ref().and_then(|g| g.div_orders.get(&div));
+                        let div_order = game.as_ref().and_then(|g| g.div_order(&tag, &div));
                         if let Some(o) = div_order {
                             title.push_str("  [");
                             title.push_str(&loc.tr(o.kind_key()));
@@ -3086,20 +3341,22 @@ fn draw_oob_window(
                                         let picking = state
                                             .deploy_sector
                                             .as_ref()
-                                            .map(|s| s.division == div)
+                                            .map(|s| s.tag == tag && s.division == div)
                                             .unwrap_or(false);
                                         // For an ALLIED division the
                                         // deploy drag stores a sector SUGGESTION
                                         // (its own AI deploys at BeginBattle);
                                         // recall then clears the suggestion.
+                                        // The (tag, division) pair decides —
+                                        // never the bare name (§7.5).
                                         let allied = game
                                             .as_ref()
-                                            .map(|g| g.allied_division(&div).is_some())
+                                            .map(|g| g.allied_division_of(&tag, &div).is_some())
                                             .unwrap_or(false);
                                         let suggestion = allied
                                             && game
                                                 .as_ref()
-                                                .map(|g| g.allied_sectors.contains_key(&div))
+                                                .map(|g| g.ally_sector(&tag, &div).is_some())
                                                 .unwrap_or(false);
                                         let mut deploy_clicked = false;
                                         let mut recall_clicked = false;
@@ -3165,6 +3422,7 @@ fn draw_oob_window(
                                             } else {
                                                 state.deploy_sector =
                                                     Some(crate::state::SectorPick {
+                                                        tag: tag.clone(),
                                                         division: div.clone(),
                                                         anchor: None,
                                                     });
@@ -3179,13 +3437,16 @@ fn draw_oob_window(
                                             if allied {
                                                 // Clearing a hint destroys
                                                 // nothing — no confirmation.
-                                                pending.0.push(PlayerCommand::RecallDivision(
-                                                    div.clone(),
-                                                ));
+                                                pending.0.push(PlayerCommand::RecallDivision {
+                                                    tag: tag.clone(),
+                                                    division: div.clone(),
+                                                });
                                             } else {
-                                                ui_win.confirm_recall = Some(
-                                                    crate::state::RecallKind::Division(div.clone()),
-                                                );
+                                                ui_win.confirm_recall =
+                                                    Some(crate::state::RecallKind::Division {
+                                                        tag: tag.clone(),
+                                                        division: div.clone(),
+                                                    });
                                             }
                                         }
                                     }
@@ -3198,7 +3459,7 @@ fn draw_oob_window(
                                         let side_c = colors.for_side(u.side);
                                         let effective = u.is_combat_effective();
                                         let retreating = u.state == UnitState::Retreating;
-                                        let selected = state.selected_unit == Some(id);
+                                        let selected = state.is_selected(id);
                                         let undeployed = u.undeployed;
                                         let placing = state.deploy_placing == Some(id);
                                         // An ALLIED battalion's row is
@@ -3329,8 +3590,7 @@ fn draw_oob_window(
                                         // it only selects + focuses.
                                         if resp.clicked() && effective {
                                             if !commanded {
-                                                state.selected_unit = Some(id);
-                                                state.units_dirty = true;
+                                                state.select_only(id);
                                                 focus.0 = Some(hex_world(pos) + Vec3::Y * 0.4);
                                             } else if let Some((src_host, att_idx)) =
                                                 state.attach_picking
@@ -3355,11 +3615,9 @@ fn draw_oob_window(
                                                 state.units_dirty = true;
                                             } else if deploying && undeployed && commanded {
                                                 state.deploy_placing = Some(id);
-                                                state.selected_unit = None;
-                                                state.units_dirty = true;
+                                                state.clear_selection();
                                             } else {
-                                                state.selected_unit = Some(id);
-                                                state.units_dirty = true;
+                                                state.select_only(id);
                                                 focus.0 = Some(hex_world(pos) + Vec3::Y * 0.4);
                                             }
                                         }
@@ -3425,7 +3683,10 @@ fn draw_oob_window(
                             }
                         });
                         if order_cancel {
-                            pending.0.push(PlayerCommand::CancelDivOrder(div.clone()));
+                            pending.0.push(PlayerCommand::CancelDivOrder {
+                                tag: tag.clone(),
+                                division: div.clone(),
+                            });
                         }
                     }
                 });

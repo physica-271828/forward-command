@@ -336,10 +336,10 @@ impl CombatEngine {
         links: &[CommandLink],
     ) {
         let d = &units[di];
-        let def_terrain = grid
+        let (def_terrain, def_cover) = grid
             .cell(d.position)
-            .map(|c| c.terrain)
-            .unwrap_or(Terrain::Plains);
+            .map(|c| (c.terrain, c.cover_percent()))
+            .unwrap_or((Terrain::Plains, 0.0));
         let mut sum_qg = 0.0;
         let mut sum_g = 0.0;
         let mut falloff_weighted = 0.0;
@@ -399,7 +399,7 @@ impl CombatEngine {
         let melee_avg = melee_weighted / sum_qg;
         let cmd_aura = 1.0 + self.params.hq_combat_bonus * (cmd_weighted / sum_qg);
         let adj_avg = adj_weighted / sum_qg;
-        let cover = 1.0 - def_terrain.cover_percent();
+        let cover = 1.0 - def_cover;
         let mut linear = falloff_avg;
         linear *= melee_avg;
         linear *= cmd_aura;
@@ -1026,32 +1026,61 @@ impl CombatEngine {
     /// pocket collapses over strategic hours, not minutes. A unit ground
     /// down to org 0 surrenders when fully encircled, otherwise enters
     /// involuntary retreat (§6.8).
-    pub fn apply_encirclement_attrition(&self, grid: &HexGrid, units: &mut Vec<BattalionUnit>) {
+    ///
+    /// The ring is evaluated for every unit still ON the board and
+    /// unresolved — `Active` or `Retreating` — NOT only for
+    /// combat-effective ones. A broken unit (org 0) is by definition
+    /// combat-ineffective, and it is exactly the unit the surrender rule
+    /// exists for: gating the evaluation on combat effectiveness left a rout
+    /// that was sealed INTO a pocket — or was already broken when the ring
+    /// closed — retreating forever, because this pass was the only thing
+    /// that ever re-read its encirclement (§6.4: "cannot retreat — org at 0
+    /// = surrender instead of retreat").
+    ///
+    /// Returns the org each unit ACTUALLY lost (points, post-clamp) so the
+    /// caller can book it into the sync damage channel: before this, a
+    /// pocket ground down purely by siege sent nothing to HOI4 at all.
+    pub fn apply_encirclement_attrition(
+        &self,
+        grid: &HexGrid,
+        units: &mut Vec<BattalionUnit>,
+    ) -> Vec<AttritionHit> {
         let snapshot: &[BattalionUnit] = units;
         let levels: Vec<EncirclementLevel> = snapshot
             .iter()
             .map(|u| {
-                if u.is_combat_effective() {
+                if matches!(u.state, UnitState::Active | UnitState::Retreating) {
                     detect_encirclement(grid, u, snapshot)
                 } else {
                     EncirclementLevel::None
                 }
             })
             .collect();
+        let mut hits = Vec::new();
         for (u, lvl) in units.iter_mut().zip(levels) {
             let frac = org_attrition_fraction(lvl, &self.params);
             if frac <= 0.0 {
                 continue;
             }
+            let before = u.org;
             u.org = (u.org - frac * u.max_org).max(0.0);
+            let lost = before - u.org;
+            if lost > 0.0 {
+                hits.push(AttritionHit {
+                    unit_id: u.id,
+                    side: u.side,
+                    org_lost: lost,
+                });
+            }
             if u.org <= 0.0 {
                 u.state = if lvl == EncirclementLevel::Full {
-                    UnitState::Surrendered // §6.4: org 0 while fully encircled
+                    UnitState::Surrendered // §6.4: 0 free edges
                 } else {
                     UnitState::Retreating // §6.8 involuntary retreat
                 };
             }
         }
+        hits
     }
 
     /// §6.13: in-command battalions regenerate
@@ -1379,6 +1408,17 @@ fn bfs_edge_step(
 }
 
 // ── §6.14 out-of-bounds leaving ─────────────────────────────────────────────
+
+/// One unit's end-of-turn encirclement org loss (§6.4), in POINTS — the
+/// caller books it into the sync damage channel like any combat loss, so a
+/// pocket the tactical side grinds out is visible to HOI4 (the headless
+/// frontend has no channel and discards it).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttritionHit {
+    pub unit_id: usize,
+    pub side: Side,
+    pub org_lost: f32,
+}
 
 /// One battalion that left the battle at this full-turn end by lingering
 /// out of bounds: id/side/name for the battle log; `org_frac` = the share
@@ -2711,6 +2751,66 @@ mod tests {
             res[0].org_damage_dealt,
             expect
         );
+    }
+
+    #[test]
+    fn a_broken_rout_sealed_in_a_pocket_surrenders() {
+        // §6.4 Full encirclement: "cannot retreat — org at 0 = surrender
+        // instead of retreat". A unit broken BEFORE the ring closed (or
+        // sealed into the pocket afterwards) is org 0 and therefore
+        // combat-INEFFECTIVE — the ring must still be re-read for it, or it
+        // retreats in place forever with nothing left to convert it.
+        let g = grid(10, 10);
+        let mut broken = inf(0, Side::Defender, HexCoord::new(5, 5));
+        broken.org = 0.0;
+        broken.state = UnitState::Retreating;
+        let mut units = vec![broken];
+        for (i, n) in HexCoord::new(5, 5).neighbors().into_iter().enumerate() {
+            units.push(inf(10 + i, Side::Attacker, n));
+        }
+        engine(1).apply_encirclement_attrition(&g, &mut units);
+        assert_eq!(units[0].state, UnitState::Surrendered);
+    }
+
+    #[test]
+    fn a_broken_rout_with_a_free_edge_keeps_retreating() {
+        // Counter-case: one free edge is Partial, not Full — the broken
+        // unit stays a rout (it can still slip away).
+        let g = grid(10, 10);
+        let mut broken = inf(0, Side::Defender, HexCoord::new(5, 5));
+        broken.org = 0.0;
+        broken.state = UnitState::Retreating;
+        let mut units = vec![broken];
+        for (i, n) in HexCoord::new(5, 5)
+            .neighbors()
+            .into_iter()
+            .take(5)
+            .enumerate()
+        {
+            units.push(inf(10 + i, Side::Attacker, n));
+        }
+        engine(1).apply_encirclement_attrition(&g, &mut units);
+        assert_eq!(units[0].state, UnitState::Retreating);
+    }
+
+    #[test]
+    fn attrition_reports_the_org_it_grinds_off() {
+        // The caller books these points into the sync damage channel (§6.4):
+        // before, a pocket broken purely by siege reached HOI4 with no
+        // feedback at all.
+        let g = grid(10, 10);
+        let mut pocket = inf(0, Side::Defender, HexCoord::new(5, 5));
+        pocket.org = 30.0; // max 60 → full encirclement -5% = 3.0 points
+        let mut units = vec![pocket];
+        for (i, n) in HexCoord::new(5, 5).neighbors().into_iter().enumerate() {
+            units.push(inf(10 + i, Side::Attacker, n));
+        }
+        let hits = engine(1).apply_encirclement_attrition(&g, &mut units);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].unit_id, 0);
+        assert_eq!(hits[0].side, Side::Defender);
+        assert!(close(hits[0].org_lost, 3.0), "{}", hits[0].org_lost);
+        assert!(close(units[0].org, 27.0), "{}", units[0].org);
     }
 
     #[test]

@@ -1,0 +1,15 @@
+# Version handshake popup (DESIGN §3.3): fired by d_tac_ver_prog_stale and
+# d_tac_ver_check when the external program is stale.
+
+add_namespace = tac_version
+
+country_event = {
+	id = tac_version.1
+	title = tac_version.1.t
+	desc = tac_version.1.d
+	is_triggered_only = yes
+
+	option = {
+		name = tac_version.1.o
+	}
+}

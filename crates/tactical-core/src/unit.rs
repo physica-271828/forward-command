@@ -7,6 +7,7 @@
 //! naturally.
 
 use crate::hex::HexCoord;
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
@@ -535,13 +536,34 @@ pub enum UnitState {
     LeftBattle,
 }
 
+/// One queued leg of a Shift-click waypoint chain (§6.2): the
+/// destination hex plus the preview route computed when the leg was
+/// appended. The preview drives the ribbon hint and the ETA sum ONLY —
+/// the leg is re-planned against the live board when it activates, so a
+/// stale preview never decides an actual march.
+#[derive(Debug, Clone)]
+pub struct MoveLeg {
+    pub dest: HexCoord,
+    /// Preview polyline INCLUDING its start hex (the previous waypoint /
+    /// chain end at append time) — ready to draw and to sum travel time.
+    pub preview: Vec<HexCoord>,
+}
+
 /// A standing movement order (§6.2): follow `path` (next hex first),
 /// advancing at the unit's speed at the end of each of its side's turns.
 /// `hours` is the travel time already invested into the first path hex.
+/// `queue` holds later waypoint legs of a Shift-click chain — only the
+/// player's right-click issues legs (the AI's re-affirms never queue).
+/// The chain lives INSIDE the order so every "drop the order" site
+/// (stand-by, contact, interception, Hold, emplacement, attack
+/// supersede) clears the whole chain with the existing
+/// `move_order = None`, and the manual-override lifecycle keyed on
+/// `move_order.is_some()` spans the chain automatically.
 #[derive(Debug, Clone)]
 pub struct MoveOrder {
     pub path: Vec<HexCoord>,
     pub hours: f32,
+    pub queue: VecDeque<MoveLeg>,
 }
 
 /// Per-battalion terrain adjusters (§6.6 v3.3): the battalion
@@ -791,6 +813,9 @@ pub struct BattalionUnit {
     /// not emplaced), or immediately by the player's stand-by. Attack
     /// orders are turn-scoped: they resolve in the fire phase, so a manual
     /// assault protects the unit for exactly one turn (then the AI resumes).
+    /// The settings policy "keep manual command"
+    /// ([`Self::refresh_turn_keep_manual`]) skips the command-done expiry:
+    /// only the player's stand-by releases the unit then.
     pub manual_override: bool,
 
     /// §6.14: consecutive full turns this unit has ENDED standing
@@ -945,16 +970,43 @@ impl BattalionUnit {
     /// not holding, not emplaced. A march in progress keeps it alive; the
     /// Hold stance and an emplaced gun are open-ended player commands and
     /// keep it alive until the player stands the unit by.
+    /// [`Self::refresh_turn_keep_manual`] is the same reset under the
+    /// settings policy that keeps completed commands manual.
     pub fn refresh_turn(&mut self) {
+        self.refresh_turn_impl(false);
+    }
+
+    /// Per-turn reset with the "keep manual command" settings policy:
+    /// a completed command (arrival / fire-phase resolution) does NOT
+    /// release the override — the battalion stays player-commanded until
+    /// the player stands it by. Used only by the interactive battle loop,
+    /// which reads the setting; scripted drivers (headless) keep
+    /// [`Self::refresh_turn`].
+    pub fn refresh_turn_keep_manual(&mut self) {
+        self.refresh_turn_impl(true);
+    }
+
+    fn refresh_turn_impl(&mut self, keep_manual: bool) {
         self.acted = false;
         self.fire_cooldown = (self.fire_cooldown - 1).max(0);
         if self.manual_override
+            && !keep_manual
             && self.move_order.is_none()
             && !self.is_holding
             && !self.is_emplaced
         {
             self.manual_override = false;
         }
+    }
+
+    /// Stand the battalion by (§7.4): cancel the standing march and
+    /// release it back to its division order — the player's command is
+    /// over. Unconditional: this is the release that ends a manual
+    /// override under EVERY retention policy. Stance, emplacement and the
+    /// acted flag are untouched.
+    pub fn stand_by(&mut self) {
+        self.move_order = None;
+        self.manual_override = false;
     }
 
     /// Assign a non-default chassis and re-derive attrs + road speed.
@@ -997,8 +1049,10 @@ impl BattalionUnit {
     /// mission) in the pre-order phase. Blocked while shocked (a shocked
     /// unit may still move / hold / emplace). Per-kind rules (emplacement,
     /// rocket no-assault, ranges) are checked against the concrete target.
+    /// §6.13: an HQ never initiates combat — it commands, defends and
+    /// returns counter-fire, but none of its own attack orders register.
     pub fn can_attack_order(&self) -> bool {
-        self.is_combat_effective() && !self.shocked
+        self.is_combat_effective() && !self.shocked && !self.is_hq()
     }
 
     /// True when an attachment of the given kind rides with this battalion.
@@ -1169,20 +1223,24 @@ impl BattalionUnit {
     /// deals no melee damage, and a LIMBERED towed unit deals no damage in
     /// any form (no assault, no counter — `add_counter` gates it — and fire
     /// support already requires emplacement).
+    /// §6.13: an HQ never assaults — it is a command element that only
+    /// defends (an HQ under attack still returns counter-fire there).
     pub fn can_assault(&self) -> bool {
         self.is_combat_effective()
             && !self.acted
             && !self.is_emplaced
             && !self.is_rocket()
+            && !self.is_hq()
             && !self.requires_emplacement()
     }
 
     /// May this unit provide fire support right now (§6.3): one action per
     /// turn; towed guns must be emplaced first; rocket launchers must have
-    /// finished reloading (the salvo cooldown).
+    /// finished reloading (the salvo cooldown). §6.13: never an HQ.
     pub fn can_fire_support(&self) -> bool {
         self.is_combat_effective()
             && !self.acted
+            && !self.is_hq()
             && self.fire_cooldown <= 0
             && (!self.requires_emplacement() || self.is_emplaced)
     }
@@ -1243,6 +1301,7 @@ mod tests {
         u.move_order = Some(MoveOrder {
             path: vec![HexCoord::new(1, 0)],
             hours: 0.0,
+            queue: Default::default(),
         });
         u.refresh_turn();
         assert!(u.manual_override, "standing march still in progress");
@@ -1272,6 +1331,77 @@ mod tests {
         u.is_emplaced = true;
         u.refresh_turn();
         assert!(u.manual_override, "emplacement keeps the override");
+    }
+
+    #[test]
+    fn keep_manual_policy_retains_override_after_command_done() {
+        // The settings option "keep manual command": a completed command
+        // (no standing march, no open-ended stance) must NOT release the
+        // override — refresh after refresh keeps the battalion manual.
+        let mut u = BattalionUnit::new(
+            0,
+            "1.Inf",
+            UnitType::Infantry,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        u.manual_override = true; // a march just resolved in the fire phase
+        u.refresh_turn_keep_manual();
+        assert!(u.manual_override, "completed command stays manual");
+        u.refresh_turn_keep_manual();
+        u.refresh_turn_keep_manual();
+        assert!(
+            u.manual_override,
+            "still manual after repeated rollovers — only stand-by releases"
+        );
+
+        // The action-flag reset still happens under the policy.
+        u.acted = true;
+        u.refresh_turn_keep_manual();
+        assert!(!u.acted, "acted flag resets as usual");
+    }
+
+    #[test]
+    fn stand_by_releases_manual_battalion_under_every_policy() {
+        // The release side of the keep-manual option: right-clicking the
+        // unit (stand by) must return it to the division AI no matter how
+        // long the override was retained.
+        let mut u = BattalionUnit::new(
+            0,
+            "1.Inf",
+            UnitType::Infantry,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        u.manual_override = true;
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(1, 0)],
+            hours: 0.0,
+            queue: Default::default(),
+        });
+        // Marching under the keep policy: refresh keeps the override…
+        u.refresh_turn_keep_manual();
+        assert!(u.manual_override, "march in progress stays manual");
+        // …and stand-by cancels the march and releases the unit.
+        u.stand_by();
+        assert!(!u.manual_override, "stand-by releases the override");
+        assert!(
+            u.move_order.is_none(),
+            "stand-by cancels the standing march"
+        );
+
+        // The release works for an idle manual battalion too (arrived /
+        // attack already resolved — the state keep mode retains it in).
+        let mut u = BattalionUnit::new(
+            0,
+            "2.Inf",
+            UnitType::Infantry,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        u.manual_override = true;
+        u.stand_by();
+        assert!(!u.manual_override, "idle manual battalion stands by");
     }
 
     #[test]

@@ -193,6 +193,20 @@ pub fn with_generator<R>(settings: &AppSettings, f: impl FnOnce(&MapGenerator) -
     Some(f(gen))
 }
 
+/// Mutable variant for callers that attach battle-specific inputs (live
+/// rail levels) before generating. The generator is SHARED across battles,
+/// so every such attachment must be reverted inside the closure — later
+/// scripted battles rely on the defaults.
+pub fn with_generator_mut<R>(
+    settings: &AppSettings,
+    f: impl FnOnce(&mut MapGenerator) -> R,
+) -> Option<R> {
+    let cell = map_generator(settings)?;
+    let mut guard = cell.lock().ok()?;
+    let (_, gen) = guard.as_mut().unwrap();
+    Some(f(gen))
+}
+
 fn build_generator(hoi4_dir: &Path, simp_chinese: bool) -> Option<MapGenerator> {
     let map_dir = hoi4_dir.join("map");
     let pm = tactical_map::ProvinceMap::load_bmp(&map_dir.join("provinces.bmp")).ok()?;
@@ -203,9 +217,23 @@ fn build_generator(hoi4_dir: &Path, simp_chinese: bool) -> Option<MapGenerator> 
     if let Ok(rivers) = tactical_map::IndexMap::load_indexed_bmp(&map_dir.join("rivers.bmp")) {
         gen.set_rivers(rivers);
     }
-    let vps = tactical_map::load_victory_points(&tactical_map::states_dir_of(hoi4_dir))
-        .unwrap_or_default();
+    let states_dir = tactical_map::states_dir_of(hoi4_dir);
+    let vps = tactical_map::load_victory_points(&states_dir).unwrap_or_default();
     gen.set_victory_points(vps);
+    // State data drives the village density + factory districts; the
+    // static rail network paints the rail overlay. Live per-province
+    // rail levels come from the save and are attached per battle at the
+    // live assembly site — the cached generator stays on the no-live-info
+    // default here (scripted/demo battles paint every static line).
+    gen.set_province_to_state(
+        tactical_map::load_province_to_state(&states_dir).unwrap_or_default(),
+    );
+    gen.set_state_categories(tactical_map::load_state_categories(&states_dir).unwrap_or_default());
+    gen.set_state_industry(tactical_map::load_state_industry(&states_dir).unwrap_or_default());
+    gen.set_state_infrastructure(tactical_map::load_state_infrastructure(&states_dir).unwrap_or_default());
+    gen.set_railways(
+        tactical_map::load_railways(&map_dir.join("railways.txt")).unwrap_or_default(),
+    );
     gen.set_unit_stacks(tactical_map::load_unit_stacks(
         &map_dir.join("unitstacks.txt"),
     ));
@@ -1117,9 +1145,10 @@ pub fn deploy_force(
 /// the enemy tactic card; the mod's placeholders only fill in when NO
 /// land_combat involves the player (then the enemy is the other country
 /// with the most divisions in the province, allies excluded). Divisions of
-/// ALLIED countries fighting on the player's side assemble under the
-/// player's direct command with their own country's national modifiers —
-/// live battles run whole-side single-planner (no allied-AI split).
+/// ALLIED countries fighting on the player's side assemble under their own
+/// country's AI — one contingent per owner tag (§7.5), the live counterpart
+/// of a script battle's `control: ai` blocks — with their own country's
+/// national modifiers; the player keeps command of her own divisions.
 /// Heavy: map generation + save parse.
 pub fn assemble_live(
     settings: &AppSettings,
@@ -1252,11 +1281,19 @@ pub fn assemble_live(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-    let tmap = with_generator(settings, |gen| {
+    let tmap = with_generator_mut(settings, |gen| {
         // The live battle's own seed also drives the elevation
         // noise — every live battle gets fresh relief (dice-seed parity).
-        gen.generate_from_sources(province, &source_provinces, &dirs, live_seed)
-            .ok()
+        // Live rail levels gate the railway overlay for THIS battle only:
+        // the cached generator is shared with scripted battles, so the
+        // attachment is reverted to the no-live-info default before the
+        // lock is released.
+        gen.set_rail_levels(Some(save_game.rail_levels.clone()));
+        let generated = gen
+            .generate_from_sources(province, &source_provinces, &dirs, live_seed)
+            .ok();
+        gen.set_rail_levels(None);
+        generated
     })
     .flatten()
     .ok_or_else(|| "map generation failed (HOI4 dir in Settings?)".to_string())?;
@@ -1283,9 +1320,9 @@ pub fn assemble_live(
     // Fallback (no land_combat): province-location selection.
     // Every division carries its OWNING tag (roster membership
     // is per country) — a battle line can span several tags. ALLIED
-    // divisions (co-belligerents on the player's side) assemble under the
-    // player's direct command like her own: live battles run whole-side
-    // single-planner, no allied-AI split.
+    // divisions (co-belligerents on the player's side) assemble under
+    // their own country's AI (§7.5, one contingent per owner tag — split
+    // below, once the division names are final).
     let mut player_divs: Vec<(String, &tactical_save::DivisionData)>;
     let mut enemy_divs: Vec<(String, &tactical_save::DivisionData)> = Vec::new();
     let mut enemy_tag = String::new();
@@ -1441,6 +1478,10 @@ pub fn assemble_live(
     } else {
         Side::Defender
     };
+    // §7.5: the allied split of the player's side — resolved after the name
+    // resolution above so every contingent lists the very division keys its
+    // battalions carry.
+    let allies = allied_contingents(&player_divs, tag, player_side);
     let mut units = Vec::new();
     let mut next_id = 0usize;
     // The player side's country org modifier, once per battle;
@@ -1635,10 +1676,13 @@ pub fn assemble_live(
         // Vary the dice per live battle while staying deterministic
         // for a given (province, launch-second) pair.
         seed: Some(live_seed),
-        // Live battles carry no script divisions block — the player
-        // commands her whole side, allied contingents included.
+        // Live battles carry no script divisions block — the
+        // division→tag table stays empty (every unit carries its own `tag`,
+        // and the allied split reads the contingents below).
         division_tags: std::collections::HashMap::new(),
-        allies: Vec::new(),
+        // §7.5: one contingent per allied country on the player's side
+        // (empty = the player commands her whole side).
+        allies,
         battle_ctx,
         writeback_mode: settings.writeback_mode(),
         // The battle clock starts from the save's in-game time.
@@ -1674,6 +1718,39 @@ fn side_divisions<'a>(
     allied.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
     own.extend(allied);
     own
+}
+
+/// The player side's allied contingents (§7.5) — the live counterpart of
+/// `script::allied_contingents`: every division whose owner tag differs from
+/// the player's, grouped by owner tag in first-appearance order (the
+/// `side_divisions` order: the player's own first, then the allies by owner
+/// tag + division id). The live path has no script block to read a
+/// per-division tactic token from, so a contingent takes the side default —
+/// Assault when the player attacks, ElasticDefense when she defends.
+fn allied_contingents(
+    divisions: &[(String, tactical_save::DivisionData)],
+    player_tag: &str,
+    player_side: Side,
+) -> Vec<tactical3d_render::game::AllyContingent> {
+    let default_tactic = match player_side {
+        Side::Attacker => CombatTactic::Assault,
+        Side::Defender => CombatTactic::ElasticDefense,
+    };
+    let mut out: Vec<tactical3d_render::game::AllyContingent> = Vec::new();
+    for (tag, d) in divisions {
+        if tag == player_tag {
+            continue;
+        }
+        match out.iter_mut().find(|a| a.tag == *tag) {
+            Some(contingent) => contingent.divisions.push(d.name.clone()),
+            None => out.push(tactical3d_render::game::AllyContingent {
+                tag: tag.clone(),
+                tactic: default_tactic,
+                divisions: vec![d.name.clone()],
+            }),
+        }
+    }
+    out
 }
 
 /// Upgrade the parser's synthesized division names to the real in-game ones
@@ -2994,9 +3071,10 @@ mod tests {
 
     // ── Live assembly: allied divisions join the player's side ──────────
 
-    fn coalition_save() -> tactical_save::SaveGame {
-        use tactical_save::{CountryData, DivisionData, LandCombatData, LandCombatSideData};
-        let div = |id: u64, location: u32| DivisionData {
+    /// One minimal coalition division — shared by the live-assembly
+    /// fixtures below (`Div-<id>`, one template, no equipment).
+    fn coalition_div(id: u64, location: u32) -> tactical_save::DivisionData {
+        tactical_save::DivisionData {
             id,
             name: format!("Div-{id}"),
             template_name: "T".to_string(),
@@ -3012,7 +3090,12 @@ mod tests {
             equipment_ids: Vec::new(),
             battalions: Vec::new(),
             support_companies: Vec::new(),
-        };
+        }
+    }
+
+    fn coalition_save() -> tactical_save::SaveGame {
+        use tactical_save::{CountryData, LandCombatData, LandCombatSideData};
+        let div = coalition_div;
         let country = |tag: &str, divisions| CountryData {
             tag: tag.to_string(),
             divisions,
@@ -3098,6 +3181,75 @@ mod tests {
         let (allies, enemies) = war_partners(&save, "GER");
         assert!(allies.is_empty());
         assert!(enemies.contains("ENG") && enemies.contains("FRA"));
+    }
+
+    /// The live allied split: one contingent per OWNER TAG, in
+    /// first-appearance order (the `side_divisions` order), the player's own
+    /// divisions excluded and the side default tactic on every contingent.
+    #[test]
+    fn allied_contingents_group_live_divisions_by_owner_tag() {
+        let save = coalition_save();
+        let ids: std::collections::HashSet<u64> = [1, 2, 20].into_iter().collect();
+        let mut divisions: Vec<(String, tactical_save::DivisionData)> =
+            side_divisions(&save, "ENG", &ids)
+                .into_iter()
+                .map(|(tag, d)| (tag, d.clone()))
+                .collect();
+        // A battle line can span several allied tags; BEL joins between the
+        // player's own divisions and FRA (first appearance, not sorted).
+        divisions.insert(2, ("BEL".to_string(), coalition_div(50, 13237)));
+        let contingents = allied_contingents(&divisions, "ENG", Side::Defender);
+        assert_eq!(contingents.len(), 2, "one contingent per allied tag");
+        assert_eq!(contingents[0].tag, "BEL");
+        assert_eq!(contingents[0].divisions, vec!["Div-50".to_string()]);
+        assert_eq!(contingents[1].tag, "FRA");
+        assert_eq!(contingents[1].divisions, vec!["Div-20".to_string()]);
+        // The defending player's allies take the defensive default — the
+        // attacking player's take the offensive one (the script-path rule).
+        assert!(matches!(
+            contingents[0].tactic,
+            CombatTactic::ElasticDefense
+        ));
+        let attacking = allied_contingents(&divisions, "ENG", Side::Attacker);
+        assert!(matches!(attacking[0].tactic, CombatTactic::Assault));
+        // The player's OWN divisions never enter a contingent.
+        for c in &contingents {
+            assert!(c.divisions.iter().all(|d| d != "Div-1" && d != "Div-2"));
+        }
+        // A single-country side (the common live case): no split at all.
+        let own: Vec<(String, tactical_save::DivisionData)> = divisions
+            .iter()
+            .filter(|(tag, _)| tag == "ENG")
+            .cloned()
+            .collect();
+        assert!(allied_contingents(&own, "ENG", Side::Defender).is_empty());
+    }
+
+    /// Same-name divisions across the live owners: the contingent keying
+    /// carries the owner tag, so a player division that happens to share an
+    /// ally's division NAME is still the player's (the display lookup stays
+    /// name-only).
+    #[test]
+    fn allied_contingents_keep_same_name_divisions_apart_by_tag() {
+        let mut own = coalition_div(1, 13237);
+        own.name = "Infanterie-Division".to_string();
+        let mut allied = coalition_div(2, 13237);
+        allied.name = "Infanterie-Division".to_string();
+        let divisions = vec![
+            ("ENG".to_string(), own),
+            ("FRA".to_string(), allied),
+        ];
+        let contingents = allied_contingents(&divisions, "ENG", Side::Defender);
+        assert_eq!(contingents.len(), 1);
+        assert_eq!(contingents[0].tag, "FRA");
+        assert_eq!(
+            contingents[0].divisions,
+            vec!["Infanterie-Division".to_string()]
+        );
+        // The player's identically named division is NOT in any contingent.
+        assert!(contingents
+            .iter()
+            .all(|c| c.tag == "FRA" && c.divisions.len() == 1));
     }
 
     /// §5.2 division names: token pairs resolve through the names-groups;

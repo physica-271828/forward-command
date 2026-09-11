@@ -69,7 +69,11 @@ forward_command_decisions = {
 			# present). BARE JSON only: a literal `[...]` wrapper is
 			# consumed by HOI4's localization interpolation, which would
 			# swallow the whole line.
-			log = "{\"type\":\"tac_start\",\"province\":0,\"leader_id\":0,\"is_player_attacker\":true}"
+			# ver advertises this mod's version for the version handshake
+			# (DESIGN §3.3): the program compares it with its own and tells
+			# the player which half of the package to update. Keep it in
+			# step with the packaged program version.
+			log = "{\"type\":\"tac_start\",\"province\":0,\"leader_id\":0,\"is_player_attacker\":true,\"ver\":\"0.3.2\"}"
 
 			# Enemy tactic card (DESIGN §3.1): v1 ships the fixed default
 			# card; the real HOI4 combat-tactic mapping (16 cards, §7.2)

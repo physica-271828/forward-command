@@ -84,6 +84,11 @@ pub fn update_hover(
     if mouse.pressed(MouseButton::Middle) || mouse.pressed(MouseButton::Right) {
         return;
     }
+    // An active box-select drag owns the cursor — the hover highlight
+    // sliding under the rectangle is pure churn.
+    if state.box_select.is_some_and(|b| b.active) {
+        return;
+    }
     // Keyboard camera motion does the same: WASD /
     // arrows pan, Q/E orbit and R/F pitch (the camera.rs bindings) slide the
     // world under a stationary cursor. Freeze the hover while any of them is

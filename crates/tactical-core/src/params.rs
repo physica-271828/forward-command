@@ -101,6 +101,30 @@ pub struct CombatParams {
     /// clears the ridge on a high arc; only the target's own step decides.
     pub defilade_mult: f32, // 0.5
 
+    /// Effective kilometres added when a step CROSSES a river edge (the
+    /// §6.6 river row "+2") — uniform for every river, wide or narrow
+    /// (width is geometric, §4.2 bands never re-scale this row).
+    pub river_edge_surcharge_km: f32, // 2.0
+
+    /// Effective kilometres ADDED to the terrain cost when stepping into a
+    /// hex served by neither road nor rail (§4.2 road network) — legs pay
+    /// it flat, motor pays it amplified through the excess multiplier:
+    /// motor = 1 + (base + surcharge − 1) × MOTOR_TERRAIN_MULT.
+    pub off_road_surcharge_km: f32, // 0.5
+
+    /// §6.6 road network: effective kilometres to ENTER a surfaced hex (road
+    /// or rail, non-river) on flat ground. Pavement flattens the terrain
+    /// type — plains, forest, jungle, desert, marsh and village roads all
+    /// pay this one price, for every mobility class (the motor excess is
+    /// waived, so vehicles belong on roads).
+    pub road_base_km: f32, // 1.0
+
+    /// Extra effective km per POSITIVE elevation level of the entered
+    /// surfaced hex — relief is the only road surcharge left (hill roads
+    /// 1.3/1.6, mountain roads 1.9/2.2 at the 0.3 default). Hexes at or
+    /// below sea level (marsh, riverbed) clamp to [`Self::road_base_km`].
+    pub road_elev_step_km: f32, // 0.3
+
     // §8.1
     pub turns_per_strategic_hour: u32, // 6
 
@@ -199,6 +223,10 @@ impl Default for CombatParams {
             melee_elevation_cap: 0.45,
             exposed_crest_mult: 1.5,
             defilade_mult: 0.5,
+            river_edge_surcharge_km: 2.0,
+            off_road_surcharge_km: 0.5,
+            road_base_km: 1.0,
+            road_elev_step_km: 0.3,
             turns_per_strategic_hour: 6,
             fog_reveal_duration_turns: 3,
             hq_aura_radius: 3,
@@ -268,5 +296,8 @@ mod tests {
         assert_eq!(p.melee_elevation_gain, 0.15);
         assert_eq!(p.exposed_crest_mult, 1.5);
         assert_eq!(p.defilade_mult, 0.5);
+        assert_eq!(p.off_road_surcharge_km, 0.5);
+        assert_eq!(p.road_base_km, 1.0);
+        assert_eq!(p.road_elev_step_km, 0.3);
     }
 }

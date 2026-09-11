@@ -82,6 +82,9 @@ enum Page {
     Settings,
     About,
     DebugForm,
+    /// First launch only: a standalone language picker shown BEFORE the
+    /// settings page — the very first screen a fresh install sees.
+    FirstRunLanguage,
 }
 
 #[derive(Resource)]
@@ -90,9 +93,9 @@ struct MenuState {
     settings: AppSettings,
     status: String,
     live_listen: bool,
-    /// First launch (no settings.json at startup): land on the
-    /// Settings page so the player confirms the auto-detected HOI4 paths;
-    /// cleared on the first successful save.
+    /// First launch (no settings.json at startup): the language picker
+    /// opens first, then the Settings page so the player confirms the
+    /// auto-detected HOI4 paths; cleared on the first successful save.
     first_run: bool,
     /// Exit Game clicked and the confirm modal is up (minimize to
     /// tray / quit / cancel).
@@ -103,6 +106,11 @@ struct MenuState {
     /// Diagnostic-export checkbox: bundle the newest .hoi4 save
     /// too. Default on — live/injection bug reports need it.
     diag_include_save: bool,
+    /// Pending interface-language choice of the first-launch picker page
+    /// (PAGE-PERSISTENT — a frame-local copy made the ComboBox snap back
+    /// to the OS default every frame). Initialised once from the
+    /// detected language; the confirm button commits it.
+    lang_pick: Language,
     /// About-page disclaimer window is open.
     show_disclaimer: bool,
     /// CenterAnchor state for the centered menu surfaces (jitter fix —
@@ -116,6 +124,7 @@ struct MenuState {
 #[derive(Default)]
 struct MenuAnchors {
     main: CenterAnchor,
+    lang_pick: CenterAnchor,
     settings_page: CenterAnchor,
     about: CenterAnchor,
     debug_form: CenterAnchor,
@@ -465,12 +474,14 @@ fn menu_app(settings: &mut AppSettings) {
     app.insert_resource(tactical3d_render::fx::VpLabel(vp_label));
     app.insert_resource(BackdropInfo(backdrop_info));
     app.insert_resource(state);
-    // A fresh install (no settings.json yet) lands on the
-    // Settings page so the player confirms the auto-detected HOI4 paths.
+    // A fresh install (no settings.json yet) opens on the dedicated
+    // LANGUAGE PICKER first (interface language = the very first
+    // choice); confirming it lands on the Settings page so the player
+    // confirms the auto-detected HOI4 paths.
     let first_run = !crate::settings::settings_file_exists();
     app.insert_resource(MenuState {
         page: if first_run {
-            Page::Settings
+            Page::FirstRunLanguage
         } else {
             Page::Main
         },
@@ -482,6 +493,7 @@ fn menu_app(settings: &mut AppSettings) {
         quality_dirty: false,
         diag_include_save: true,
         show_disclaimer: false,
+        lang_pick: settings.language(),
         anchors: MenuAnchors::default(),
     });
     app.insert_resource(BattleChildren::default());
@@ -1295,6 +1307,9 @@ struct PendingStart {
     attack_dirs: Vec<String>,
     enemy_tactic: String,
     is_player_attacker: bool,
+    /// The mod version the trigger advertised (§3.3), forwarded to the
+    /// battle child for the handshake.
+    mod_ver: Option<String>,
 }
 
 /// The pick worker's bundle: the resolution plus picker cosmetics (VP
@@ -1327,6 +1342,8 @@ struct PickDialog {
     attack_dirs: Vec<String>,
     enemy_tactic: String,
     is_player_attacker: bool,
+    /// Mod version from the trigger (§3.3), forwarded to the battle child.
+    mod_ver: Option<String>,
 }
 
 impl LiveListen {
@@ -1474,6 +1491,7 @@ fn live_listen_tick(
                         attack_dirs: ps.attack_dirs.clone(),
                         enemy_tactic: ps.enemy_tactic.clone(),
                         is_player_attacker: ps.is_player_attacker,
+                        mod_ver: ps.mod_ver.clone(),
                     });
                     children.pending_show = true;
                     None
@@ -1490,6 +1508,7 @@ fn live_listen_tick(
                 &ps.attack_dirs,
                 &ps.enemy_tactic,
                 ps.is_player_attacker,
+                ps.mod_ver.as_deref(),
             ) {
                 listen.set_status(e, true);
             }
@@ -1521,6 +1540,7 @@ fn live_listen_tick(
                 tag,
                 attack_dirs,
                 is_player_attacker,
+                ver,
                 ts,
                 ..
             } => {
@@ -1531,6 +1551,19 @@ fn live_listen_tick(
                     ),
                     false,
                 );
+                // Version handshake (§3.3): a program older than the loaded
+                // mod (or a mod below this program's floor) must be visible
+                // here too — the battle window carries the same warning.
+                let verdict =
+                    crate::version::verdict(env!("CARGO_PKG_VERSION"), ver.as_deref());
+                if let Some(text) = crate::version::notice_text(
+                    &loc,
+                    &verdict,
+                    env!("CARGO_PKG_VERSION"),
+                    ver.as_deref(),
+                ) {
+                    listen.set_status(text, true);
+                }
                 if children.alive()
                     || listen.pick_dialog.is_some()
                     || listen.pending_start.is_some()
@@ -1646,6 +1679,7 @@ fn live_listen_tick(
                     attack_dirs: attack_dirs.clone(),
                     enemy_tactic,
                     is_player_attacker: *is_player_attacker,
+                    mod_ver: ver.clone(),
                 });
                 listen.set_status(loc.tr("menu.listen.resolving_pick").into_owned(), false);
             }
@@ -1684,6 +1718,7 @@ fn spawn_live_child(
     attack_dirs: &[String],
     enemy_tactic: &str,
     is_player_attacker: bool,
+    mod_ver: Option<&str>,
 ) -> Result<(), String> {
     let mut args = vec![
         "--livebattle".to_string(),
@@ -1693,6 +1728,12 @@ fn spawn_live_child(
         format!("tactic={enemy_tactic}"),
         format!("player_atk={}", if is_player_attacker { 1 } else { 0 }),
     ];
+    // The mod's advertised version (§3.3) — only when the trigger carried
+    // one: an empty/-absent modver must reach the child as "unknown", which
+    // then injects no verdict at all.
+    if let Some(v) = mod_ver.filter(|v| !v.is_empty()) {
+        args.push(format!("modver={v}"));
+    }
     if menu.settings.hoi4_dir().is_none() {
         return Err(loc.tr("menu.listen.bad_hoi4_dir").into_owned());
     }
@@ -1765,6 +1806,7 @@ fn draw_menu(
             &loc,
             &mut exit,
         ),
+        Page::FirstRunLanguage => draw_first_run_language(ctx, &mut menu, &mut loc),
         Page::Settings => draw_settings(ctx, &mut menu, &icons, &mut loc),
         Page::About => draw_about(ctx, &mut menu, &icons, &mut loc),
         Page::DebugForm => draw_debug_form(ctx, &mut menu, &mut children, &mut form, &icons, &loc),
@@ -2083,6 +2125,7 @@ fn draw_pick_dialog(
             &dialog.attack_dirs,
             &dialog.enemy_tactic,
             dialog.is_player_attacker,
+            dialog.mod_ver.as_deref(),
         ) {
             listen.set_status(e, true);
         }
@@ -2299,6 +2342,75 @@ fn draw_main(
         .update(resp.as_ref().map(|r| r.response.rect), ctx.pixels_per_point());
 }
 
+/// The standalone FIRST-LAUNCH language picker — the very first screen a
+/// fresh install sees (no settings.json). The title is the built-in word
+/// "Language" (deliberately not localized: it IS the subject being
+/// chosen); the dropdown offers 中文 / English, pre-selected from the
+/// OS-language detection, and the confirm button writes the choice,
+/// rebuilds the locale and moves on to the Settings page, where the rest
+/// of the first-run flow (path confirmation) continues as usual.
+fn draw_first_run_language(ctx: &egui::Context, menu: &mut MenuState, loc: &mut LocaleRes) {
+    let win = egui::Window::new("first_run_lang")
+        .title_bar(false)
+        .collapsible(false)
+        .resizable(false)
+        .frame(frosted());
+    menu.anchors
+        .lang_pick
+        .window(ctx, win, egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.set_min_width(260.0);
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new("Language")
+                        .size(24.0)
+                        .color(GOLD)
+                        .strong(),
+                );
+            });
+            ui.add_space(14.0);
+            // The dropdown carries the OS-detected default; the choice
+            // commits on confirm (no live switching on this page — its
+            // own labels must stay readable while deciding).
+            // The combo binds the PAGE-PERSISTENT choice (see
+            // MenuState.lang_pick): the dropdown must survive re-renders,
+            // otherwise picking English snaps back to the OS default next
+            // frame. The OS-detected default was captured once at startup.
+            let name_of = |l: Language| match l {
+                Language::SimpChinese => "中文",
+                Language::English => "English",
+            };
+            ui.vertical_centered(|ui| {
+                egui::ComboBox::from_id_salt("first_run_lang")
+                    .selected_text(name_of(menu.lang_pick))
+                    .width(190.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut menu.lang_pick, Language::SimpChinese, "中文");
+                        ui.selectable_value(&mut menu.lang_pick, Language::English, "English");
+                    });
+                ui.add_space(18.0);
+                let ok = ui.add(
+                    egui::Button::new(
+                        egui::RichText::new(loc.tr("menu.lang_pick.confirm").as_ref()).size(15.0),
+                    )
+                    .min_size(egui::vec2(150.0, 34.0)),
+                );
+                if ok.clicked() {
+                    let chosen = menu.lang_pick;
+                    *loc = LocaleRes(Locale::load(chosen));
+                    menu.status = match menu.settings.commit_language(chosen) {
+                        Ok(()) => loc.tr("menu.settings.saved").into_owned(),
+                        Err(e) => loc.trf("menu.settings.save_failed", &[("error", &e)]),
+                    };
+                    // The first-run flow continues on the Settings page
+                    // (paths to confirm); first_run stays true so the
+                    // page still shows its notice until a real save.
+                    menu.page = Page::Settings;
+                }
+            });
+        });
+}
+
 fn draw_settings(ctx: &egui::Context, menu: &mut MenuState, icons: &IconSet, loc: &mut LocaleRes) {
     let win = egui::Window::new("menu_settings")
         .title_bar(false)
@@ -2323,6 +2435,8 @@ fn draw_settings(ctx: &egui::Context, menu: &mut MenuState, icons: &IconSet, loc
             });
             ui.add_space(10.0);
             if menu.first_run {
+                // First launch (the language picker ran just before this
+                // page): the paths below still need a look-over.
                 ui.vertical_centered(|ui| {
                     ui.label(
                         egui::RichText::new(loc.tr("menu.settings.first_run").into_owned())
@@ -2371,7 +2485,9 @@ fn draw_settings(ctx: &egui::Context, menu: &mut MenuState, icons: &IconSet, loc
             // Language selector (DESIGN §15): radio between the shipping
             // languages. Applies instantly — the LocaleRes swap re-renders
             // the whole menu in the new language next frame — and persists
-            // immediately, with the same feedback as the Save button.
+            // immediately, with the same feedback as the Save button. On
+            // a first launch the language was already chosen on the
+            // dedicated picker page before this page ever opened.
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(loc.tr("menu.settings.language").into_owned())
@@ -2592,6 +2708,47 @@ fn draw_settings(ctx: &egui::Context, menu: &mut MenuState, icons: &IconSet, loc
                 };
             }
             ui.add_space(8.0);
+            // Manual-command hand-back (§7.4): what happens to a manually
+            // commanded battalion once its order completes (arrival /
+            // attack resolution). Default: back to the division order;
+            // alternative: the battalion stays manual until stood by
+            // (right-click the unit). Battle children read settings.json
+            // at startup, so the choice applies to every later battle;
+            // the same rule can be flipped mid-battle (End Turn area).
+            // Full semantics live in the tooltip — the row stays compact.
+            let mut manual_changed = false;
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(loc.tr("menu.settings.manual_cmd").into_owned())
+                        .size(13.0)
+                        .color(PARCHMENT),
+                )
+                .on_hover_text(loc.tr("menu.tooltip.manual_cmd").into_owned());
+                for (val, key) in [
+                    (false, "menu.settings.manual_cmd.auto"),
+                    (true, "menu.settings.manual_cmd.keep"),
+                ] {
+                    let selected = menu.settings.keep_manual_override == val;
+                    if ui
+                        .selectable_label(selected, loc.tr(key).into_owned())
+                        .clicked()
+                        && !selected
+                    {
+                        menu.settings.keep_manual_override = val;
+                        manual_changed = true;
+                    }
+                }
+            });
+            if manual_changed {
+                menu.status = match menu.settings.save() {
+                    Ok(()) => {
+                        menu.first_run = false;
+                        loc.tr("menu.settings.saved").into_owned()
+                    }
+                    Err(e) => loc.trf("menu.settings.save_failed", &[("error", &e)]),
+                };
+            }
+            ui.add_space(8.0);
             // HOI4 save format (§14): tactical save parsing needs text
             // saves. Live probe of HOI4's own settings.txt + one-click fixer.
             match detect_hoi4_settings_txt(&menu.settings.saves_dir) {
@@ -2781,7 +2938,7 @@ fn draw_about(ctx: &egui::Context, menu: &mut MenuState, icons: &IconSet, loc: &
                 );
             });
             ui.add_space(12.0);
-            // Disclaimer entry — the packaged 免责声明.md lives in docs/,
+            // Disclaimer entry — the packaged 免责声明 - Disclaimer.md lives in docs/,
             // but a player in the game should not have to hunt for it.
             ui.vertical_centered(|ui| {
                 if ui
@@ -2815,7 +2972,7 @@ fn draw_about(ctx: &egui::Context, menu: &mut MenuState, icons: &IconSet, loc: &
 }
 
 /// Disclaimer terms from the About page. Same substance as the packaged
-/// docs/免责声明.md, wording kept plain for the in-game spot and
+/// docs/免责声明 - Disclaimer.md, wording kept plain for the in-game spot and
 /// localized with the selected language. Scrollable: the EN text is long
 /// in narrow fonts.
 fn draw_disclaimer(ctx: &egui::Context, menu: &mut MenuState, loc: &LocaleRes) {

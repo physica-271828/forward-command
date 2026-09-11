@@ -425,10 +425,10 @@ pub fn linear_factors_explained(
     params: &CombatParams,
     bd: &mut HitBreakdown,
 ) -> f32 {
-    let def_terrain = grid
+    let (def_terrain, def_cover) = grid
         .cell(target.position)
-        .map(|c| c.terrain)
-        .unwrap_or(Terrain::Plains);
+        .map(|c| (c.terrain, c.cover_percent()))
+        .unwrap_or((Terrain::Plains, 0.0));
     let mut m = 1.0;
     // §6.13: command aura stays linear so the bonus really is
     // ±10% (a factor inside P would warp the hit step).
@@ -484,7 +484,7 @@ pub fn linear_factors_explained(
         }
         m *= v;
     }
-    let v = 1.0 - def_terrain.cover_percent();
+    let v = 1.0 - def_cover;
     bd.push_linear(LinearFactor::Cover, v);
     m *= v;
     bd.linear_total = m;
@@ -605,10 +605,10 @@ pub fn strike_group_org_estimate(
     grid: &HexGrid,
     params: &CombatParams,
 ) -> f32 {
-    let def_terrain = grid
+    let (def_terrain, def_cover) = grid
         .cell(target.position)
-        .map(|c| c.terrain)
-        .unwrap_or(Terrain::Plains);
+        .map(|c| (c.terrain, c.cover_percent()))
+        .unwrap_or((Terrain::Plains, 0.0));
     let mut sum_qg = 0.0;
     let mut sum_g = 0.0;
     let mut melee_weighted = 0.0;
@@ -637,7 +637,7 @@ pub fn strike_group_org_estimate(
     let p = sum_qg * sum_g;
     let defense = defense_value(target, false, def_terrain, params);
     let linear =
-        (melee_weighted / sum_qg) * (adj_weighted / sum_qg) * (1.0 - def_terrain.cover_percent());
+        (melee_weighted / sum_qg) * (adj_weighted / sum_qg) * (1.0 - def_cover);
     resolve_org(p, defense, linear, params)
 }
 

@@ -26,6 +26,33 @@ pub enum Terrain {
     Village,
 }
 
+/// River width band — the PHYSICAL width of the generated water band in
+/// hexes (§4.2 rivers.bmp encoding). The vanilla palette split (3-4 small,
+/// 6-7 medium, 9-11 large; green/red/yellow source markers ignored) maps
+/// to a 1 / 2 / 3-hex-wide water strip: a wide river is a wider stretch of
+/// the SAME ford rules, so the crossing difficulty difference is purely
+/// geometric (every river hex keeps the uniform §6.6 row — no per-band
+/// numbers). Tactical maps keep one band per cell (the widest band that
+/// painted it); Small is the default everywhere, so band-less data (old
+/// scripts, plain grids) reads as the legacy 1-hex river.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RiverBand {
+    Small,
+    Medium,
+    Large,
+}
+
+impl RiverBand {
+    /// Width of the water band in hexes: 1 / 2 / 3.
+    pub fn width_hexes(self) -> i32 {
+        match self {
+            RiverBand::Small => 1,
+            RiverBand::Medium => 2,
+            RiverBand::Large => 3,
+        }
+    }
+}
+
 impl Terrain {
     pub const ALL: [Terrain; 12] = [
         Terrain::Plains,
@@ -43,9 +70,12 @@ impl Terrain {
     ];
 
     /// Effective kilometres to move one hex for **leg** units (§6.2/§6.6):
-    /// 1 hex = 1 km baseline, rougher terrain counts extra. River hexes are
-    /// fordable at 3× (revised ford rule: crossable and may be held, but
-    /// slow enough that pathfinding strongly prefers dry routes).
+    /// 1 hex = 1 km baseline, rougher terrain counts extra. This is the
+    /// terrain's OWN price — the off-road row and the map generator's road
+    /// routing cost; a surfaced hex pays the relief-based road price instead
+    /// (pathfinding `road_move_km`). River hexes are fordable at 3× (revised
+    /// ford rule: crossable and may be held, but slow enough that pathfinding
+    /// strongly prefers dry routes).
     pub fn movement_cost(self) -> f32 {
         match self {
             Terrain::Plains => 1.0,
@@ -338,6 +368,31 @@ mod tests {
         // River row: 3× ford, exposed (negative cover carries the old
         // ×2 ford vulnerability).
         assert_eq!(Terrain::River.movement_cost(), 3.0);
+    }
+
+    #[test]
+    fn river_bands_are_pure_width() {
+        // The three bands are PHYSICAL widths — 1/2/3 hexes — and nothing
+        // else: every river hex shares the uniform §6.6 row regardless of
+        // band (width is geometry, not numbers).
+        assert_eq!(RiverBand::Small.width_hexes(), 1);
+        assert_eq!(RiverBand::Medium.width_hexes(), 2);
+        assert_eq!(RiverBand::Large.width_hexes(), 3);
+        let mut small = crate::grid::GridCell::new(Terrain::River);
+        assert_eq!(small.river_band, RiverBand::Small, "band defaults Small");
+        assert_eq!(small.terrain.movement_cost(), 3.0);
+        assert_eq!(small.terrain.cover_percent(), -0.50);
+        small.river_band = RiverBand::Large;
+        // Band never touches the rule rows — same ford either way.
+        assert_eq!(small.terrain.movement_cost(), 3.0);
+        assert_eq!(small.terrain.cover_percent(), -0.50);
+        // River hexes still use the standard per-cell terrain query.
+        assert_eq!(
+            crate::grid::GridCell::new(Terrain::River)
+                .terrain
+                .movement_cost_for(crate::unit::MobilityClass::Leg),
+            3.0
+        );
     }
 
     #[test]

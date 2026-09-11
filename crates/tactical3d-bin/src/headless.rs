@@ -59,11 +59,13 @@ pub struct Opts {
 /// split into the player proxy + one driver per allied contingent — each
 /// plans its own slice against the player's fog with the REST of the side
 /// as passive friendlies (the interactive `plan_allied_nations` in
-/// miniature).
+/// miniature). A slice is a set of (owner tag, division name) pairs — the
+/// command identity, so a same-name division under another nation never
+/// falls into the wrong driver.
 struct SideDriver {
     side: Side,
     label: String,
-    divisions: Option<Vec<String>>,
+    slice: Option<Vec<(String, String)>>,
     ai: TacticalAi,
     fog: FogOfWar,
     orders: Vec<AttackOrder>,
@@ -78,7 +80,7 @@ impl SideDriver {
     fn new(
         side: Side,
         label: String,
-        divisions: Option<Vec<String>>,
+        slice: Option<Vec<(String, String)>>,
         tactic: CombatTactic,
         seed: u64,
         width: usize,
@@ -89,7 +91,7 @@ impl SideDriver {
         SideDriver {
             side,
             label,
-            divisions,
+            slice,
             ai: TacticalAi::new(side, tactic, seed),
             fog: FogOfWar::new(width, height, reveal_turns),
             orders: Vec::new(),
@@ -97,11 +99,11 @@ impl SideDriver {
         }
     }
 
-    /// The division slice this driver commands (None = every division).
-    fn in_slice(&self, division: &str) -> bool {
-        self.divisions
+    /// Whether this driver commands `u` (None = every division of the side).
+    fn in_slice(&self, u: &BattalionUnit) -> bool {
+        self.slice
             .as_ref()
-            .map(|d| d.iter().any(|n| n == division))
+            .map(|s| s.iter().any(|(t, d)| *t == u.tag && *d == u.division))
             .unwrap_or(true)
     }
 }
@@ -159,22 +161,27 @@ pub fn run_battle(
     // player-side division NOT in an allied contingent; each contingent
     // owns its divisions (script battles with a `divisions:` block). Empty
     // allies = one whole-side driver (legacy behavior).
-    let allied_divs: HashSet<String> = spec
+    // The slice key is the (owner tag, division name) pair (§7.5): a battle
+    // can field same-name divisions under several nations, and the player's
+    // own copy must stay in her slice.
+    let allied_keys: HashSet<(String, String)> = spec
         .allies
         .iter()
-        .flat_map(|a| a.divisions.iter().cloned())
+        .flat_map(|a| a.divisions.iter().map(move |d| (a.tag.clone(), d.clone())))
         .collect();
-    let player_divs: Vec<String> = if allied_divs.is_empty() {
+    let player_divs: Vec<(String, String)> = if allied_keys.is_empty() {
         Vec::new()
     } else {
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen: HashSet<(String, String)> = HashSet::new();
         units
             .iter()
             .filter(|u| {
-                u.side == player && !u.division.is_empty() && !allied_divs.contains(&u.division)
+                u.side == player
+                    && !u.division.is_empty()
+                    && !allied_keys.contains(&(u.tag.clone(), u.division.clone()))
             })
-            .map(|u| u.division.clone())
-            .filter(|d| seen.insert(d.clone()))
+            .map(|u| (u.tag.clone(), u.division.clone()))
+            .filter(|k| seen.insert(k.clone()))
             .collect()
     };
     // The full player-side division order shared by the sector partition
@@ -184,6 +191,7 @@ pub fn run_battle(
         let mut out: Vec<String> = Vec::new();
         for d in player_divs
             .iter()
+            .map(|(_, d)| d)
             .chain(spec.allies.iter().flat_map(|a| a.divisions.iter()))
         {
             if seen.insert(d.clone()) {
@@ -223,6 +231,7 @@ pub fn run_battle(
             },
             &HashSet::new(),
             None,
+            None,
         );
     } else {
         let player_card = if player == Side::Attacker {
@@ -231,8 +240,11 @@ pub fn run_battle(
             def_tactic
         };
         let mut pre_used: HashSet<(i32, i32)> = HashSet::new();
+        // One (owner tag, division name) slice at a time — the same
+        // identity the live flow splits on, so a same-name pair under two
+        // nations is never deployed by the wrong half of the split.
         let mut deploy_division =
-            |pre_used: &mut HashSet<(i32, i32)>, div: &str, card: CombatTactic| {
+            |pre_used: &mut HashSet<(i32, i32)>, tag: &str, div: &str, card: CombatTactic| {
                 tactical_ai::ai_deploy_impl(
                     &grid,
                     &mut units,
@@ -242,11 +254,13 @@ pub fn run_battle(
                     card,
                     pre_used,
                     Some(div),
+                    Some(tag),
                     Some(&all_divisions),
                     false,
                 );
                 for u in units.iter_mut().filter(|u| {
                     u.side == player
+                        && u.tag == tag
                         && u.division == div
                         && u.undeployed
                         && u.position != BattalionUnit::OFFBOARD
@@ -255,13 +269,13 @@ pub fn run_battle(
                     pre_used.insert((u.position.q, u.position.r));
                 }
             };
-        for div in &player_divs {
-            deploy_division(&mut pre_used, div, player_card);
+        for (tag, div) in &player_divs {
+            deploy_division(&mut pre_used, tag, div, player_card);
         }
         let allies = spec.allies.clone();
         for contingent in &allies {
             for div in &contingent.divisions {
-                deploy_division(&mut pre_used, div, contingent.tactic);
+                deploy_division(&mut pre_used, &contingent.tag, div, contingent.tactic);
             }
         }
     }
@@ -277,6 +291,7 @@ pub fn run_battle(
             def_tactic
         },
         &HashSet::new(),
+        None,
         None,
     );
     // scenario::assemble flags the player's battalions undeployed (the
@@ -372,7 +387,13 @@ pub fn run_battle(
             drivers.push(SideDriver::new(
                 player,
                 contingent.tag.clone(),
-                Some(contingent.divisions.clone()),
+                Some(
+                    contingent
+                        .divisions
+                        .iter()
+                        .map(|d| (contingent.tag.clone(), d.clone()))
+                        .collect(),
+                ),
                 contingent.tactic,
                 seed,
                 grid.width,
@@ -418,11 +439,13 @@ pub fn run_battle(
                 format!("{} division(s)", ds.len())
             }
         };
+        let player_div_names: Vec<String> =
+            player_divs.iter().map(|(_, d)| d.clone()).collect();
         let allies = spec.allies.clone();
         println!(
             "  command split ({:?}): player {} | {}",
             player,
-            divs(&player_divs),
+            divs(&player_div_names),
             allies
                 .iter()
                 .map(|a| format!("{}: {}", a.tag, divs(&a.divisions)))
@@ -639,7 +662,7 @@ fn plan_driver(
         .collect();
     let own: Vec<BattalionUnit> = view
         .iter()
-        .filter(|u| u.side == side && d.in_slice(&u.division))
+        .filter(|u| u.side == side && d.in_slice(u))
         .cloned()
         .collect();
     // Same-side units OUTSIDE the driver's slice — the player's units (for
@@ -648,7 +671,7 @@ fn plan_driver(
     // targets. Whole-side drivers see an empty list (= None semantics).
     let passive: Vec<BattalionUnit> = view
         .iter()
-        .filter(|u| u.side == side && !d.in_slice(&u.division))
+        .filter(|u| u.side == side && !d.in_slice(u))
         .cloned()
         .collect();
     let foe: Vec<BattalionUnit> = view.iter().filter(|u| u.side != side).cloned().collect();
@@ -712,7 +735,11 @@ fn plan_driver(
                                     "  {} {} -> move ({},{})",
                                     d.label, u.name, dest.q, dest.r
                                 );
-                                u.move_order = Some(MoveOrder { path, hours: 0.0 });
+                                u.move_order = Some(MoveOrder {
+                                    path,
+                                    hours: 0.0,
+                                    queue: Default::default(),
+                                });
                             }
                         }
                     }
@@ -797,6 +824,21 @@ fn plan_driver(
                 } else {
                     !is_rocket && hex_visible && enemy_at_hex
                 };
+                // Registration backstop mirror of game.rs: an AREA mission
+                // whose blast circle holds a same-side targetable
+                // battalion is refused — the driver must behave exactly
+                // like the interactive battle.
+                if !precise {
+                    let friend_in_blast = units.iter().any(|f| {
+                        f.side == side
+                            && f.id != attacker_id
+                            && f.is_targetable()
+                            && f.position.distance(target_hex) <= 1
+                    });
+                    if friend_in_blast {
+                        continue;
+                    }
+                }
                 d.orders.retain(|o| o.attacker != attacker_id);
                 d.orders.push(AttackOrder {
                     attacker: attacker_id,
@@ -862,7 +904,7 @@ fn march_and_fire(
         units
             .iter()
             .find(|u| u.id == id)
-            .and_then(|u| drivers.iter().find(|d| d.in_slice(&u.division)))
+            .and_then(|u| drivers.iter().find(|d| d.in_slice(u)))
             .map(|d| d.label.clone())
             .unwrap_or_else(|| tag(side).to_string())
     };
@@ -917,7 +959,9 @@ fn march_and_fire(
                     name(units, blocker_id)
                 )
             }
-            MovementEvent::Advanced { .. } | MovementEvent::Progress { .. } => {}
+            MovementEvent::Advanced { .. }
+            | MovementEvent::Progress { .. }
+            | MovementEvent::WaypointReached { .. } => {}
         }
     }
 
@@ -1021,7 +1065,8 @@ fn full_turn_upkeep(
             d.name, d.side
         );
     }
-    combat.apply_encirclement_attrition(grid, units);
+    // No injection channel in headless — the siege org loss stays local.
+    let _ = combat.apply_encirclement_attrition(grid, units);
     // §6.11: end-of-turn flag tick — control ratio → progress, full
     // capture → the ATTACKER WINS immediately: the defender's org is zeroed
     // (strength untouched), no rout flow — the explicit `captured()` check

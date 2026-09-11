@@ -46,6 +46,12 @@ pub enum MovementEvent {
     /// Entered a hex adjacent to an enemy — order consumed (§6.5 contact);
     /// adjacent enemies marching through halt too (symmetric stop).
     MadeContact { unit_id: usize },
+    /// Reached a waypoint in the middle of a Shift-click chain — the
+    /// order survives and the NEXT leg becomes the standing segment.
+    /// Emitted only for intermediate arrivals; the final destination
+    /// emits [`MovementEvent::Arrived`] with the full end-of-order
+    /// behaviour (log, manual-override release at refresh).
+    WaypointReached { unit_id: usize },
     /// Reached the destination — order completed.
     Arrived { unit_id: usize },
 }
@@ -65,6 +71,10 @@ pub enum MovementEvent {
 ///   unit never permanently pins anyone, any detour is accepted on the next
 ///   refresh.
 ///
+/// Only the ACTIVE segment is judged here — queued chain legs stay queued
+/// (their previews are display-only and never adopted); a chain between
+/// legs (empty path) tries to activate its next leg instead.
+///
 /// Returns true when the order was rewritten.
 pub fn refresh_move_order(
     grid: &HexGrid,
@@ -76,8 +86,14 @@ pub fn refresh_move_order(
         return false;
     };
     let Some(&dest) = order.path.last() else {
-        unit.move_order = None;
-        return true;
+        // No route on the standing segment: a finished order drops
+        // ("already there"); a chain between legs retries the next leg's
+        // plan (a route may have opened since the last attempt).
+        if order.queue.is_empty() {
+            unit.move_order = None;
+            return true;
+        }
+        return plan_next_leg(grid, unit, view, params);
     };
     let Some((path, cost)) = find_path(grid, unit, view, dest, params) else {
         return false; // no route at all right now — keep waiting on the old one
@@ -114,11 +130,56 @@ pub fn refresh_move_order(
     // sat frozen while the route flip-flopped (the "has order, bar not
     // growing" report) — reintroducing through this side door the very
     // pinning family the apply layer killed (§7.2 order persistence).
+    // The queued chain legs ride along untouched.
     unit.move_order = Some(crate::unit::MoveOrder {
         path,
         hours: order.hours,
+        queue: order.queue,
     });
     true
+}
+
+/// Activate the next leg of a Shift-click chain: the standing segment is
+/// exhausted (empty path — the unit sits on the waypoint) and the queue
+/// holds further destinations. The first leg is popped and RE-PLANNED
+/// from the unit's current hex against `view` — a queued leg never
+/// marches its stale preview; the fresh segment starts with zero invested
+/// hours. Returns true when the unit now holds the planned leg as its
+/// standing order; false when the queue is empty, no route exists right
+/// now (the empty-segment wait state is kept and retried by later
+/// refreshes/advances), or the destination is the hex the unit already
+/// stands on (redundant leg dropped, the next one tried).
+fn plan_next_leg(
+    grid: &HexGrid,
+    unit: &mut BattalionUnit,
+    view: &[BattalionUnit],
+    params: &CombatParams,
+) -> bool {
+    loop {
+        let dest = match unit.move_order.as_ref().and_then(|o| o.queue.front()) {
+            Some(leg) => leg.dest,
+            None => return false,
+        };
+        let Some((path, _)) = find_path(grid, unit, view, dest, params) else {
+            return false; // no route right now — keep waiting on the queue
+        };
+        if !path.is_empty() {
+            let order = unit.move_order.take().expect("queue present");
+            let mut queue = order.queue;
+            queue.pop_front();
+            unit.move_order = Some(crate::unit::MoveOrder {
+                path,
+                hours: 0.0,
+                queue,
+            });
+            return true;
+        }
+        // The unit already stands on the leg's destination — drop the
+        // redundant leg and try the next one.
+        if let Some(order) = unit.move_order.as_mut() {
+            order.queue.pop_front();
+        }
+    }
 }
 
 /// Advance every eligible unit of `side` along its standing move order by
@@ -144,6 +205,21 @@ pub fn advance_move_orders(
         .map(|u| u.id)
         .collect();
 
+    // Chain-leg activation re-plans against the LIVE unit set (executor
+    // omniscience — the same data interception and jams read; the
+    // per-side-turn refresh heals the leg against the side's own view
+    // before it ever marches). The view is cloned only while a chain
+    // actually exists on the board (the clone is empty otherwise — no
+    // chain branch can then run, so the empty view is never consulted).
+    let chain_view = if units
+        .iter()
+        .any(|u| u.move_order.as_ref().is_some_and(|o| !o.queue.is_empty()))
+    {
+        units.clone()
+    } else {
+        Vec::new()
+    };
+
     let mut events = Vec::new();
     for id in ids {
         let mut remaining = budget;
@@ -155,9 +231,18 @@ pub fn advance_move_orders(
                 break;
             };
             let Some(&next) = order.path.first() else {
-                units[i].move_order = None;
-                events.push(MovementEvent::Arrived { unit_id: id });
-                break;
+                // No route on the standing segment: a chain between legs
+                // (waiting for a route) retries its plan here; a finished
+                // order arrives.
+                if order.queue.is_empty() {
+                    units[i].move_order = None;
+                    events.push(MovementEvent::Arrived { unit_id: id });
+                    break;
+                }
+                if plan_next_leg(grid, &mut units[i], &chain_view, params) {
+                    continue; // fresh segment — march it with this budget
+                }
+                break; // still no route — wait quietly
             };
             // One battalion per hex (§6.9): the next hex is occupied.
             if let Some(oi) = units
@@ -226,13 +311,32 @@ pub fn advance_move_orders(
                     break;
                 }
                 if rest.is_empty() {
-                    units[i].move_order = None;
-                    events.push(MovementEvent::Arrived { unit_id: id });
-                    break;
+                    if order.queue.is_empty() {
+                        units[i].move_order = None;
+                        events.push(MovementEvent::Arrived { unit_id: id });
+                        break;
+                    }
+                    // Intermediate waypoint of a chain: hand the standing
+                    // order to the next queued leg (re-planned from this
+                    // hex). No arrival log and no manual-override release —
+                    // only the LAST leg ends the order (§6.2 chain
+                    // contract).
+                    units[i].move_order = Some(crate::unit::MoveOrder {
+                        path: Vec::new(),
+                        hours: 0.0,
+                        queue: order.queue,
+                    });
+                    events.push(MovementEvent::WaypointReached { unit_id: id });
+                    if !plan_next_leg(grid, &mut units[i], &chain_view, params) || remaining <= 1e-6
+                    {
+                        break;
+                    }
+                    continue; // walk the fresh segment on the remaining budget
                 }
                 units[i].move_order = Some(crate::unit::MoveOrder {
                     path: rest,
                     hours: 0.0,
+                    queue: order.queue,
                 });
                 if remaining <= 1e-6 {
                     events.push(MovementEvent::Progress { unit_id: id });
@@ -298,6 +402,34 @@ pub fn eta_turns(hours: f32, params: &CombatParams) -> u32 {
         .max(0.0) as u32
 }
 
+/// Whole-chain travel time of a standing order (§9.2 ETA display): the
+/// active segment (invested hours deducted) plus every queued leg,
+/// estimated over its preview route. Previews are display data — each
+/// leg is re-planned at activation — so the queued part is an estimate
+/// until then. Legs without a preview are skipped (the player command
+/// path always stores one). None when the unit has no order.
+pub fn chain_eta_hours(
+    grid: &HexGrid,
+    unit: &BattalionUnit,
+    units: &[BattalionUnit],
+    params: &CombatParams,
+) -> Option<f32> {
+    let order = unit.move_order.as_ref()?;
+    let mut total = order_eta_hours(grid, unit, units, params).unwrap_or(0.0);
+    let enemy_zoc = zoc_hexes(grid, units, unit.side.opponent());
+    for leg in &order.queue {
+        let mut from = match leg.preview.first() {
+            Some(&h) => h,
+            None => continue, // no preview — nothing to estimate
+        };
+        for &next in leg.preview.iter().skip(1) {
+            total += step_hours(grid, unit, &enemy_zoc, from, next, params).unwrap_or(f32::MAX);
+            from = next;
+        }
+    }
+    Some(total.max(0.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +448,7 @@ mod tests {
         Some(crate::unit::MoveOrder {
             path: path.iter().map(|(q, r)| HexCoord::new(*q, *r)).collect(),
             hours: 0.0,
+            queue: Default::default(),
         })
     }
 
@@ -326,27 +459,42 @@ mod tests {
         u.move_order = order(&[(2, 1)]);
         let mut units = vec![u];
         let p = CombatParams::default();
-        // Turn 1: 1/6 h invested into a 1/4 h step — no hex change.
+        // Turn 1: 1/6 h invested into a 1.5/4 = 0.375 h step — no hex change.
         let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         assert_eq!(units[0].position, HexCoord::new(1, 1));
         assert!(ev.contains(&MovementEvent::Progress { unit_id: 0 }));
-        // Turn 2: 2/6 ≥ 1/4 — the step completes.
+        // Turn 2: 2/6 = 0.333 < 0.375 — still short of the step.
+        let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        assert_eq!(units[0].position, HexCoord::new(1, 1));
+        assert!(ev.contains(&MovementEvent::Progress { unit_id: 0 }));
+        // Turn 3: 3/6 = 0.5 ≥ 0.375 — the step completes.
         let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         assert_eq!(units[0].position, HexCoord::new(2, 1));
         assert!(ev.contains(&MovementEvent::Arrived { unit_id: 0 }));
     }
 
     #[test]
-    fn motorized_covers_two_plains_hexes_per_turn() {
-        let g = grid(8, 8);
+    fn motorized_covers_two_plains_hexes_per_turn_on_road() {
+        let mut g = grid(8, 8);
+        // §4.2 road network: surfaced hexes cost the base 1.0 for motor —
+        // 12 km/h × 1/6 h = 2 km of road per turn.
+        for (q, r) in [(2, 1), (3, 1), (4, 1)] {
+            g.cell_mut(HexCoord::new(q, r)).unwrap().road = true;
+        }
         let mut u = unit(0, UnitType::Motorized, Side::Attacker, 1, 1);
         u.move_order = order(&[(2, 1), (3, 1), (4, 1)]);
         let mut units = vec![u];
         let p = CombatParams::default();
         let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
-        // 12 km/h × 1/6 h = 2 km of plains per turn.
         assert_eq!(units[0].position, HexCoord::new(3, 1));
         assert!(units[0].move_order.is_some());
+        // Same path OFF-road: motor pays 1.75/hex, only one step fits.
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Motorized, Side::Attacker, 1, 1);
+        u.move_order = order(&[(2, 1), (3, 1), (4, 1)]);
+        let mut units = vec![u];
+        let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        assert_eq!(units[0].position, HexCoord::new(2, 1));
     }
 
     #[test]
@@ -360,6 +508,8 @@ mod tests {
         u.move_order = order(&[(2, 1), (3, 1)]);
         let mut units = vec![u];
         let p = CombatParams::default();
+        // Two off-road plains steps (2×1.75 km) need two 2 km budgets.
+        let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         assert_eq!(units[0].position, HexCoord::new(3, 1));
         assert!(!units[0].is_holding);
@@ -374,9 +524,10 @@ mod tests {
         let enemy = unit(1, UnitType::Infantry, Side::Defender, 3, 2); // adjacent to (3,1)
         let mut units = vec![u, enemy];
         let p = CombatParams::default();
-        // ZOC surcharges are zeroed in the defaults, so the 2 km budget
-        // covers both plains steps in one turn: entering the enemy-adjacent
-        // (3,1) triggers contact and the order is spent.
+        // ZOC surcharges are zeroed in the defaults; off-road motor pays
+        // 1.75/hex against the 2 km budget, so entering the enemy-adjacent
+        // (3,1) happens on turn 2 — contact fires and the order is spent.
+        let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         assert_eq!(units[0].position, HexCoord::new(3, 1));
         assert!(units[0].move_order.is_none());
@@ -389,9 +540,9 @@ mod tests {
         let mut u = unit(0, UnitType::Infantry, Side::Attacker, 1, 1);
         // No order → nothing in progress.
         assert!(next_step_progress(&g, &[u.clone()], &u, &CombatParams::default()).is_none());
-        // Plain infantry step = 0.25 h; half-invested hours → ≈ 0.5.
+        // Off-road infantry step = 1.5/4 = 0.375 h; half-invested → ≈ 0.5.
         u.move_order = order(&[(2, 1)]);
-        u.move_order.as_mut().unwrap().hours = 0.125;
+        u.move_order.as_mut().unwrap().hours = 0.1875;
         let p = next_step_progress(&g, &[u.clone()], &u, &CombatParams::default()).unwrap();
         assert!((p - 0.5).abs() < 0.05, "half-invested step ≈ 0.5: {p}");
         // Fresh order (hours 0) → no mark yet.
@@ -404,6 +555,7 @@ mod tests {
         done.move_order = Some(crate::unit::MoveOrder {
             path: vec![],
             hours: 0.0,
+            queue: Default::default(),
         });
         assert!(next_step_progress(&g, &[done.clone()], &done, &CombatParams::default()).is_none());
     }
@@ -460,8 +612,9 @@ mod tests {
         e.move_order = order(&[(4, 2)]);
         let mut units = vec![u, e];
         let p = CombatParams::default();
-        // ZOC off in the defaults: the 2 km budget reaches (3,1) in the
-        // first turn — contact fires immediately, halting both sides.
+        // ZOC off in the defaults: off-road motor needs two 2 km budgets to
+        // reach (3,1) — contact fires on turn 2, halting both sides.
+        let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         assert!(ev.contains(&MovementEvent::MadeContact { unit_id: 0 }));
         assert!(units[0].move_order.is_none());
@@ -533,13 +686,17 @@ mod tests {
     }
 
     /// Geometry for the parked/moving escape tests: the direct route east is
-    /// walled by a friend at (2,1) plus mountains at (1,0)/(2,0) and a
+    /// walled by a friend at (2,1) plus mountains at (1,0)/(2,0)/(3,0) and a
     /// second friend at (2,2), so the only detour runs 5 steps south —
     /// 2.5× the 2-step remaining march, decisively above the 1.5× cap.
+    /// (Three mountains: with the 0.5/hex off-road surcharge a single
+    /// mountain hop — 4.75 + 2×1.75 = 8.25 km — undercuts the 5-step plain
+    /// detour at 8.75 km, so the wall must actually block.)
     fn walled_scenario() -> (HexGrid, BattalionUnit, BattalionUnit, BattalionUnit) {
         let mut g = grid(8, 8);
         g.set_terrain(HexCoord::new(1, 0), Terrain::Mountain);
         g.set_terrain(HexCoord::new(2, 0), Terrain::Mountain);
+        g.set_terrain(HexCoord::new(3, 0), Terrain::Mountain);
         let mut u = unit(0, UnitType::Motorized, Side::Attacker, 1, 1);
         u.move_order = order(&[(2, 1), (3, 1)]);
         let blocker = unit(1, UnitType::Infantry, Side::Attacker, 2, 1);
@@ -597,6 +754,7 @@ mod tests {
         u.move_order = Some(crate::unit::MoveOrder {
             path: vec![HexCoord::new(2, 1), HexCoord::new(3, 1)],
             hours: 0.05,
+            queue: Default::default(),
         });
         let p = CombatParams::default();
         let units_view = vec![u.clone()];
@@ -615,6 +773,7 @@ mod tests {
         u.move_order = Some(crate::unit::MoveOrder {
             path: vec![HexCoord::new(2, 1), HexCoord::new(3, 1)],
             hours: 0.05,
+            queue: Default::default(),
         });
         let friend = unit(1, UnitType::Infantry, Side::Attacker, 2, 1);
         let p = CombatParams::default();
@@ -659,9 +818,10 @@ mod tests {
         let units = vec![u];
         let p = CombatParams::default();
         let h = order_eta_hours(&g, &units[0], &units, &p).unwrap();
-        // 3 plains km at 12 km/h = 0.25 h → ceil(0.25×6) = 2 turns.
-        assert!((h - 0.25).abs() < 1e-4);
-        assert_eq!(eta_turns(h, &p), 2);
+        // 3 off-road plains steps: 3×1.75 km at 12 km/h = 0.4375 h
+        // → ceil(0.4375×6) = 3 turns.
+        assert!((h - 0.4375).abs() < 1e-4);
+        assert_eq!(eta_turns(h, &p), 3);
     }
 
     #[test]
@@ -690,5 +850,216 @@ mod tests {
             Some(HexCoord::new(3, 1)),
             "destination kept"
         );
+    }
+}
+
+#[cfg(test)]
+mod chain_tests {
+    use super::*;
+    use crate::terrain::Terrain;
+    use crate::unit::{MoveLeg, MoveOrder, UnitType};
+
+    fn grid(w: usize, h: usize) -> HexGrid {
+        HexGrid::new(w, h, Terrain::Plains)
+    }
+
+    fn unit(id: usize, ty: UnitType, side: Side, q: i32, r: i32) -> BattalionUnit {
+        BattalionUnit::new(id, format!("U{id}"), ty, side, HexCoord::new(q, r))
+    }
+
+    /// Chain order: one active segment to `path_end` plus queued legs
+    /// (each described by its own polyline INCLUDING its start hex).
+    fn chain(path: &[(i32, i32)], legs: &[&[(i32, i32)]]) -> MoveOrder {
+        let queue = legs
+            .iter()
+            .map(|pts| {
+                let hexes: Vec<HexCoord> = pts
+                    .iter()
+                    .map(|(q, r)| HexCoord::new(*q, *r))
+                    .collect();
+                MoveLeg {
+                    dest: *hexes.last().unwrap(),
+                    preview: hexes,
+                }
+            })
+            .collect();
+        MoveOrder {
+            path: path.iter().map(|(q, r)| HexCoord::new(*q, *r)).collect(),
+            hours: 0.0,
+            queue,
+        }
+    }
+
+    /// A chain leg rolls over WITHIN the same turn's budget: a motorized
+    /// battalion (2 plains hexes per turn) reaches its first waypoint and
+    /// keeps marching into the next leg in the same advance. Intermediate
+    /// waypoints emit WaypointReached (no log-worthy Arrived), never
+    /// release the order, and the fresh leg starts at zero hours.
+    #[test]
+    fn chain_leg_activates_and_continues_within_the_turn() {
+        let mut g = grid(8, 8);
+        // Road-surfaced path (§4.2): motor pays the base 1.0/hex, so the
+        // 2 km budget covers two steps in the turn.
+        for (q, r) in [(2, 1), (3, 1), (4, 1)] {
+            g.cell_mut(HexCoord::new(q, r)).unwrap().road = true;
+        }
+        let mut u = unit(0, UnitType::Motorized, Side::Attacker, 1, 1);
+        u.move_order = Some(chain(&[(2, 1)], &[&[(2, 1), (3, 1), (4, 1)]]));
+        let mut units = vec![u];
+        let p = CombatParams::default();
+
+        let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        // First step: (1,1) → (2,1) completes the FIRST leg; the second
+        // leg activates on the remaining budget and marches to (3,1).
+        assert_eq!(units[0].position, HexCoord::new(3, 1));
+        let order = units[0].move_order.as_ref().unwrap();
+        assert_eq!(order.path.last(), Some(&HexCoord::new(4, 1)));
+        assert!(order.queue.is_empty(), "last leg now active");
+        assert_eq!(order.hours, 0.0, "fresh leg starts at zero hours");
+        assert!(
+            ev.contains(&MovementEvent::WaypointReached { unit_id: 0 }),
+            "intermediate waypoint announced as WaypointReached: {ev:?}"
+        );
+        assert!(
+            !ev.contains(&MovementEvent::Arrived { unit_id: 0 }),
+            "a chain with legs left never Arrives: {ev:?}"
+        );
+
+        // Next turn: the final leg completes → the order ends properly.
+        let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        assert_eq!(units[0].position, HexCoord::new(4, 1));
+        assert!(units[0].move_order.is_none());
+        assert!(ev.contains(&MovementEvent::Arrived { unit_id: 0 }));
+    }
+
+    /// Budget exhausted exactly at a waypoint: the next leg is planned
+    /// (activated) but not marched — the following turn walks it.
+    #[test]
+    fn chain_waits_for_the_next_turn_when_budget_runs_out() {
+        let g = grid(8, 8);
+        // Plain infantry off-road: 1.5/4 = 0.375 h per step against a 1/6 h
+        // budget — three turns for the first hex, ~2.25 per hex after.
+        let mut u = unit(0, UnitType::Infantry, Side::Attacker, 1, 1);
+        u.move_order = Some(chain(&[(2, 1)], &[&[(2, 1), (3, 1)]]));
+        let mut units = vec![u];
+        let p = CombatParams::default();
+
+        // Turn 1: 1/6 h invested — no hex crossed.
+        let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        assert_eq!(units[0].position, HexCoord::new(1, 1));
+        assert!(!ev.contains(&MovementEvent::WaypointReached { unit_id: 0 }));
+
+        // Turn 2: 2/6 = 0.333 < 0.375 — still short of the step.
+        let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        assert_eq!(units[0].position, HexCoord::new(1, 1));
+        assert!(!ev.contains(&MovementEvent::WaypointReached { unit_id: 0 }));
+
+        // Turn 3: 3/6 = 0.5 ≥ 0.375 → waypoint reached, next leg planned,
+        // remaining budget (0.5 − 0.375 = 0.125) too small to start it.
+        let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        assert_eq!(units[0].position, HexCoord::new(2, 1));
+        assert!(ev.contains(&MovementEvent::WaypointReached { unit_id: 0 }));
+        assert!(!ev.contains(&MovementEvent::Arrived { unit_id: 0 }));
+        let order = units[0].move_order.as_ref().unwrap();
+        assert_eq!(order.path.last(), Some(&HexCoord::new(3, 1)));
+        assert!(order.queue.is_empty());
+
+        // Turn 4: 0.125 + 1/6 = 0.292 < 0.375 — still waiting.
+        let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        assert_eq!(units[0].position, HexCoord::new(2, 1));
+        assert!(!ev.contains(&MovementEvent::Arrived { unit_id: 0 }));
+
+        // Turn 5: 0.458 ≥ 0.375 → final arrival.
+        let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        assert_eq!(units[0].position, HexCoord::new(3, 1));
+        assert!(units[0].move_order.is_none());
+        assert!(ev.contains(&MovementEvent::Arrived { unit_id: 0 }));
+    }
+
+    /// Walking into contact kills the WHOLE chain, not just the active
+    /// leg — the queued legs ride the same single-order slot and die with
+    /// it (§6.5).
+    #[test]
+    fn chain_cleared_entirely_by_contact() {
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Motorized, Side::Attacker, 1, 1);
+        u.move_order = Some(chain(&[(2, 1)], &[&[(2, 1), (4, 1)]]));
+        let enemy = unit(1, UnitType::Infantry, Side::Defender, 2, 2); // adjacent to (2,1)
+        let mut units = vec![u, enemy];
+        let p = CombatParams::default();
+
+        let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        assert_eq!(units[0].position, HexCoord::new(2, 1));
+        assert!(
+            units[0].move_order.is_none(),
+            "contact consumes the chain INCLUDING its queued legs"
+        );
+        assert!(ev.contains(&MovementEvent::MadeContact { unit_id: 0 }));
+    }
+
+    /// Friendly congestion preserves the whole chain (progress AND the
+    /// queued legs) — waiting is not an order change.
+    #[test]
+    fn chain_survives_blocked_wait() {
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Motorized, Side::Attacker, 1, 1);
+        u.move_order = Some(chain(&[(2, 1)], &[&[(2, 1), (4, 1)]]));
+        let friend = unit(1, UnitType::Infantry, Side::Attacker, 2, 1);
+        let mut units = vec![u, friend];
+        let p = CombatParams::default();
+
+        let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        assert_eq!(units[0].position, HexCoord::new(1, 1));
+        let order = units[0].move_order.as_ref().unwrap();
+        assert_eq!(order.path.last(), Some(&HexCoord::new(2, 1)));
+        assert_eq!(order.queue.len(), 1, "queued leg survives the wait");
+        assert!(ev.contains(&MovementEvent::Blocked {
+            unit_id: 0,
+            blocker_id: 1
+        }));
+    }
+
+    /// Refresh between legs: an empty standing path with queued legs
+    /// activates the next leg against the refresh view instead of
+    /// dropping the order ("already there" only applies to finished
+    /// chains).
+    #[test]
+    fn refresh_activates_waiting_chain_leg() {
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Motorized, Side::Attacker, 1, 1);
+        u.move_order = Some(chain(&[], &[&[(1, 1), (2, 1), (3, 1)]]));
+        let p = CombatParams::default();
+        let units_view = vec![u.clone()];
+
+        let changed = refresh_move_order(&g, &mut u, &units_view, &p);
+        assert!(changed, "the waiting leg was planned");
+        let order = u.move_order.unwrap();
+        assert_eq!(order.path.last(), Some(&HexCoord::new(3, 1)));
+        assert!(order.queue.is_empty());
+    }
+
+    /// Refresh adoptions (detour rewrites of the ACTIVE segment) carry
+    /// the queued legs untouched — only the route to the current
+    /// destination is re-judged.
+    #[test]
+    fn refresh_adoption_preserves_queued_legs() {
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Motorized, Side::Attacker, 1, 1);
+        // Active segment deliberately long (cheaper route exists later via
+        // the friend?) — simplest: same-dest shorter route becomes
+        // available after the friend parks; here we only assert that a
+        // rewrite keeps the queue.
+        u.move_order = Some(chain(&[(2, 1), (3, 1), (4, 1)], &[&[(4, 1), (5, 1)]]));
+        let p = CombatParams::default();
+        // Block (2,1) with a parked friend → a detour is adopted even
+        // though it is not cheaper (parked escape).
+        let mut blocked = unit(1, UnitType::Infantry, Side::Attacker, 2, 1);
+        blocked.move_order = None;
+        let units_view = vec![blocked, u.clone()];
+        let changed = refresh_move_order(&g, &mut u, &units_view, &p);
+        assert!(changed, "parked blocker forces a detour");
+        let order = u.move_order.unwrap();
+        assert_eq!(order.path.last(), Some(&HexCoord::new(4, 1)), "same active dest");
+        assert_eq!(order.queue.len(), 1, "queued legs ride the rewrite");
     }
 }

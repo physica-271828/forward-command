@@ -6,7 +6,7 @@
 //! 55×118 at 1 hex = 1 km).
 
 use crate::hex::{HexCoord, HexDirection};
-use crate::terrain::Terrain;
+use crate::terrain::{RiverBand, Terrain};
 
 #[derive(Debug, Clone, Copy)]
 pub struct GridCell {
@@ -15,6 +15,41 @@ pub struct GridCell {
     pub elevation: i32,
     /// River runs along one or more edges of this hex (§4.2 adjacency rivers).
     pub river_edges: u8,
+    /// Width band of the river water under this hex — the widest stroke
+    /// that painted it (Small is the default; meaningless when the cell
+    /// is not a river hex). Pure geometry: every river hex shares the
+    /// uniform §6.6 ford row, the band only decides how many hexes wide
+    /// the water strip is.
+    pub river_band: RiverBand,
+    /// Paved road runs through this hex (§4.2 road network): movement pays
+    /// the base terrain cost with the motor excess waived and no off-road
+    /// surcharge. Villages, towns and factory districts are network nodes.
+    pub road: bool,
+    /// Railway runs through this hex — same movement rule as `road` (the
+    /// graded bed helps any march; strategic rail connectivity is not
+    /// modelled at the tactical scale, so a damaged line still counts).
+    pub rail: bool,
+    /// Bridge deck on a full-hex River: crossing pays a flat 1 km for every
+    /// mobility class instead of the §6.6 ford row. Movement-only — no
+    /// combat modifiers.
+    pub bridge: bool,
+    /// Bridge over an ADJACENCY river edge (bit i = HexDirection::ALL[i],
+    /// same convention as `river_edges`): crossing that edge pays no
+    /// `river_edge_surcharge_km`.
+    pub bridge_edges: u8,
+    /// Road actually CROSSES these hex edges (bit i = HexDirection::ALL[i],
+    /// set on both cells of the shared edge along each painted road path).
+    /// This is the renderer's source of truth for which links to draw —
+    /// hex-adjacency of the `road` flag alone would invent links between
+    /// touching-but-unrelated road hexes (cluster villages, pass-bys).
+    /// Movement reads the hex-level `road` flag, not these bits.
+    pub road_edges: u8,
+    /// Railway crosses these hex edges — same convention as `road_edges`.
+    pub rail_edges: u8,
+    /// Factory district overlay (§4.2): industrial buildings stamped near
+    /// the city. Village-grade cover (0.30) regardless of the base terrain,
+    /// a road-network node, and light enough to not block LoS.
+    pub factory: bool,
     /// False for water (sea/lake). Out-of-province LAND stays passable at
     /// its own terrain cost but is flagged `out_of_bounds` (§6.14).
     pub is_passable: bool,
@@ -32,6 +67,14 @@ impl GridCell {
             terrain,
             elevation: 0,
             river_edges: 0,
+            river_band: RiverBand::Small,
+            road: false,
+            rail: false,
+            bridge: false,
+            bridge_edges: 0,
+            road_edges: 0,
+            rail_edges: 0,
+            factory: false,
             // Derived, not hardcoded: `HexGrid::new(w, h, Water)` must
             // produce impassable open sea without every caller remembering
             // to flip the flag.
@@ -42,6 +85,23 @@ impl GridCell {
 
     pub fn has_river(&self) -> bool {
         self.river_edges != 0
+    }
+
+    /// True when a surfaced route (paved road or railway) serves this hex —
+    /// the §6.6 movement rule treats both identically.
+    pub fn has_road(&self) -> bool {
+        self.road || self.rail
+    }
+
+    /// Cover the occupant of this cell actually receives (§6.6): a factory
+    /// district grants village-grade masonry (0.30) whatever the base
+    /// terrain says; everything else defers to the terrain table.
+    pub fn cover_percent(&self) -> f32 {
+        if self.factory {
+            0.30
+        } else {
+            self.terrain.cover_percent()
+        }
     }
 }
 
@@ -210,5 +270,21 @@ mod tests {
         let close = vec![HexCoord::new(1, 0), HexCoord::new(0, 2)];
         let kept = filter_min_distance(close, &anchors, 3);
         assert_eq!(kept, vec![HexCoord::new(0, 2)]);
+    }
+
+    #[test]
+    fn factory_overlay_grants_village_grade_cover() {
+        // §4.2 factory district: village-grade masonry (0.30) whatever the
+        // base terrain says — over Urban that is a deliberate downgrade
+        // (light industrial halls, not dense masonry).
+        let mut g = HexGrid::new(4, 4, Terrain::Plains);
+        g.set_terrain(HexCoord::new(1, 1), Terrain::Urban);
+        assert_eq!(g.cell(HexCoord::new(1, 1)).unwrap().cover_percent(), 0.50);
+        g.cell_mut(HexCoord::new(1, 1)).unwrap().factory = true;
+        assert_eq!(g.cell(HexCoord::new(1, 1)).unwrap().cover_percent(), 0.30);
+        // Road/rail flags do not touch cover.
+        g.cell_mut(HexCoord::new(2, 2)).unwrap().road = true;
+        assert_eq!(g.cell(HexCoord::new(2, 2)).unwrap().cover_percent(), 0.0);
+        assert!(g.cell(HexCoord::new(2, 2)).unwrap().has_road());
     }
 }

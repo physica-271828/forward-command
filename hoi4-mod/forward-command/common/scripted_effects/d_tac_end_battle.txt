@@ -4,6 +4,9 @@
 # effect lines (never this effect), and no result data rides the event
 # (console-set variables are unreadable by mod scripts).
 d_tac_end_battle = {
+	# The handshake's last chance before the cleanup clears its flags (§3.3):
+	# a program that never reported a version gets reported to the player.
+	d_tac_ver_check = yes
 	d_tac_clear_tactical = yes
 	country_event = { id = tac_complete.99 hours = 0 }
 	log = "{\"type\":\"tac_battle_ended\"}"

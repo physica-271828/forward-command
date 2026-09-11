@@ -49,6 +49,11 @@ impl Plugin for AutoplayPlugin {
             app.insert_resource(Tableau::default());
             app.add_systems(Update, drive_tableau.after(drive));
         }
+        // FC_MAPSTILL=1: register the map-feature photo mode (see MapStill).
+        if std::env::var_os("FC_MAPSTILL").is_some() {
+            app.insert_resource(MapStill::default());
+            app.add_systems(Update, drive_mapstill.after(drive));
+        }
     }
 }
 
@@ -102,6 +107,7 @@ fn drive(
     time: Res<Time>,
     shot: Option<Res<AutoShot>>,
     tab: Option<Res<Tableau>>,
+    still: Option<Res<MapStill>>,
 ) {
     let Some(game) = game else { return };
     let Some(state) = state else { return };
@@ -160,6 +166,11 @@ fn drive(
             if tab.as_ref().is_some_and(|t| t.staging) {
                 return;
             }
+            // FC_MAPSTILL: photo mode owns the camera until it exits --
+            // no orders, no End Turn.
+            if still.is_some() {
+                return;
+            }
             // Keep every division under a standing order (re-issuing as
             // orders complete / targets appear — mirrors the manual
             // 占领/推进/歼敌 mix of a human playthrough).
@@ -174,20 +185,23 @@ fn drive(
                 .flags()
                 .and_then(|f| f.flags.first())
                 .map(|f| f.anchor);
-            let mut divisions: Vec<String> = state
+            // The slice key is the (owner tag, division name) identity —
+            // a same-name division of another nation is a different
+            // division and gets its own order slot.
+            let mut divisions: Vec<(String, String)> = state
                 .units
                 .iter()
                 // Autoplay plays the PLAYER's divisions (DESIGN.md §7.5) —
                 // allied contingents plan autonomously (their autonomy is
                 // precisely what an allied-AI smoke run exercises).
                 .filter(|u| game.commands(u) && u.is_combat_effective())
-                .map(|u| u.division.clone())
+                .map(|u| (u.tag.clone(), u.division.clone()))
                 .collect();
             divisions.sort();
             divisions.dedup();
             let mut issued = false;
-            for (i, division) in divisions.into_iter().enumerate() {
-                if game.div_orders.contains_key(&division) {
+            for (i, (tag, division)) in divisions.into_iter().enumerate() {
+                if game.div_ordered(&tag, &division) {
                     continue;
                 }
                 let pick = if mix && i >= 2 {
@@ -212,7 +226,11 @@ fn drive(
                         .or(Some(DivOrderPick::Advance))
                 };
                 if let Some(pick) = pick {
-                    pending.0.push(PlayerCommand::DivOrder { division, pick });
+                    pending.0.push(PlayerCommand::DivOrder {
+                        tag,
+                        division,
+                        pick,
+                    });
                     issued = true;
                 }
             }
@@ -647,9 +665,9 @@ fn drive_tableau(
             tab.staging = true;
             // Wipe every division order: their lanes and Engage rings
             // disappear from the render before the still.
-            let divisions: Vec<String> = game.div_orders.keys().cloned().collect();
-            for d in divisions {
-                pending.0.push(PlayerCommand::CancelDivOrder(d));
+            let divisions: Vec<(String, String)> = game.div_orders.keys().cloned().collect();
+            for (tag, division) in divisions {
+                pending.0.push(PlayerCommand::CancelDivOrder { tag, division });
             }
             tab.picked = Some(p);
             tab.phase = 1;
@@ -765,6 +783,164 @@ impl Clone for Picked {
             enemy_hex: self.enemy_hex,
             assaulters: self.assaulters,
             gun: self.gun,
+        }
+    }
+}
+
+// ---------------------------------------------------------------- FC_MAPSTILL
+/// FC_MAPSTILL=1: map-feature photo mode — framed stills of the GENERATED
+/// province itself (road network, railways, bridges, factory districts),
+/// for feature previews and promo material. Three shots at battle start:
+/// province overview → town-and-roads medium → bridge/road close-up —
+/// landing in previews/thumbnails/mapstill/, then the app exits.
+/// Never set in normal runs.
+#[derive(Resource, Default)]
+pub struct MapStill {
+    /// 0 aim overview / 1 capture A / 2 aim town / 3 capture B /
+    /// 4 aim close-up / 5 capture C / 6 exit once the last frame has landed.
+    phase: u8,
+    settle: f32,
+}
+
+/// World-space centre of the battle grid.
+fn grid_world_center(grid: &tactical_core::grid::HexGrid) -> Vec3 {
+    let (x, z) =
+        tactical_core::hex::HexCoord::new(grid.width as i32 / 2, grid.height as i32 / 2)
+            .to_world(1.0);
+    Vec3::new(x, 0.0, z)
+}
+
+/// Centroid of all Urban hexes (the city the road network converges on),
+/// falling back to the grid centre.
+fn town_center(grid: &tactical_core::grid::HexGrid) -> Vec3 {
+    let mut sum = Vec3::ZERO;
+    let mut n = 0.0f32;
+    for h in grid.iter_coords() {
+        if grid
+            .cell(h)
+            .is_some_and(|c| c.terrain == tactical_core::terrain::Terrain::Urban)
+        {
+            let (x, z) = h.to_world(1.0);
+            sum += Vec3::new(x, 0.0, z);
+            n += 1.0;
+        }
+    }
+    if n > 0.0 {
+        sum / n
+    } else {
+        grid_world_center(grid)
+    }
+}
+
+/// A bridge hex if the map has one, else a road hex touching a Village
+/// (the road-through-the-hamlet read), else the grid centre.
+fn feature_hex(grid: &tactical_core::grid::HexGrid) -> Vec3 {
+    let pick = grid
+        .iter_coords()
+        .find(|h| grid.cell(*h).is_some_and(|c| c.bridge))
+        .or_else(|| {
+            grid.iter_coords().find(|h| {
+                grid.cell(*h).is_some_and(|c| c.road)
+                    && h.neighbors().into_iter().any(|n| {
+                        grid.cell(n)
+                            .is_some_and(|c| c.terrain == tactical_core::terrain::Terrain::Village)
+                    })
+            })
+        });
+    pick.map(|h| {
+        let (x, z) = h.to_world(1.0);
+        Vec3::new(x, 0.0, z)
+    })
+    .unwrap_or_else(|| grid_world_center(grid))
+}
+
+fn drive_mapstill(
+    mut still: ResMut<MapStill>,
+    game: Option<Res<GameController>>,
+    state: Option<Res<TacticalState>>,
+    mut commands: Commands,
+    mut q_cam: Query<&mut RtsCamera>,
+    time: Res<Time>,
+    mut exit: EventWriter<AppExit>,
+) {
+    use bevy::render::view::window::screenshot::{save_to_disk, Screenshot};
+    let (Some(game), Some(state)) = (game, state) else {
+        return;
+    };
+    if game.session.phase != BattlePhase::TacticalActive {
+        return;
+    }
+    let Some(grid) = state.grid.clone() else {
+        return;
+    };
+    still.settle -= time.delta_secs();
+    if still.settle > 0.0 {
+        return;
+    }
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("previews")
+        .join("thumbnails")
+        .join("mapstill");
+    let _ = std::fs::create_dir_all(&dir);
+    // Aim and capture on SEPARATE visits with nothing re-aiming in between,
+    // so the screenshot frame never catches the camera mid-glide.
+    match still.phase {
+        0 => {
+            // Province overview.
+            for mut cam in q_cam.iter_mut() {
+                cam.target = grid_world_center(&grid);
+                cam.distance =
+                    (0.85 * grid.width.max(grid.height) as f32).clamp(40.0, 300.0);
+                cam.pitch = -1.15;
+            }
+            still.settle = 1.4;
+            still.phase = 1;
+        }
+        1 => {
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(dir.join("map_A_overview.png")));
+            still.settle = 0.3;
+            still.phase = 2;
+        }
+        2 => {
+            // Town-and-roads medium.
+            for mut cam in q_cam.iter_mut() {
+                cam.target = town_center(&grid);
+                cam.distance = 42.0;
+                cam.pitch = -0.85;
+            }
+            still.settle = 1.0;
+            still.phase = 3;
+        }
+        3 => {
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(dir.join("map_B_town.png")));
+            still.settle = 0.3;
+            still.phase = 4;
+        }
+        4 => {
+            // Bridge / road close-up.
+            for mut cam in q_cam.iter_mut() {
+                cam.target = feature_hex(&grid);
+                cam.distance = 16.0;
+                cam.pitch = -0.5;
+            }
+            still.settle = 1.0;
+            still.phase = 5;
+        }
+        5 => {
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(dir.join("map_C_bridge.png")));
+            still.settle = 0.6;
+            still.phase = 6;
+        }
+        _ => {
+            exit.send(AppExit::Success);
         }
     }
 }

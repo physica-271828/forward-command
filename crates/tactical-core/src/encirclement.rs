@@ -5,8 +5,8 @@
 //! turn, §8.1).
 
 use crate::grid::HexGrid;
-use crate::hex::HexDirection;
-use crate::unit::BattalionUnit;
+use crate::hex::{HexCoord, HexDirection};
+use crate::unit::{BattalionUnit, UnitState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EncirclementLevel {
@@ -65,23 +65,113 @@ fn has_opposite_pair(sides: &[HexDirection]) -> bool {
         .any(|a| sides.iter().any(|b| a.opposite() == *b))
 }
 
+/// The pocket `target` belongs to: the connected set of same-side units
+/// still holding ground (`Active` / `Retreating`, on the board), connected
+/// through adjacent hexes. Returns indices into `units`; a lone unit's
+/// pocket is itself, an empty Vec means the target no longer holds ground.
+fn pocket_group(target: &BattalionUnit, units: &[BattalionUnit]) -> Vec<usize> {
+    let holds = |u: &BattalionUnit| {
+        u.side == target.side
+            && matches!(u.state, UnitState::Active | UnitState::Retreating)
+            && u.position != BattalionUnit::OFFBOARD
+    };
+    if !holds(target) {
+        return Vec::new();
+    }
+    let mut group: Vec<usize> = Vec::new();
+    let mut visited: Vec<HexCoord> = vec![target.position];
+    let mut frontier: Vec<HexCoord> = vec![target.position];
+    while let Some(pos) = frontier.pop() {
+        for n in pos.neighbors() {
+            if visited.contains(&n) {
+                continue;
+            }
+            if let Some(i) = units.iter().position(|u| holds(u) && u.position == n) {
+                visited.push(n);
+                frontier.push(n);
+                group.push(i);
+            }
+        }
+    }
+    if let Some(i) = units.iter().position(|u| u.id == target.id) {
+        group.push(i);
+    }
+    group
+}
+
+/// The pocket's liberties (围棋气口): every passable hex adjacent to the
+/// group's cells that is neither one of the group's own hexes nor held by a
+/// combat-effective enemy. Zero liberties = the pocket is sealed — there is
+/// no hex left to step into.
+fn group_liberties(grid: &HexGrid, group: &[usize], units: &[BattalionUnit]) -> usize {
+    let own: Vec<HexCoord> = group.iter().map(|&i| units[i].position).collect();
+    let mut liberties: Vec<HexCoord> = Vec::new();
+    for &i in group {
+        for n in grid.passable_neighbors(units[i].position) {
+            if own.contains(&n) || liberties.contains(&n) {
+                continue;
+            }
+            let enemy_holds = units
+                .iter()
+                .any(|e| e.side != units[i].side && e.is_combat_effective() && e.position == n);
+            if !enemy_holds {
+                liberties.push(n);
+            }
+        }
+    }
+    liberties.len()
+}
+
+/// Does any cell of the pocket touch a combat-effective enemy? Kept as a
+/// separate gate so terrain alone still never encircles anything.
+fn group_has_adjacent_enemy(group: &[usize], units: &[BattalionUnit]) -> bool {
+    group
+        .iter()
+        .any(|&i| !enemy_adjacency_sides(&units[i], units).is_empty())
+}
+
+/// §6.4 pocket rule — **Go-style liberties, judged on the whole group**:
+/// the target's pocket is fully encircled when its group has no liberty at
+/// all. This is the only way a group of two or more adjacent friends can be
+/// encircled (the old per-unit "0 free edges" rule is this rule applied to
+/// a one-unit pocket, so an isolated unit judges exactly as before).
+///
+/// §6.13: a pocket holding a **live HQ** never seals — the command element
+/// is its morale anchor, so a surrounded force under one is simply not
+/// encircled at all (kill the HQ and the pocket starts to collapse).
+///
+/// Below the pocket rule sit the unchanged per-unit pressure rules: an
+/// ISOLATED unit (no adjacent combat-effective friend) with free ≤ 2 or an
+/// opposite adjacent enemy pair is Partially encircled; an adjacent friend
+/// covers against them (a contiguous line is not pocketed battalion by
+/// battalion).
 pub fn detect_encirclement(
     grid: &HexGrid,
     target: &BattalionUnit,
     units: &[BattalionUnit],
 ) -> EncirclementLevel {
-    // Encirclement only bites on isolated units. No adjacent enemy → terrain
-    // alone never "encircles" (the old rule counted impassable hexes as
-    // blocked edges, so a unit in a water corridor bled org with zero
-    // contact); an adjacent friend covers.
+    let group = pocket_group(target, units);
+    if !group.is_empty()
+        && group_has_adjacent_enemy(&group, units)
+        && group_liberties(grid, &group, units) == 0
+    {
+        let hq_sustained = group
+            .iter()
+            .any(|&i| units[i].is_hq() && units[i].is_combat_effective());
+        // A live HQ keeps the pocket an organized defense — it is not
+        // surrounded at all, not even the light pressure tier. Kill the HQ
+        // (org 0 or annihilated) and the very same pocket seals.
+        return if hq_sustained {
+            EncirclementLevel::None
+        } else {
+            EncirclementLevel::Full
+        };
+    }
     let sides = enemy_adjacency_sides(target, units);
     if sides.is_empty() || has_adjacent_friend(target, units) {
         return EncirclementLevel::None;
     }
     let free = free_edges(grid, target, units);
-    if free == 0 {
-        return EncirclementLevel::Full;
-    }
     if free <= 2 || has_opposite_pair(&sides) {
         return EncirclementLevel::Partial;
     }
@@ -237,6 +327,99 @@ mod tests {
         let units = vec![target.clone()];
         assert_eq!(
             detect_encirclement(&g, &target, &units),
+            EncirclementLevel::None
+        );
+    }
+
+    /// Ring every passable neighbour of these pocket cells with attackers
+    /// (ids from 100 up) so the pocket ends up with zero liberties.
+    fn seal_pocket(g: &HexGrid, pocket: &[HexCoord], units: &mut Vec<BattalionUnit>) {
+        let mut filled: Vec<HexCoord> = Vec::new();
+        for c in pocket {
+            for n in g.passable_neighbors(*c) {
+                if pocket.contains(&n) || filled.contains(&n) {
+                    continue;
+                }
+                filled.push(n);
+                let id = 100 + units.len();
+                units.push(u(id, Side::Attacker, n));
+            }
+        }
+    }
+
+    fn hq(id: usize, pos: HexCoord) -> BattalionUnit {
+        BattalionUnit::new(
+            id,
+            format!("HQ{id}"),
+            UnitType::Headquarters,
+            Side::Defender,
+            pos,
+        )
+    }
+
+    #[test]
+    fn a_group_without_an_hq_can_be_sealed() {
+        // The reported hole: a CLUSTER of battalions used to be exempt from
+        // encirclement entirely (the old rule required an isolated target),
+        // so several battalions pocketed together never counted as
+        // surrounded. With Go-style liberties the cluster IS the pocket.
+        let g = grid();
+        let a = u(0, Side::Defender, HexCoord::new(5, 5));
+        let b = u(1, Side::Defender, HexCoord::new(5, 6));
+        let mut units = vec![a.clone(), b.clone()];
+        seal_pocket(&g, &[a.position, b.position], &mut units);
+        assert_eq!(detect_encirclement(&g, &a, &units), EncirclementLevel::Full);
+        assert_eq!(detect_encirclement(&g, &b, &units), EncirclementLevel::Full);
+    }
+
+    #[test]
+    fn one_liberty_is_not_a_sealed_pocket() {
+        // A cluster with one open hex left is not sealed — the ring must
+        // close completely.
+        let g = grid();
+        let a = u(0, Side::Defender, HexCoord::new(5, 5));
+        let b = u(1, Side::Defender, HexCoord::new(5, 6));
+        let mut units = vec![a.clone(), b.clone()];
+        seal_pocket(&g, &[a.position, b.position], &mut units);
+        let ring_id = units
+            .iter()
+            .find(|x| x.side == Side::Attacker)
+            .map(|x| x.id)
+            .unwrap();
+        units.retain(|x| x.id != ring_id);
+        assert_eq!(
+            detect_encirclement(&g, &a, &units),
+            EncirclementLevel::None
+        );
+    }
+
+    #[test]
+    fn a_live_hq_keeps_the_pocket_from_sealing() {
+        // §6.13: a pocket holding a LIVE HQ is not surrounded at all — the
+        // command element is its morale anchor. Kill the HQ and the very
+        // same pocket seals (the tactical point of hunting it).
+        let g = grid();
+        let a = u(0, Side::Defender, HexCoord::new(5, 5));
+        let h = hq(1, HexCoord::new(5, 6));
+        let mut units = vec![a.clone(), h];
+        seal_pocket(&g, &[a.position, HexCoord::new(5, 6)], &mut units);
+        assert_eq!(
+            detect_encirclement(&g, &a, &units),
+            EncirclementLevel::None
+        );
+        let idx = units.iter().position(|x| x.is_hq()).unwrap();
+        units[idx].org = 0.0; // HQ broken — it can no longer sustain anyone
+        assert_eq!(detect_encirclement(&g, &a, &units), EncirclementLevel::Full);
+    }
+
+    #[test]
+    fn a_lone_hq_is_never_encircled() {
+        let g = grid();
+        let h = hq(0, HexCoord::new(5, 5));
+        let mut units = vec![h.clone()];
+        seal_pocket(&g, &[h.position], &mut units);
+        assert_eq!(
+            detect_encirclement(&g, &h, &units),
             EncirclementLevel::None
         );
     }

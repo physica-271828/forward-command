@@ -57,6 +57,8 @@ pub fn run() {
 
     // Session starts in Deployment; the French AI defends with elastic defense.
     let mut game = GameController::new(Side::Attacker, CombatTactic::ElasticDefense, 42);
+    // §7.4 settings policy (see battle.rs).
+    game.keep_manual_override = settings.keep_manual_override;
     game.location = "Arena".to_string();
     // Surface transition errors instead of swallowing them.
     if let Err(e) = game
@@ -277,7 +279,11 @@ fn shot_driver(
                         &params,
                     ) {
                         if let Some(mu) = state.units.iter_mut().find(|x| x.id == u.id) {
-                            mu.move_order = Some(tactical_core::MoveOrder { path, hours: 0.0 });
+                            mu.move_order = Some(tactical_core::MoveOrder {
+                                path,
+                                hours: 0.0,
+                                queue: Default::default(),
+                            });
                             state.orders_dirty = true;
                         }
                     }
@@ -290,11 +296,12 @@ fn shot_driver(
             // The ribbon renders for the SELECTED unit only — re-select
             // 1.Pz (End Turn cleared the selection), then give the rebuild a
             // few frames before shooting (stage 60).
-            if let Some(u) = state.units.iter().find(|u| {
+            let id = state.units.iter().find(|u| {
                 u.side == tactical_core::unit::Side::Attacker
                     && u.unit_type == tactical_core::unit::UnitType::MediumArmor
-            }) {
-                state.selected_unit = Some(u.id);
+            }).map(|u| u.id);
+            if let Some(id) = id {
+                state.select_only(id);
                 state.orders_dirty = true;
             }
             driver.stage = 60;
@@ -375,8 +382,7 @@ fn shot_driver(
             {
                 let id = u.id;
                 let (x, z) = u.position.to_world(1.0);
-                state.selected_unit = Some(id);
-                state.units_dirty = true;
+                state.select_only(id);
                 for mut cam in q_cam.iter_mut() {
                     cam.target = Vec3::new(x + 2.0, 0.0, z);
                     cam.distance = 15.0;

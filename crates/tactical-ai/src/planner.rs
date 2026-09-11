@@ -768,13 +768,15 @@ impl TacticalAi {
             if !unit.is_combat_effective() {
                 continue;
             }
-            if unit.acted {
-                actions.push(AiAction::Hold { unit_id: unit.id });
-                continue;
-            }
             // §7.4: the player's manual commands win — the
             // division AI never re-plans a manually-overridden battalion.
+            // Checked BEFORE `acted`: an already-acted manual unit must not
+            // get an AI Hold slapped onto its player command.
             if unit.manual_override {
+                continue;
+            }
+            if unit.acted {
+                actions.push(AiAction::Hold { unit_id: unit.id });
                 continue;
             }
             let role = self.assign_role(unit, None);
@@ -1431,12 +1433,10 @@ impl TacticalAi {
             // first (siege of the seized point / pursuit of the target).
             // Direct-fire guns (AT/AA) never blind-bombard — their
             // missions are precision-only, and an area mission at their
-            // own feet splashes the gun itself.
+            // own feet splashes the gun itself. Blind fire never lands on
+            // a zone holding own troops (zone_friend_free).
             if !direct_gun {
-                if let Some(hex) = ctx
-                    .order_goal_in_range(unit)
-                    .or_else(|| self.intel_goal_in_range(unit, ctx))
-                {
+                if let Some(hex) = self.blind_fire_hex(unit, ctx) {
                     return AiAction::FireSupport {
                         attacker_id: unit.id,
                         target_hex: hex,
@@ -1447,14 +1447,12 @@ impl TacticalAi {
 
         // Mobile battery (rocket) out of range: creep into the envelope
         // (toward the objective when blind) — unless the intel zone is
-        // already in range, then shell it instead. Direct-fire guns
-        // (AT/AA) never blind-bombard (precision-only missions).
+        // already in range, then shell it instead (same own-troops-free
+        // gate as above). Direct-fire guns (AT/AA) never blind-bombard
+        // (precision-only missions).
         if !towed && d_fire > unit.attack_range {
             if !direct_gun {
-                if let Some(hex) = ctx
-                    .order_goal_in_range(unit)
-                    .or_else(|| self.intel_goal_in_range(unit, ctx))
-                {
+                if let Some(hex) = self.blind_fire_hex(unit, ctx) {
                     return AiAction::FireSupport {
                         attacker_id: unit.id,
                         target_hex: hex,
@@ -1478,6 +1476,36 @@ impl TacticalAi {
         let hex = ctx.blind_goal(unit.position)?;
         let d = unit.position.distance(hex);
         (d <= unit.attack_range && d >= unit.min_attack_range()).then_some(hex)
+    }
+
+    /// TRUE when no same-side battalion that the area blast can hurt
+    /// stands inside the circle around `hex` (the aim hex + ring 1 — the
+    /// weighted zone). The hurt set is `is_targetable`: combat-effective,
+    /// retreating or withdrawn — a rout through the blast takes shrapnel
+    /// like anyone else. Own AND passive friendlies count.
+    fn zone_friend_free(&self, ctx: &Ctx, hex: HexCoord) -> bool {
+        !ctx
+            .own
+            .iter()
+            .chain(ctx.passive.iter())
+            .any(|f| f.is_targetable() && f.position.distance(hex) <= 1)
+    }
+
+    /// The blind-bombardment aim hex for a battery with no visible
+    /// target, if any exists this turn. The ORDER goal is only shelled
+    /// while the area is free of own troops — a seized point in its hold
+    /// phase (our infantry on / around the hex) must never be bombarded
+    /// back onto our own heads; the intel goal (city / flag zone) needs
+    /// the same clean zone. When neither goal is safe to shell the
+    /// battery simply holds — visible targets are the only acceptable
+    /// fire.
+    fn blind_fire_hex(&self, unit: &BattalionUnit, ctx: &Ctx) -> Option<HexCoord> {
+        ctx.order_goal_in_range(unit)
+            .filter(|&hex| self.zone_friend_free(ctx, hex))
+            .or_else(|| {
+                self.intel_goal_in_range(unit, ctx)
+                    .filter(|&hex| self.zone_friend_free(ctx, hex))
+            })
     }
 
     /// §7.2 infiltration_assault: recon probes the far flanks.
@@ -2093,21 +2121,38 @@ impl TacticalAi {
                 return None;
             }
         }
+        // Area-fire missions hit the WHOLE blast circle (aim hex +
+        // ring 1) — the AI never deliberately shells its own troops. A
+        // candidate whose mission would resolve as AREA is refused while
+        // a same-side battalion the blast can hurt (`is_targetable`:
+        // combat-effective, retreating or withdrawn) sits inside the
+        // circle. That means rockets ALWAYS (their missions are always
+        // area) and a tube battery's non-combat-effective candidates (a
+        // retreating enemy — no precise shot exists against it). A
+        // tube's combat-effective candidate resolves PRECISE (single
+        // hex, no splash) and needs no gate. "Friendly" includes passive
+        // friendlies; the player may still accept friendly fire, the AI
+        // never does so deliberately.
+        in_range.retain(|e| {
+            let would_be_precise = !unit.is_rocket() && e.is_combat_effective();
+            would_be_precise
+                || !ctx
+                    .own
+                    .iter()
+                    .chain(ctx.passive.iter())
+                    .any(|f| f.is_targetable() && f.position.distance(e.position) <= 1)
+        });
+        if in_range.is_empty() {
+            return None;
+        }
         // An Engage order shells the target unit itself whenever
         // it is in range (the pursuit is personal); a Seize order prefers
-        // the point's own defenders. The rocket blast-safety check
-        // covers passive friendlies too — an allied battalion in the blast
-        // is a friendly casualty all the same.
+        // the point's own defenders. Both candidates already passed the
+        // zone-clean gate above.
         match ctx.order {
             Some(DivOrderTarget::Engage { unit: uid, .. }) => {
                 if let Some(t) = in_range.iter().find(|e| e.id == uid) {
-                    if !unit.is_rocket()
-                        || !ctx.own.iter().chain(ctx.passive.iter()).any(|f| {
-                            f.is_combat_effective() && f.position.distance(t.position) <= 1
-                        })
-                    {
-                        return Some(t.position);
-                    }
+                    return Some(t.position);
                 }
             }
             Some(DivOrderTarget::Seize { hex }) => {
@@ -2116,32 +2161,10 @@ impl TacticalAi {
                     .filter(|e| e.position == hex || e.position.distance(hex) == 1)
                     .min_by(|a, b| weakness_cmp(a, b).then(a.id.cmp(&b.id)))
                 {
-                    if !unit.is_rocket()
-                        || !ctx.own.iter().chain(ctx.passive.iter()).any(|f| {
-                            f.is_combat_effective() && f.position.distance(best.position) <= 1
-                        })
-                    {
-                        return Some(best.position);
-                    }
+                    return Some(best.position);
                 }
             }
             None => {}
-        }
-        // Rocket salvos hit EVERY unit in the 7-hex zone at full
-        // strength — refuse aim hexes whose blast contains a friendly. (The
-        // player may still choose to accept friendly fire; the AI never
-        // does so deliberately.) "Friendly" includes passive
-        // friendlies.
-        if unit.is_rocket() {
-            in_range.retain(|e| {
-                !ctx.own
-                    .iter()
-                    .chain(ctx.passive.iter())
-                    .any(|f| f.is_combat_effective() && f.position.distance(e.position) <= 1)
-            });
-            if in_range.is_empty() {
-                return None;
-            }
         }
 
         // The standard-assault cards run FIRE PREPARATION before

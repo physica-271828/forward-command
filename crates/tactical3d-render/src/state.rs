@@ -7,7 +7,7 @@ use tactical_combat::AttackOrder;
 use tactical_core::fog::{FogOfWar, VisibilityState};
 use tactical_core::grid::HexGrid;
 use tactical_core::hex::HexCoord;
-use tactical_core::unit::{BattalionUnit, Side};
+use tactical_core::unit::{BattalionUnit, Side, UnitState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighlightKind {
@@ -21,22 +21,52 @@ pub enum HighlightKind {
     Report,
 }
 
+/// Box-select drag bookkeeping (DESIGN.md §9.3): the window-space cursor
+/// position where the left button went down plus its live position. The
+/// drag becomes a box (`active`) only past the click/drag threshold —
+/// below it the release stays a plain click, the same splitter role
+/// camera.rs's RIGHT_CLICK_PX plays for right-click orbit-vs-command.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoxSelect {
+    pub anchor: Vec2,
+    pub current: Vec2,
+    pub active: bool,
+}
+
+/// Left-drag must exceed this cursor-pixel distance before it becomes a
+/// box select; below it the release is a plain (de)select click.
+pub const BOX_SELECT_PX: f32 = 6.0;
+
+impl BoxSelect {
+    /// The dragged rectangle (normalized), in window logical pixels.
+    pub fn rect(&self) -> (Vec2, Vec2) {
+        (
+            self.anchor.min(self.current),
+            self.anchor.max(self.current),
+        )
+    }
+}
+
 /// Sector deployment (OOB "deploy to sector"): the division
 /// being placed and the drag anchor of the rectangle. While `anchor` is
 /// Some the player is dragging; the preview rectangle is highlighted and
-/// committed on mouse release.
+/// committed on mouse release. `tag` is its owner country — together with
+/// the division name the command identity (§7.5), so a drag for the
+/// player's own division never lands on an ally's same-name one.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectorPick {
+    pub tag: String,
     pub division: String,
     pub anchor: Option<HexCoord>,
 }
 
 /// Which recall the confirmation dialog is asking about —
-/// the whole player force or one division (OOB "recall" affordance).
+/// the whole player force or one (owner tag, division name) group
+/// (OOB "recall" affordance).
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecallKind {
     All,
-    Division(String),
+    Division { tag: String, division: String },
 }
 
 /// UI/command interaction mode. The mouse itself is the command
@@ -54,8 +84,11 @@ pub enum CommandMode {
 /// Division-order target picking — set while the HQ radial bar's
 /// Seize / Engage buttons await a map pick (left-click commits, right-click
 /// / Esc cancels). Mutually exclusive with selection-based commands.
+/// `tag` + `division` are the commanded division's (owner country, name)
+/// identity (§7.5) — the committed order must land on that division only.
 #[derive(Debug, Clone)]
 pub struct DivPick {
+    pub tag: String,
     pub division: String,
     pub kind: DivPickKind,
 }
@@ -82,6 +115,19 @@ pub struct TacticalState {
     pub turn: u32,
 
     pub selected_unit: Option<usize>,
+    /// Multi-select (DESIGN.md §9.3): the ordered selection set.
+    /// `selected_unit` remains the PRIMARY member — the radial ring /
+    /// range ring / command-line overlays anchor on it — and always
+    /// equals `selection.last()`. Mutate the set ONLY through the
+    /// `select_*` helpers so the invariant holds.
+    pub selection: Vec<usize>,
+    /// RTS control groups 1..=9 (slot index 0..=8): stored selection
+    /// sets, battle-scoped (never persisted). Dead / off-board members
+    /// are pruned on recall and by the per-frame upkeep.
+    pub control_groups: [Vec<usize>; 9],
+    /// Box-select drag state — Some while the left button is held on the
+    /// map during TacticalActive (see [`BoxSelect`]).
+    pub box_select: Option<BoxSelect>,
     pub hover_hex: Option<HexCoord>,
     pub command_mode: CommandMode,
     pub highlights: Vec<(HexCoord, HighlightKind)>,
@@ -127,6 +173,12 @@ pub struct TacticalState {
     /// Set when a NEW order is issued: the route ribbon plays its grow-from-
     /// unit animation. Plain path advances just rebuild.
     pub arrows_grow: bool,
+    /// Where the next grow animation starts: visible fraction of the NEW
+    /// chain when the reveal begins — 0.0 = fresh order (grow from the
+    /// unit); a Shift-append sets old_length/new_length so the existing
+    /// chain stays put while the added leg draws on. Consumed together
+    /// with [`Self::arrows_grow`].
+    pub arrows_grow_from: f32,
 
     /// The side the local player commands (fog is computed for this side).
     pub player_side: tactical_core::unit::Side,
@@ -471,6 +523,9 @@ impl Default for TacticalState {
             ai_fog: None,
             turn: 0,
             selected_unit: None,
+            selection: Vec::new(),
+            control_groups: std::array::from_fn(|_| Vec::new()),
+            box_select: None,
             hover_hex: None,
             command_mode: CommandMode::Select,
             highlights: Vec::new(),
@@ -486,6 +541,7 @@ impl Default for TacticalState {
             orders_dirty: false,
             ally_sectors_dirty: false,
             arrows_grow: false,
+            arrows_grow_from: 0.0,
             player_side: tactical_core::unit::Side::Attacker,
             pointer_over_ui: false,
             debug_no_fog: false,
@@ -564,6 +620,137 @@ impl TacticalState {
     pub fn unit_by_id(&self, id: usize) -> Option<&BattalionUnit> {
         self.units.iter().find(|u| u.id == id)
     }
+
+    // -----------------------------------------------------------------
+    // Selection set (DESIGN.md §9.3 multi-select). Every helper keeps the
+    // invariant `selected_unit == selection.last()` (None when empty) and
+    // flags `units_dirty` on change so the selection rings follow at once.
+    // -----------------------------------------------------------------
+
+    pub fn is_selected(&self, id: usize) -> bool {
+        self.selection.contains(&id)
+    }
+
+    /// Single select: the set becomes exactly `id` (the plain left-click).
+    pub fn select_only(&mut self, id: usize) {
+        self.selection.clear();
+        self.selection.push(id);
+        self.selected_unit = Some(id);
+        self.units_dirty = true;
+    }
+
+    /// Replace the set with `ids` (box select / control-group recall);
+    /// duplicates are dropped keeping first-seen order. An empty list
+    /// clears the selection.
+    pub fn select_multiple(&mut self, ids: Vec<usize>) {
+        let mut set: Vec<usize> = Vec::with_capacity(ids.len());
+        for id in ids {
+            if !set.contains(&id) {
+                set.push(id);
+            }
+        }
+        if set == self.selection {
+            return;
+        }
+        self.selected_unit = set.last().copied();
+        self.selection = set;
+        self.units_dirty = true;
+    }
+
+    /// Shift+box union (DESIGN.md §9.3): `ids` join the existing set —
+    /// current members keep their order first, new ones append in the
+    /// given (box) order; the primary becomes the union's last member.
+    pub fn select_union(&mut self, ids: Vec<usize>) {
+        let mut set = self.selection.clone();
+        for id in ids {
+            if !set.contains(&id) {
+                set.push(id);
+            }
+        }
+        if set == self.selection {
+            return;
+        }
+        self.selected_unit = set.last().copied();
+        self.selection = set;
+        self.units_dirty = true;
+    }
+
+    /// Shift-click: `id` joins the set (becoming the primary) or leaves
+    /// it; removing the primary hands the role to the previous member.
+    pub fn toggle_select(&mut self, id: usize) {
+        if self.selection.contains(&id) {
+            self.selection.retain(|&x| x != id);
+            self.selected_unit = self.selection.last().copied();
+        } else {
+            self.selection.push(id);
+            self.selected_unit = Some(id);
+        }
+        self.units_dirty = true;
+    }
+
+    pub fn clear_selection(&mut self) {
+        if self.selection.is_empty() && self.selected_unit.is_none() {
+            return;
+        }
+        self.selection.clear();
+        self.selected_unit = None;
+        self.units_dirty = true;
+    }
+
+    /// A member stays selectable while it is on the board and not gone
+    /// for good — broken/retreating battalions KEEP their selection until
+    /// the turn handover clears it (the ring must not vanish the instant
+    /// a retreat is ordered); the off-board / annihilated / surrendered
+    /// ones drop out. Also sweeps the control groups.
+    pub fn prune_selection(&mut self) {
+        let gone = |u: &&BattalionUnit| {
+            u.position == BattalionUnit::OFFBOARD
+                || matches!(
+                    u.state,
+                    UnitState::Eliminated | UnitState::Surrendered | UnitState::LeftBattle
+                )
+        };
+        let before = self.selection.len();
+        self.selection
+            .retain(|id| self.units.iter().find(|u| u.id == *id).is_some_and(|u| !gone(&u)));
+        if self.selection.len() != before {
+            self.selected_unit = self.selection.last().copied();
+            self.units_dirty = true;
+        }
+        for group in self.control_groups.iter_mut() {
+            group.retain(|id| self.units.iter().find(|u| u.id == *id).is_some_and(|u| !gone(&u)));
+        }
+    }
+
+    /// Ctrl+N: store the current selection as control group `slot`
+    /// (0..=8). Returns the stored count; an empty selection stores
+    /// nothing and leaves the group alone.
+    pub fn store_control_group(&mut self, slot: usize) -> usize {
+        if self.selection.is_empty() {
+            return 0;
+        }
+        let set = self.selection.clone();
+        // A battalion belongs to ONE group (RTS convention): unlink the
+        // selected units from every other slot before storing.
+        for (i, group) in self.control_groups.iter_mut().enumerate() {
+            if i != slot {
+                group.retain(|id| !set.contains(id));
+            }
+        }
+        self.control_groups[slot] = set;
+        self.control_groups[slot].len()
+    }
+
+    /// N: recall control group `slot` — dead / off-board members are
+    /// dropped first; a group with nothing left does not touch the
+    /// current selection.
+    pub fn recall_control_group(&mut self, slot: usize) {
+        self.prune_selection();
+        let ids = self.control_groups[slot].clone();
+        if !ids.is_empty() {
+            self.select_multiple(ids);
+        }
+    }
 }
 
 /// Render-quality knobs sourced from settings.json. Inserted by the bin
@@ -598,5 +785,131 @@ impl Default for RenderQuality {
             shadows: true,
             shadow_level: 1,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tactical_core::unit::UnitType;
+
+    fn inf(id: usize, pos: HexCoord) -> BattalionUnit {
+        BattalionUnit::new(id, format!("U{id}"), UnitType::Infantry, Side::Attacker, pos)
+    }
+
+    #[test]
+    fn select_helpers_keep_the_primary_invariant() {
+        let mut s = TacticalState::default();
+        s.select_only(3);
+        assert_eq!(s.selection, vec![3]);
+        assert_eq!(s.selected_unit, Some(3));
+
+        s.toggle_select(7);
+        assert_eq!(s.selection, vec![3, 7]);
+        assert_eq!(s.selected_unit, Some(7), "a newly added member becomes primary");
+
+        s.toggle_select(7); // toggle off the primary
+        assert_eq!(s.selection, vec![3]);
+        assert_eq!(s.selected_unit, Some(3), "the previous member takes over");
+
+        s.select_multiple(vec![9, 4, 9]);
+        assert_eq!(s.selection, vec![9, 4], "duplicates dropped, order kept");
+        assert_eq!(s.selected_unit, Some(4));
+
+        s.clear_selection();
+        assert!(s.selection.is_empty() && s.selected_unit.is_none());
+    }
+
+    #[test]
+    fn select_union_keeps_old_members_and_appends_new() {
+        let mut s = TacticalState::default();
+        s.select_multiple(vec![3, 1]);
+        s.select_union(vec![1, 7, 5]);
+        assert_eq!(s.selection, vec![3, 1, 7, 5], "old first, new in box order, deduped");
+        assert_eq!(s.selected_unit, Some(5), "primary = union last");
+        // A fully-covered box changes nothing.
+        s.select_union(vec![1, 3]);
+        assert_eq!(s.selection, vec![3, 1, 7, 5]);
+    }
+
+    #[test]
+    fn box_select_rect_is_normalized() {
+        let b = BoxSelect {
+            anchor: Vec2::new(100.0, 50.0),
+            current: Vec2::new(20.0, 200.0),
+            active: true,
+        };
+        let (min, max) = b.rect();
+        assert_eq!(min, Vec2::new(20.0, 50.0));
+        assert_eq!(max, Vec2::new(100.0, 200.0));
+    }
+
+    #[test]
+    fn prune_drops_the_gone_but_keeps_the_retreating() {
+        let mut s = TacticalState::default();
+        s.units = vec![
+            inf(1, HexCoord::new(1, 1)),
+            inf(2, HexCoord::new(2, 1)),
+            inf(3, HexCoord::new(3, 1)),
+            inf(4, HexCoord::new(4, 1)),
+        ];
+        s.units[1].state = UnitState::Eliminated;
+        s.units[2].state = UnitState::Retreating;
+        s.units[3].position = BattalionUnit::OFFBOARD;
+        s.select_multiple(vec![1, 2, 3, 4]);
+        s.prune_selection();
+        assert_eq!(
+            s.selection,
+            vec![1, 3],
+            "eliminated and off-board members drop out; a retreating one keeps its selection"
+        );
+        assert_eq!(s.selected_unit, Some(3));
+    }
+
+    #[test]
+    fn control_groups_store_recall_and_prune() {
+        let mut s = TacticalState::default();
+        s.units = vec![
+            inf(1, HexCoord::new(1, 1)),
+            inf(2, HexCoord::new(2, 1)),
+            inf(3, HexCoord::new(3, 1)),
+        ];
+        assert_eq!(s.store_control_group(0), 0, "empty selection stores nothing");
+        s.select_multiple(vec![1, 2]);
+        assert_eq!(s.store_control_group(0), 2);
+
+        s.clear_selection();
+        s.recall_control_group(0);
+        assert_eq!(s.selection, vec![1, 2]);
+
+        // A member that dies is pruned on recall.
+        s.units[1].state = UnitState::Eliminated;
+        s.recall_control_group(0);
+        assert_eq!(s.selection, vec![1]);
+
+        // A fully dead group does not disturb the current selection.
+        s.units[0].state = UnitState::Eliminated;
+        s.clear_selection();
+        s.select_only(3);
+        s.recall_control_group(0);
+        assert_eq!(s.selection, vec![3]);
+    }
+
+    #[test]
+    fn storing_a_group_unlinks_members_from_other_groups() {
+        // RTS convention: one battalion = one group. Re-assigning a unit
+        // to a new slot removes it from the old slot.
+        let mut s = TacticalState::default();
+        s.units = vec![
+            inf(1, HexCoord::new(1, 1)),
+            inf(2, HexCoord::new(2, 1)),
+            inf(3, HexCoord::new(3, 1)),
+        ];
+        s.select_multiple(vec![1, 2]);
+        s.store_control_group(0);
+        s.select_multiple(vec![2, 3]);
+        s.store_control_group(1);
+        assert_eq!(s.control_groups[0], vec![1], "2 moved to group 2");
+        assert_eq!(s.control_groups[1], vec![2, 3]);
     }
 }

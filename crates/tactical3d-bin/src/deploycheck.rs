@@ -244,23 +244,27 @@ pub fn run(opts: Opts) {
         (def_tactic, atk_tactic)
     };
     // Split-deploy semantics like headless: player slices by contingent,
-    // then the enemy whole-side.
-    let allied_divs: HashSet<String> = spec
+    // then the enemy whole-side. The slice key is the (owner tag, division
+    // name) pair — a same-name division under two nations stays with its
+    // own slice.
+    let allied_keys: HashSet<(String, String)> = spec
         .allies
         .iter()
-        .flat_map(|a| a.divisions.iter().cloned())
+        .flat_map(|a| a.divisions.iter().map(move |d| (a.tag.clone(), d.clone())))
         .collect();
-    let player_divs: Vec<String> = if allied_divs.is_empty() {
+    let player_divs: Vec<(String, String)> = if allied_keys.is_empty() {
         Vec::new()
     } else {
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen: HashSet<(String, String)> = HashSet::new();
         units
             .iter()
             .filter(|u| {
-                u.side == player && !u.division.is_empty() && !allied_divs.contains(&u.division)
+                u.side == player
+                    && !u.division.is_empty()
+                    && !allied_keys.contains(&(u.tag.clone(), u.division.clone()))
             })
-            .map(|u| u.division.clone())
-            .filter(|d| seen.insert(d.clone()))
+            .map(|u| (u.tag.clone(), u.division.clone()))
+            .filter(|k| seen.insert(k.clone()))
             .collect()
     };
     let split = !spec.allies.is_empty();
@@ -271,6 +275,7 @@ pub fn run(opts: Opts) {
         let mut out: Vec<String> = Vec::new();
         for d in player_divs
             .iter()
+            .map(|(_, d)| d)
             .chain(spec.allies.iter().flat_map(|a| a.divisions.iter()))
         {
             if seen.insert(d.clone()) {
@@ -280,6 +285,7 @@ pub fn run(opts: Opts) {
         out
     };
     let deploy_division = |units: &mut Vec<BattalionUnit>,
+                           tag: &str,
                            div: &str,
                            card: CombatTactic,
                            pre_used: &mut HashSet<(i32, i32)>,
@@ -295,11 +301,13 @@ pub fn run(opts: Opts) {
             card,
             pre_used,
             Some(div),
+            Some(tag),
             Some(&all_divisions),
             false, // tooling mirror of the AI flow — arrange everyone
         );
         for u in units.iter_mut() {
             if u.side == side
+                && u.tag == tag
                 && u.division == div
                 && u.undeployed
                 && u.position != BattalionUnit::OFFBOARD
@@ -319,12 +327,14 @@ pub fn run(opts: Opts) {
             player_card,
             &HashSet::new(),
             None,
+            None,
         );
     } else {
         let mut pre_used: HashSet<(i32, i32)> = HashSet::new();
-        for div in &player_divs {
+        for (tag, div) in &player_divs {
             deploy_division(
                 &mut units,
+                tag,
                 div,
                 player_card,
                 &mut pre_used,
@@ -337,6 +347,7 @@ pub fn run(opts: Opts) {
             for div in &cont.divisions {
                 deploy_division(
                     &mut units,
+                    &cont.tag,
                     div,
                     cont.tactic,
                     &mut pre_used,
@@ -355,6 +366,7 @@ pub fn run(opts: Opts) {
         enemy,
         enemy_card,
         &HashSet::new(),
+        None,
         None,
     );
     for u in &mut units {

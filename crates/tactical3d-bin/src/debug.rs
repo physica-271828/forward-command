@@ -144,6 +144,8 @@ pub fn run() {
     crate::window::init_battle_settings(&mut app, &settings);
 
     let mut game = GameController::new(player_side, enemy_tactic, 7);
+    // §7.4 settings policy (see battle.rs).
+    game.keep_manual_override = settings.keep_manual_override;
     game.location = location;
     // Surface transition errors instead of swallowing them.
     if let Err(e) = game
@@ -217,9 +219,21 @@ fn province_map() -> Option<(
     if let Ok(rivers) = tactical_map::IndexMap::load_indexed_bmp(&map_dir.join("rivers.bmp")) {
         gen.set_rivers(rivers);
     }
-    let vps = tactical_map::load_victory_points(&tactical_map::states_dir_of(&hoi4_dir))
-        .unwrap_or_default();
+    let states_dir = tactical_map::states_dir_of(&hoi4_dir);
+    let vps = tactical_map::load_victory_points(&states_dir).unwrap_or_default();
     gen.set_victory_points(vps);
+    // State data drives the village density + factory districts; the
+    // static rail network paints the rail overlay (live per-province
+    // levels come from the save — not wired here yet).
+    gen.set_province_to_state(
+        tactical_map::load_province_to_state(&states_dir).unwrap_or_default(),
+    );
+    gen.set_state_categories(tactical_map::load_state_categories(&states_dir).unwrap_or_default());
+    gen.set_state_industry(tactical_map::load_state_industry(&states_dir).unwrap_or_default());
+    gen.set_state_infrastructure(tactical_map::load_state_infrastructure(&states_dir).unwrap_or_default());
+    gen.set_railways(
+        tactical_map::load_railways(&map_dir.join("railways.txt")).unwrap_or_default(),
+    );
     // Unitstacks index-0 positions anchor VP cities at the real city
     // location within the province.
     gen.set_unit_stacks(tactical_map::load_unit_stacks(

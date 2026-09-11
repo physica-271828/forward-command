@@ -50,6 +50,14 @@ pub struct SaveGame {
     /// carries no registry (older formats) — assembly then runs on the
     /// per-token counts alone.
     pub designs: HashMap<u64, EquipmentDesign>,
+    /// Per-province rail levels from the root `provinces` block
+    /// (`provinces = { <id> = { buildings = { rail_way = { level = N … } }
+    /// } }`): the tactical map gates its railway overlay on these — a
+    /// segment paints only when both endpoint provinces have level > 0
+    /// (DESIGN.md §4.2). Only `level` is read (a damaged-but-graded bed
+    /// still counts; `partial_health`/`healthy_levels` are skipped), and
+    /// provinces without a `rail_way` building are simply absent.
+    pub rail_levels: HashMap<u32, u8>,
 }
 
 /// One entry of the save's root `equipments` registry (§5.2): an equipment

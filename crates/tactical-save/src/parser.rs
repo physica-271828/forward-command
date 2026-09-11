@@ -337,6 +337,67 @@ impl SaveParser {
             }
         }
 
+        // Pass 5: the root `provinces` block — per-province rail
+        // levels (`buildings.rail_way.level`) feeding the tactical map's
+        // live-network railway gating (DESIGN.md §4.2). Only `level` is
+        // read; provinces without a `rail_way` building stay absent.
+        let mut rail_levels: HashMap<u32, u8> = HashMap::new();
+        for (key, group) in root.field_groups() {
+            if key.read_str() != "provinces" {
+                continue;
+            }
+            for (_op, provinces_value) in group.values() {
+                let Ok(provinces_obj) = provinces_value.read_object() else {
+                    continue;
+                };
+                for (id_key, id_group) in provinces_obj.field_groups() {
+                    let Ok(province_id) = id_key.read_str().parse::<u32>() else {
+                        continue;
+                    };
+                    for (_op, province_value) in id_group.values() {
+                        let Ok(province_obj) = province_value.read_object() else {
+                            continue;
+                        };
+                        for (pk, pg) in province_obj.field_groups() {
+                            if pk.read_str() != "buildings" {
+                                continue;
+                            }
+                            for (_op, buildings_value) in pg.values() {
+                                let Ok(buildings_obj) = buildings_value.read_object() else {
+                                    continue;
+                                };
+                                for (bk, bg) in buildings_obj.field_groups() {
+                                    if bk.read_str() != "rail_way" {
+                                        continue;
+                                    }
+                                    for (_op, rail_value) in bg.values() {
+                                        let Ok(rail_obj) = rail_value.read_object() else {
+                                            continue;
+                                        };
+                                        for (rk, _op, rv) in rail_obj.fields() {
+                                            // Numeric scalar (same pattern as
+                                            // `location`): read_str() fails
+                                            // on unquoted numbers.
+                                            if rk.read_str() == "level" {
+                                                if let Some(level) = rv
+                                                    .read_scalar()
+                                                    .ok()
+                                                    .and_then(|s| s.to_u64().ok())
+                                                {
+                                                    rail_levels
+                                                        .insert(province_id, level as u8);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(SaveGame {
             countries,
             templates,
@@ -347,6 +408,7 @@ impl SaveParser {
             leaders,
             armies,
             designs,
+            rail_levels,
         })
     }
 }
@@ -2407,5 +2469,57 @@ countries = {
         assert_eq!(group.child_armies, vec![42, 43]);
         assert_eq!(group.leader, Some(600));
         assert!(group.members.is_empty());
+    }
+
+    #[test]
+    fn provinces_rail_levels_are_extracted() {
+        // Real-save shape: each on-map province nests its
+        // `buildings = { rail_way = { level partial_health healthy_levels } }`;
+        // most provinces carry no buildings block at all. Only `level`
+        // feeds the map — the health fields must not matter.
+        let text = r#"HOI4txt
+provinces = {
+    67 = {
+        victory_points = 2
+        buildings = {
+            supply_node = { level = 1 partial_health = 0 healthy_levels = 1 }
+            rail_way = { level = 1 partial_health = 0 healthy_levels = 1 }
+        }
+    }
+    2 = {
+        buildings = {
+            rail_way = { level = 2 partial_health = 0 healthy_levels = 2 }
+        }
+    }
+    3 = {
+        victory_points = 5
+    }
+    4 = {
+        buildings = {
+            rail_way = { level = 0 partial_health = 0 healthy_levels = 1 }
+        }
+    }
+    not_a_province = {
+        buildings = {
+            rail_way = { level = 9 }
+        }
+    }
+}
+"#;
+        let save = SaveParser::parse_save_from_str(text).unwrap();
+        assert_eq!(save.rail_levels.len(), 3);
+        assert_eq!(save.rail_levels.get(&67), Some(&1));
+        assert_eq!(save.rail_levels.get(&2), Some(&2));
+        // A built-but-damaged bed keeps its level — only the level counts.
+        assert_eq!(save.rail_levels.get(&4), Some(&0));
+        // No `rail_way` building (or no buildings at all) → absent.
+        assert!(!save.rail_levels.contains_key(&3));
+        // Non-numeric keys in the block are skipped, not fatal.
+    }
+
+    #[test]
+    fn missing_provinces_block_yields_empty_rail_levels() {
+        let save = SaveParser::parse_save_from_str(SYNTH_SAVE).unwrap();
+        assert!(save.rail_levels.is_empty());
     }
 }
