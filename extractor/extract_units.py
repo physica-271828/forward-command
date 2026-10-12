@@ -8,8 +8,10 @@ import sys
 _parser = argparse.ArgumentParser(description=__doc__)
 _parser.add_argument("--hoi4-dir", default=os.environ.get("HOI4_DIR", r"D:\Steam\steamapps\common\Hearts of Iron IV"),
                      help="HOI4 install directory (or set HOI4_DIR env var)")
-_parser.add_argument("--out", default=r"D:\OpenCode\Forward Command\forward-command\data",
-                     help="output directory for the extracted JSON tables")
+_DATA_DIR = os.environ.get("FC_DATA_DIR") or os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data"))
+_parser.add_argument("--out", default=_DATA_DIR,
+                     help="output directory for the extracted JSON tables (or set FC_DATA_DIR)")
 _args = _parser.parse_args()
 GAME_DIR = _args.hoi4_dir
 OUT_DIR = _args.out
@@ -17,6 +19,16 @@ UNITS_DIR = os.path.join(GAME_DIR, "common", "units")
 OUT_FILE = os.path.join(OUT_DIR, "unit_templates.json")
 
 COMPARISON_OPS = frozenset({">", "<", ">=", "<=", "!=", "=="})
+
+# Naval and air sub-units never enter the land battle — excluded from BOTH
+# buckets (land independent units like railway guns stay).
+NAVAL_TYPES = frozenset({"capital_ship", "screen_ship", "submarine", "carrier", "support_ship"})
+AIR_TYPES = frozenset({
+    "fighter", "heavy_fighter", "cas", "naval_bomber", "tactical_bomber",
+    "strategic_bomber", "scout_plane", "maritime_patrol_plane", "interceptor",
+    "air_transport", "suicide", "missile", "ballistic_missile",
+    "nuclear_missile", "sam_missile", "emplacement_gun_ammo",
+})
 
 
 def tokenize(text):
@@ -40,6 +52,13 @@ def tokenize(text):
         if c == "}":
             tokens.append("}")
             i += 1
+            continue
+        # Compound comparisons come out WHOLE: split into `>` + `=` the
+        # operator never matches COMPARISON_OPS and the number behind it is
+        # silently dropped.
+        if c in "<>!=" and i + 1 < len(text) and text[i + 1] == "=":
+            tokens.append(text[i:i + 2])
+            i += 2
             continue
         if c in "=":
             tokens.append("=")
@@ -256,6 +275,7 @@ def main():
     files = collect_unit_files(UNITS_DIR)
     all_units = {}
     support_units = {}
+    excluded = 0
     errors = []
 
     for fpath in files:
@@ -267,10 +287,19 @@ def main():
                 if not isinstance(sub_data, dict):
                     continue
                 entry = extract_subunit(name, sub_data)
-                is_support = (sub_data.get("regimental") == False or
-                              sub_data.get("combat_width") == 0 or
-                              "support" in (sub_data.get("group") or ""))
-                if is_support:
+                if NAVAL_TYPES & set(entry["types"]) or AIR_TYPES & set(entry["types"]):
+                    excluded += 1
+                    continue
+                # Buckets: anything with a frontage is a line unit (the
+                # `*_brigade` artillery/AT/AA forms included — their
+                # `*_support` group names are NOT the support column);
+                # zero-width `group = support` entries (divisional and
+                # regimental support companies alike) are support; the rest
+                # (railway guns, ...) stays line.
+                combat_width = sub_data.get("combat_width") or 0
+                if combat_width > 0:
+                    all_units[name] = entry
+                elif sub_data.get("group") == "support":
                     support_units[name] = entry
                 else:
                     all_units[name] = entry
@@ -285,13 +314,17 @@ def main():
     with open(OUT_FILE, "w", encoding="utf-8") as f:
         json.dump(combined, f, indent=2, ensure_ascii=False)
 
-    print(f"Extracted {len(all_units)} line battalions + {len(support_units)} support companies")
+    print(f"Extracted {len(all_units)} line battalions + {len(support_units)} support companies ({excluded} naval/air excluded)")
     print(f"From {len(files)} files")
     print(f"Output: {OUT_FILE}")
     if errors:
         print(f"\nErrors ({len(errors)}):")
         for fn, err in errors:
             print(f"  {fn}: {err}")
+        # A partial extraction must not look like a clean run — the release
+        # flow would ship a silently shrunk table. The JSON above is already
+        # written, so the published table stays inspectable.
+        sys.exit(1)
 
 
 if __name__ == "__main__":

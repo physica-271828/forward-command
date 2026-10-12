@@ -95,7 +95,9 @@ pub fn load_definition_csv(path: &Path) -> Result<HashMap<u32, ProvinceInfo>> {
             continue;
         }
         let parts: Vec<&str> = line.split(';').collect();
-        if parts.len() < 4 {
+        // Column 4 (type / terrain) is read unconditionally below, so a
+        // truncated 4-field row is malformed too — skip, never panic.
+        if parts.len() < 5 {
             continue;
         }
         // A non-numeric id means this is the header row (or junk): skip.
@@ -305,6 +307,19 @@ mod tests {
             matches!(err, MapError::InvalidCsv { .. }),
             "unexpected: {err}"
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn definition_csv_truncated_four_field_row_is_skipped_not_panicked() {
+        // A hand-edited/truncated row with exactly 4 fields (id;R;G;B)
+        // must be skipped like any malformed line — never an
+        // index-out-of-bounds panic on the map-load path.
+        let csv = "9;4;5;6\n1;88;0;0;land;true;plains;1\n";
+        let path = write_temp("def_trunc4", csv);
+        let defs = load_definition_csv(&path).unwrap();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[&1].terrain, Terrain::Plains);
         let _ = std::fs::remove_file(&path);
     }
 

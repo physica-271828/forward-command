@@ -39,6 +39,9 @@ pub fn run(dry: bool) {
     };
 
     println!("\nWaiting for tac_start (fire the tactical decision in HOI4)…\n");
+    // The last scan's published set — retracted the moment a battle
+    // launches, so a finished battle leaves no entry decision lit.
+    let mut published: Option<crate::publish::ScanOutcome> = None;
     loop {
         let msgs = listener.poll();
         let mut consumed = vec![false; msgs.len()];
@@ -47,6 +50,30 @@ pub fn run(dry: bool) {
                 continue;
             }
             match &msgs[i] {
+                // Scan request (DESIGN.md §10.7): answer the mod's
+                // scan-waiting flag and publish the commandable battles
+                // into the decision layer. Blocks this CLI loop for the
+                // snapshot + parse, exactly like the pick resolution —
+                // which is why the receipt goes out first, from the tag
+                // the click carried.
+                LogMessage::TacScan { ts, tag } => {
+                    println!("[{ts}] tac_scan: publishing commandable battles…");
+                    match crate::publish::scan_and_publish(&settings, dry, tag) {
+                        Ok(out) => {
+                            if out.published == 0 {
+                                println!("no commandable battles right now");
+                            } else {
+                                println!(
+                                    "published {} state(s) — pick one on the map",
+                                    out.published
+                                );
+                            }
+                            published = Some(out);
+                        }
+                        Err(e) => eprintln!("scan failed: {e}"),
+                    }
+                    continue;
+                }
                 LogMessage::TacStart {
                     province,
                     tag,
@@ -86,8 +113,12 @@ pub fn run(dry: bool) {
                         match (hoi4, settings.saves_dir()) {
                             (Some(h), Some(s)) => {
                                 let p2s = crate::snapshot::load_p2s(&h);
+                                let injector = crate::settings::live_channel_injector(
+                                    Some(&s),
+                                    settings.log_path().as_deref(),
+                                );
                                 match crate::snapshot::resolve_picked_province(
-                                    &tactical_inject::Injector::new(),
+                                    &injector,
                                     &s,
                                     &p2s,
                                     dry,
@@ -104,7 +135,7 @@ pub fn run(dry: bool) {
                                         // Notify in game + reset every map
                                         // decision (mod event tac_quiet.1 =
                                         // tac_abort payload).
-                                        if let Err(e) = tactical_inject::Injector::new()
+                                        if let Err(e) = injector
                                             .inject_commands(
                                                 &[
                                                     format!("event tac_quiet.1 {tag}"),
@@ -129,10 +160,33 @@ pub fn run(dry: bool) {
                                     }) => {
                                         let names = crate::snapshot::load_vp_names(
                                             &h,
-                                            settings.language()
-                                                == tactical_locale::Language::SimpChinese,
+                                            settings.language().code(),
                                         );
-                                        prompt_battle_choice(&battles, &names)
+                                        // Cancel (empty input / EOF) must reset
+                                        // the mod's tactical mode, exactly like
+                                        // the menu's picker cancel: the state
+                                        // target stays "taken" until the next
+                                        // day otherwise, and the CLI just
+                                        // prints "cancelled".
+                                        let picked = prompt_battle_choice(&battles, &names);
+                                        if picked.is_none() {
+                                            match injector.inject_commands(
+                                                &[
+                                                    format!("event tac_abort.1 {tag}"),
+                                                    "reloadinterface".to_string(),
+                                                ],
+                                                None,
+                                                dry,
+                                            ) {
+                                                Ok(_) => println!(
+                                                    "tactical mode reset (tac_abort + reloadinterface)"
+                                                ),
+                                                Err(e) => eprintln!(
+                                                    "cancel reset injection failed: {e}"
+                                                ),
+                                            }
+                                        }
+                                        picked
                                     }
                                     Err(e) => {
                                         eprintln!(
@@ -148,6 +202,23 @@ pub fn run(dry: bool) {
                     let Some(resolved_province) = resolved_province else {
                         continue;
                     };
+                    // A battle is actually launching: retract every entry
+                    // decision the last scan published so the finished
+                    // battle leaves none of them lit (the picked record
+                    // decays on its own, see the mod's cleanup).
+                    if let Some(p) = published.take() {
+                        let injector = crate::settings::live_channel_injector(
+                            settings.saves_dir().as_deref(),
+                            settings.log_path().as_deref(),
+                        );
+                        if let Err(e) = injector.inject_commands(
+                            &crate::publish::retract_lines(&p.tag, &p.states),
+                            None,
+                            dry,
+                        ) {
+                            eprintln!("retract injection failed: {e}");
+                        }
+                    }
                     match crate::scenario::assemble_live(
                         &settings,
                         resolved_province,
@@ -155,6 +226,7 @@ pub fn run(dry: bool) {
                         attack_dirs,
                         enemy_tactic,
                         *is_player_attacker,
+                        None,
                     ) {
                         Ok(spec) => {
                             crate::battle::run_live(
@@ -164,6 +236,7 @@ pub fn run(dry: bool) {
                                     dry,
                                     mod_ver: ver.clone(),
                                 },
+                                &settings,
                             );
                             // Drain whatever the mod logged WHILE the battle
                             // window was open: a tac_start fired during the

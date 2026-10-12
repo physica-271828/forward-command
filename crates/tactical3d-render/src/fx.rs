@@ -340,11 +340,14 @@ pub(crate) fn draw_floaters(
         // one gate covers enemy congestion/contact markers and barrage
         // damage numbers over fogged intel hexes alike. Kept alive but
         // unpainted — a mid-float reveal shows the tail end legitimately.
+        // The float itself starts from the hex's own surface: a number
+        // rising out of the ground looks buried whenever the model it
+        // belongs to is standing on an elevated hex top.
         let hex = HexCoord::from_world(f.pos.x, f.pos.z, crate::board::HEX_SIZE);
         if state.fog_state(hex) != VisibilityState::Visible {
             return true;
         }
-        let w = f.pos + Vec3::Y * (0.3 + f.t * 0.8);
+        let w = f.pos + Vec3::Y * (crate::picking::unit_y_on_grid(&state, hex) + 0.25 + f.t * 0.8);
         let Some(ndc) = camera.world_to_ndc(cam_tf, w) else {
             return false;
         };

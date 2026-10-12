@@ -34,7 +34,9 @@ use tactical_core::flag::FlagState;
 use tactical_core::fog::{FogOfWar, VisibilityState};
 use tactical_core::grid::HexGrid;
 use tactical_core::hex::HexCoord;
-use tactical_core::movement::{advance_move_orders, refresh_move_order, MovementEvent};
+use tactical_core::movement::{
+    advance_move_orders, refresh_move_order, repoint_carry_hours, MovementEvent,
+};
 use tactical_core::unit::{BattalionUnit, MoveOrder, Side, UnitState};
 use tactical_core::{CombatParams, Terrain};
 
@@ -86,6 +88,7 @@ impl SideDriver {
         width: usize,
         height: usize,
         reveal_turns: u32,
+        sound_mark_turns: u32,
         objective: Option<Vec<HexCoord>>,
     ) -> Self {
         SideDriver {
@@ -93,7 +96,7 @@ impl SideDriver {
             label,
             slice,
             ai: TacticalAi::new(side, tactic, seed),
-            fog: FogOfWar::new(width, height, reveal_turns),
+            fog: FogOfWar::new(width, height, reveal_turns, sound_mark_turns),
             orders: Vec::new(),
             objective,
         }
@@ -108,15 +111,14 @@ impl SideDriver {
     }
 }
 
-pub fn run(opts: Opts) {
+pub fn run(opts: Opts, settings: &crate::settings::AppSettings) {
     // --- Build the battle: assemble the scenario (script / province /
     // synthetic — the same pipeline the interactive game uses).
     // A script file overrides the map, so "synthetic" means: no script AND
     // the arena map choice.
     let synthetic =
         opts.scenario.file.is_none() && matches!(opts.scenario.map, MapChoice::Arena);
-    let settings = crate::settings::AppSettings::load();
-    let spec = match crate::scenario::assemble(&opts.scenario, &settings) {
+    let spec = match crate::scenario::assemble(&opts.scenario, settings) {
         Ok(spec) => spec,
         Err(e) => {
             eprintln!("--headless: {e}");
@@ -146,6 +148,8 @@ pub fn run_battle(
 ) {
     let grid = spec.grid;
     let zones = spec.zones.clone();
+    let retreat_rim = spec.retreat_rim.clone();
+    let staging = spec.staging.clone();
     let mut units = spec.units;
     // §6.11: the battle's flag board (city = 1 urban flag, field = 3
     // flags) — derived at assembly; `None` = annihilation-only.
@@ -156,6 +160,30 @@ pub fn run_battle(
         (&zones.0, &zones.1)
     } else {
         (&zones.1, &zones.0)
+    };
+    // ENH-0158: the defender's deployment corridor — the attacker's
+    // approach routes to the keypoints (battle params are the shared code
+    // defaults everywhere).
+    let corridor: Vec<HexCoord> = {
+        let anchors: Vec<HexCoord> = flags
+            .as_ref()
+            .map(|f| f.flags.iter().map(|z| z.anchor).collect())
+            .unwrap_or_default();
+        tactical_ai::approach_corridor(
+            &grid,
+            &staging,
+            &zones.0,
+            &zones.1,
+            &anchors,
+            &CombatParams::default(),
+        )
+    };
+    let corridor_of = |side: Side| -> Option<&[HexCoord]> {
+        if side == Side::Defender && !corridor.is_empty() {
+            Some(&corridor)
+        } else {
+            None
+        }
     };
     // The player side's command slices — the player proxy owns every
     // player-side division NOT in an allied contingent; each contingent
@@ -218,9 +246,10 @@ pub fn run_battle(
     // unit was still flagged, so Narvik-style multi-division battles
     // stacked divisions on the same hexes).
     if !split {
-        tactical_ai::ai_deploy(
+        if !tactical_ai::ai_deploy_staged(
             &grid,
             &mut units,
+            &staging,
             player_zone,
             enemy_zone,
             player,
@@ -230,9 +259,26 @@ pub fn run_battle(
                 def_tactic
             },
             &HashSet::new(),
-            None,
-            None,
-        );
+            &HashSet::new(),
+            false,
+        ) {
+            tactical_ai::ai_deploy(
+                &grid,
+                &mut units,
+                player_zone,
+                enemy_zone,
+                player,
+                if player == Side::Attacker {
+                    atk_tactic
+                } else {
+                    def_tactic
+                },
+                &HashSet::new(),
+                None,
+                None,
+                corridor_of(player),
+            );
+        }
     } else {
         let player_card = if player == Side::Attacker {
             atk_tactic
@@ -245,10 +291,28 @@ pub fn run_battle(
         // nations is never deployed by the wrong half of the split.
         let mut deploy_division =
             |pre_used: &mut HashSet<(i32, i32)>, tag: &str, div: &str, card: CombatTactic| {
+                // ENH-0157: the attacker's divisions stage on their own
+                // source provinces' areas (AI / auto-deploy only); the
+                // defender and unmapped stragglers keep the whole zone.
+                let zone: &[HexCoord] = if player == Side::Attacker && !staging.is_empty() {
+                    units
+                        .iter()
+                        .find(|u| u.side == player && u.tag == tag && u.division == div)
+                        .and_then(|u| u.hoi4_province)
+                        .and_then(|p| {
+                            staging
+                                .iter()
+                                .find(|(s, _)| *s == p)
+                                .map(|(_, c)| c.as_slice())
+                        })
+                        .unwrap_or(player_zone)
+                } else {
+                    player_zone
+                };
                 tactical_ai::ai_deploy_impl(
                     &grid,
                     &mut units,
-                    player_zone,
+                    zone,
                     enemy_zone,
                     player,
                     card,
@@ -257,6 +321,7 @@ pub fn run_battle(
                     Some(tag),
                     Some(&all_divisions),
                     false,
+                    corridor_of(player),
                 );
                 for u in units.iter_mut().filter(|u| {
                     u.side == player
@@ -279,9 +344,10 @@ pub fn run_battle(
             }
         }
     }
-    tactical_ai::ai_deploy(
+    if !tactical_ai::ai_deploy_staged(
         &grid,
         &mut units,
+        &staging,
         enemy_zone,
         player_zone,
         enemy,
@@ -291,9 +357,26 @@ pub fn run_battle(
             def_tactic
         },
         &HashSet::new(),
-        None,
-        None,
-    );
+        &HashSet::new(),
+        false,
+    ) {
+        tactical_ai::ai_deploy(
+            &grid,
+            &mut units,
+            enemy_zone,
+            player_zone,
+            enemy,
+            if enemy == Side::Attacker {
+                atk_tactic
+            } else {
+                def_tactic
+            },
+            &HashSet::new(),
+            None,
+            None,
+            corridor_of(enemy),
+        );
+    }
     // scenario::assemble flags the player's battalions undeployed (the
     // interactive flow places them from the OOB); headless has no such
     // phase — the AI just deployed everyone, so the flag must not linger.
@@ -306,6 +389,9 @@ pub fn run_battle(
     // §6.8: retreats (incl. the fire-phase step-aside) score against the
     // defender zone's rim — the reachable province boundary.
     combat.set_retreat_zones(Some(zones.clone()));
+    // Interior battles: the province-boundary rim overrides the defender
+    // zone's east rim (§4.2 step 9).
+    combat.set_retreat_rim(retreat_rim);
     // Pre-battle intel: the enemy deployment zone. Each unit marches on its
     // NEAREST zone hex (the whole front advances, not one centroid point —
     // the Warsaw strip's centroid sits 25 hexes off the border). The old
@@ -345,6 +431,7 @@ pub fn run_battle(
             grid.width,
             grid.height,
             params.fog_reveal_duration_turns,
+            params.sound_mark_turns,
             if player == Side::Attacker {
                 intel.clone()
             } else {
@@ -367,6 +454,7 @@ pub fn run_battle(
             grid.width,
             grid.height,
             params.fog_reveal_duration_turns,
+            params.sound_mark_turns,
             if player == Side::Attacker {
                 intel.clone()
             } else {
@@ -399,6 +487,7 @@ pub fn run_battle(
                 grid.width,
                 grid.height,
                 params.fog_reveal_duration_turns,
+                params.sound_mark_turns,
                 if player == Side::Attacker {
                     intel.clone()
                 } else {
@@ -420,6 +509,7 @@ pub fn run_battle(
         grid.width,
         grid.height,
         params.fog_reveal_duration_turns,
+        params.sound_mark_turns,
         // The march-to-contact intel belongs to the ATTACKER side, not
         // the player label — with `--headless side=2` the real attacker
         // driver used to get None and never marched to contact.
@@ -503,8 +593,30 @@ pub fn run_battle(
         // same way — allied plans register silently, then all units of the
         // side move and resolve their fire phase together).
         for side in [Side::Attacker, Side::Defender] {
+            // §6.1: our own guns the OPPONENT has heard (the marks in its
+            // fog) — precomputed here because the planning loop below takes
+            // the drivers mutably.
+            let own_marked: Vec<usize> = {
+                let mut marked: HashSet<HexCoord> = HashSet::new();
+                for d in drivers.iter().filter(|d| d.side != side) {
+                    marked.extend(d.fog.firing_marks(turn).map(|(h, _)| h));
+                }
+                units
+                    .iter()
+                    .filter(|u| u.side == side && marked.contains(&u.position))
+                    .map(|u| u.id)
+                    .collect()
+            };
             for d in drivers.iter_mut().filter(|d| d.side == side) {
-                plan_driver(d, &grid, &mut units, turn, flags.as_ref());
+                plan_driver(
+                    d,
+                    &grid,
+                    &mut units,
+                    turn,
+                    flags.as_ref(),
+                    &params,
+                    &own_marked,
+                );
                 if declare(&units, turn, "plan").is_some() {
                     return;
                 }
@@ -519,6 +631,17 @@ pub fn run_battle(
                 &params,
                 turn,
             );
+            // §6.1 sound ranging: each mission that left the tube marks its
+            // firing hex in the OPPONENT's fog — hex intel only, never a
+            // unit — for that side's own planners to react to.
+            for (id, hex) in combat.take_fired_missions() {
+                let Some(firing_side) = units.iter().find(|u| u.id == id).map(|u| u.side) else {
+                    continue;
+                };
+                for d in drivers.iter_mut().filter(|d| d.side != firing_side) {
+                    d.fog.mark_firing(hex, turn);
+                }
+            }
             if declare(&units, turn, "fire phase").is_some() {
                 return;
             }
@@ -650,6 +773,8 @@ fn plan_driver(
     units: &mut Vec<BattalionUnit>,
     turn: u32,
     flags: Option<&FlagState>,
+    params: &CombatParams,
+    own_marked: &[usize],
 ) {
     let side = d.side;
     d.fog.update(grid, units, side, turn);
@@ -676,13 +801,18 @@ fn plan_driver(
         .collect();
     let foe: Vec<BattalionUnit> = view.iter().filter(|u| u.side != side).cloned().collect();
     let visible_foes = foe.iter().filter(|u| u.is_combat_effective()).count();
+    // §6.1 sound ranging: the battery tells THIS driver's fog holds (the
+    // opponent's shooting) — the other half, the marks the opponent holds on
+    // our own guns, is `own_marked` (precomputed by the caller: the planning
+    // loop here only has this side's drivers).
+    let enemy_sound_marks: Vec<(HexCoord, u32)> = d.fog.firing_marks(turn).collect();
 
     let actions = d
         .ai
         // The physical foe list feeds the fog-wall blind-assault probe
         // (dark-fog defenders that halt the march get stormed when
         // beaten/overwhelmed — e.g. the Ioannina script battle).
-        .plan_turn_full(
+        .plan_turn_full_with_sound(
             grid,
             &own,
             &foe,
@@ -690,6 +820,9 @@ fn plan_driver(
             flags,
             (!passive.is_empty()).then_some(passive.as_slice()),
             Some(units),
+            &enemy_sound_marks,
+            own_marked,
+            Some(&d.fog),
         );
     let count = |f: fn(&AiAction) -> bool| actions.iter().filter(|a| f(a)).count();
     println!(
@@ -709,6 +842,8 @@ fn plan_driver(
                 if path.is_empty() {
                     continue;
                 }
+                let control =
+                    tactical_core::pathfinding::control_field(grid, units, side.opponent());
                 if let Some(u) = units.iter_mut().find(|x| x.id == unit_id) {
                     if !u.is_emplaced {
                         let dest = *path.last().unwrap();
@@ -735,9 +870,13 @@ fn plan_driver(
                                     "  {} {} -> move ({},{})",
                                     d.label, u.name, dest.q, dest.r
                                 );
+                                // A real replacement walks the §6.2
+                                // step-memory ladder — the interactive
+                                // apply path's same retention rules.
+                                let carry = repoint_carry_hours(grid, &control, u, &path, params);
                                 u.move_order = Some(MoveOrder {
                                     path,
-                                    hours: 0.0,
+                                    hours: carry,
                                     queue: Default::default(),
                                 });
                             }
@@ -808,7 +947,7 @@ fn plan_driver(
                     .map(|u| u.is_direct_gun())
                     .unwrap_or(false);
                 let enemy_at_hex = units.iter().any(|u| {
-                    u.side != side && u.is_combat_effective() && u.position == target_hex
+                    u.side != side && u.is_targetable() && u.position == target_hex
                 });
                 if direct_gun && !enemy_at_hex {
                     continue;
@@ -862,13 +1001,15 @@ fn plan_driver(
             AiAction::Hold { unit_id } => {
                 // Mirrors the interactive game.rs handling: "no action this
                 // turn" doubles as the Hold stance for AI units — an idle
-                // unit hunkers (+hold_defense_bonus). The old player-only
+                // unit hunkers (+hold_defense_bonus) within the §6.8
+                // eligibility (infantry attribute only; guns, cavalry and
+                // HQs idle without the stance). The old player-only
                 // rationale is gone (can_assault no longer reads the stance;
                 // movement drops it on the first step; assault/retreat clear
                 // it). Still traced: a silently skipped action makes
                 // lock-ups undebuggable.
                 if let Some(u) = units.iter_mut().find(|x| x.id == unit_id) {
-                    if u.is_combat_effective() {
+                    if u.is_combat_effective() && u.can_hold() {
                         u.is_holding = true;
                     }
                 }
@@ -1014,7 +1155,7 @@ fn march_and_fire(
     combat.expire_shocks(units);
 }
 
-/// End of the full turn: attachment regen, command (HQ) org regen, retreat
+/// End of the full turn: command (HQ) org regen, retreat
 /// steps, §6.14 out-of-bounds leaving, encirclement attrition, flag
 /// progress + collapse trigger (§6.11), per-turn flag resets (mirrors
 /// finish_full_turn).
@@ -1033,12 +1174,6 @@ fn full_turn_upkeep(
     for u in units.iter_mut() {
         u.normalize_broken_state();
     }
-    for u in units.iter_mut() {
-        let regen = u.support_str_regen();
-        if regen > 0.0 && u.is_combat_effective() {
-            u.strength = (u.strength + regen).min(u.max_strength);
-        }
-    }
     // §6.13: in-command battalions regenerate org near their HQ.
     combat.apply_command_regen(units);
     let retreating: Vec<usize> = units
@@ -1055,6 +1190,7 @@ fn full_turn_upkeep(
             id,
             true,
             Some((zones.0.as_slice(), zones.1.as_slice())),
+            combat.retreat_rim(),
         );
     }
     // §6.14: a unit lingering oob_leaving_turns full turns in the

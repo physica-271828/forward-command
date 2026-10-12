@@ -4,6 +4,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use tactical_core::rng::XorShift64;
 use tactical_core::{HexCoord, HexDirection, HexGrid, RiverBand, Terrain};
 
 use crate::bmp::ProvinceMap;
@@ -32,6 +33,16 @@ pub struct TacticalMap {
     /// VP display name + city anchor hex for the floating label (only
     /// when the battle province has a real victory point).
     pub vp_label: Option<(String, HexCoord)>,
+    /// Interior battles (§4.2 step 9 — paradrop / civil war / entrapment):
+    /// the rout escape rim OVERRIDES the defender zone's east rim with the
+    /// province boundary (the zone blobs' rims would sit mid-province).
+    /// `None` on ordinary battles, which keep the zone-rim semantics.
+    pub retreat_rim: Option<Vec<HexCoord>>,
+    /// Live battles: each source province's own staging hexes inside the
+    /// attacker zone (land strip slice / sea beach segment / interior
+    /// pockets) — AI / auto-deploy ties each attacking division to its own
+    /// source's staging area. Empty on fallback / script forms.
+    pub staging: Vec<(u32, Vec<HexCoord>)>,
 }
 
 /// §4.2 step 9 deployment zones. Attacker: ~3-hex-deep strips along the
@@ -48,8 +59,9 @@ pub struct DeploymentZones {
 
 /// Bit convention for [`tactical_core::GridCell::river_edges`]: bit `i`
 /// corresponds to `HexDirection::ALL[i]` — canonical definition lives in
-/// tactical-core ([`HexDirection::bit`]); kept here for readability.
-pub fn river_bit(dir: HexDirection) -> u8 {
+/// tactical-core ([`HexDirection::bit`]); this helper keeps the call sites
+/// in this module readable.
+fn river_bit(dir: HexDirection) -> u8 {
     dir.bit()
 }
 
@@ -329,10 +341,16 @@ impl MapGenerator {
         definitions: HashMap<u32, ProvinceInfo>,
         adjacencies: Vec<Adjacency>,
     ) -> Self {
-        let color_to_id: HashMap<u32, u32> = definitions
-            .values()
-            .map(|p| (pack_rgb(p.rgb), p.id))
-            .collect();
+        // The palette is expected to keep its RGBs unique; should two rows
+        // ever share one, the LOWEST province id owns it — a HashMap walk
+        // would otherwise decide by iteration order and map the same save
+        // differently between runs (same seed → same map, §4.2).
+        let mut palette: Vec<&ProvinceInfo> = definitions.values().collect();
+        palette.sort_unstable_by_key(|p| p.id);
+        let mut color_to_id: HashMap<u32, u32> = HashMap::with_capacity(palette.len());
+        for p in palette {
+            color_to_id.entry(pack_rgb(p.rgb)).or_insert(p.id);
+        }
         let ids = map
             .colors()
             .iter()
@@ -477,16 +495,6 @@ fn pack_rgb(rgb: (u8, u8, u8)) -> u32 {
 }
 
 impl MapGenerator {
-    /// (width, height) of the underlying province bitmap in pixels.
-    pub fn map_dimensions(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-
-    /// Look up a province's definition.csv record.
-    pub fn province_info(&self, id: u32) -> Option<&ProvinceInfo> {
-        self.provinces.get(&id)
-    }
-
     /// Every land province present in the bitmap with its pixel area
     /// (single scan over the id grid). The menu backdrop picks a random
     /// scenic province from this list; sea/lake provinces and zero-pixel
@@ -667,11 +675,14 @@ impl MapGenerator {
 
     /// [`generate_with_elevation_seed`] with the attacker's staging ground
     /// taken from real source provinces (see [`resolve_origins`]);
-    /// `fallback_dirs` apply when nothing resolves.
+    /// `fallback_dirs` apply when nothing resolves. `attacker_units` sizes
+    /// the scattered pockets of an INTERIOR battle (a source province that
+    /// IS the battle province — paradrop / civil war / entrapment).
     pub fn generate_from_sources(
         &self,
         province_id: u32,
         source_provinces: &[u32],
+        attacker_units: usize,
         fallback_dirs: &[HexDirection],
         elevation_seed: u64,
     ) -> Result<TacticalMap> {
@@ -681,7 +692,13 @@ impl MapGenerator {
         } else {
             &derived
         };
-        self.generate_impl(province_id, dirs, elevation_seed, Some(source_provinces))
+        self.generate_impl(
+            province_id,
+            dirs,
+            elevation_seed,
+            Some(source_provinces),
+            attacker_units,
+        )
     }
 
     /// (§8.2) The contested province's full neighbour → direction table,
@@ -749,20 +766,22 @@ impl MapGenerator {
         attack_dirs: &[HexDirection],
         elevation_seed: u64,
     ) -> Result<TacticalMap> {
-        self.generate_impl(province_id, attack_dirs, elevation_seed, None)
+        self.generate_impl(province_id, attack_dirs, elevation_seed, None, 0)
     }
 
     /// Shared body of [`generate_with_elevation_seed`] and
     /// [`generate_from_sources`]. `strip_sources` (live battles, where the
     /// save names the attacking divisions' source provinces) stages the
     /// attacker from those provinces' full shared borders; `None` (script
-    /// battles) uses the direction-sector heuristic alone.
+    /// battles) uses the direction-sector heuristic alone. `attacker_units`
+    /// sizes the interior-battle pockets (irrelevant with `None`).
     fn generate_impl(
         &self,
         province_id: u32,
         attack_dirs: &[HexDirection],
         elevation_seed: u64,
         strip_sources: Option<&[u32]>,
+        attacker_units: usize,
     ) -> Result<TacticalMap> {
         let info = self
             .provinces
@@ -810,11 +829,50 @@ impl MapGenerator {
         // origin provinces and fold a staging strip of their territory
         // into the map — see [`resolve_origins`]. The inter-province river
         // (if any) becomes a real crossing obstacle instead of an off-map
-        // note.
+        // note. INTERIOR battle (paradrop / civil war / military-access
+        // entrapment): a source province that IS the battle province means
+        // the attacker's divisions physically stand on the contested
+        // ground — no origin stitch (its own soil is the whole province).
+        // Source composition (live battles): split the attacker's source
+        // provinces into the three staging kinds — INTERIOR (a source that
+        // IS the battle province: paradrop / civil war / entrapment), SEA
+        // (amphibious landing), LAND neighbours (overland attack). Each
+        // kind stages ITS part of the attacking force in its own form —
+        // no kind swallows the others.
+        let (interior_battle, amphibious, land_sources) = match strip_sources {
+            Some(s) => {
+                let interior = s.contains(&province_id);
+                let sea = s.iter().any(|sp| {
+                    self.provinces.get(sp).map(|i| i.kind) == Some(crate::csv::ProvinceKind::Sea)
+                });
+                let land: Vec<u32> = s
+                    .iter()
+                    .copied()
+                    .filter(|sp| {
+                        *sp != province_id
+                            && self.provinces.get(sp).map(|i| i.kind)
+                                == Some(crate::csv::ProvinceKind::Land)
+                    })
+                    .collect();
+                (interior, sea, land)
+            }
+            None => (false, false, Vec::new()),
+        };
         let center_x = (min_x + max_x) as f32 / 2.0;
         let center_y = (min_y + max_y) as f32 / 2.0;
-        let (origins, strip_borders) =
-            self.resolve_origins(&border_pixels, center_x, center_y, attack_dirs, strip_sources);
+        // Only LAND sources stitch staging strips into the map — interior
+        // sources stage in place, sea sources land on the beach.
+        let (origins, strip_borders) = if strip_sources.is_some() && land_sources.is_empty() {
+            (Vec::new(), HashMap::new())
+        } else {
+            self.resolve_origins(
+                &border_pixels,
+                center_x,
+                center_y,
+                attack_dirs,
+                strip_sources.map(|_| land_sources.as_slice()),
+            )
+        };
         // Staging strip: origin-province pixels within ORIGIN_STRIP_PX
         // (Chebyshev) of the shared border. The strip must stay a STRIP —
         // gifting the attacker every origin pixel inside the bbox ballooned
@@ -1083,8 +1141,13 @@ impl MapGenerator {
             let center_y = (min_y + max_y) as f32 / 2.0;
             let dir = direction_from_angle((cy - center_y).atan2(cx - center_x));
             let bit = river_bit(dir);
-            // Mark every in-province hex whose neighbour across `dir` leaves
-            // the province (internal border hex) or the grid (bbox edge).
+            // Mark every in-province hex whose neighbour across `dir`
+            // belongs to a DIFFERENT province (the internal border — on
+            // stitched maps the battle↔origin seam) or leaves the grid
+            // (bbox edge). The playable-mask boundary is NOT the test:
+            // the staging strip folds the seam into the mask, and the
+            // strip's outer edge (same origin province on both sides)
+            // must stay river-free.
             for r in 0..rows {
                 for q in 0..cols {
                     if !in_province[r * cols + q] {
@@ -1092,12 +1155,13 @@ impl MapGenerator {
                     }
                     let coord = HexCoord::new(q as i32, r as i32);
                     let n = coord.neighbor(dir);
-                    let n_inside = n.q >= 0
-                        && n.r >= 0
-                        && (n.q as usize) < cols
-                        && (n.r as usize) < rows
-                        && in_province[n.r as usize * cols + n.q as usize];
-                    if !n_inside {
+                    let crosses_province =
+                        if n.q >= 0 && n.r >= 0 && (n.q as usize) < cols && (n.r as usize) < rows {
+                            cell_pid[n.r as usize * cols + n.q as usize] != cell_pid[r * cols + q]
+                        } else {
+                            true
+                        };
+                    if crosses_province {
                         if let Some(cell) = grid.cell_mut(coord) {
                             cell.river_edges |= bit;
                         }
@@ -1172,11 +1236,58 @@ impl MapGenerator {
             attack_dirs
         };
         grid.attack_dirs = effective_dirs.to_vec();
-        let zones = if origins.is_empty() {
-            deployment_zones(&grid, effective_dirs, &in_province)
-        } else {
+        // The land stitch's zones (its strip carries the dead-peninsula
+        // connectivity prune) — alone it is the whole answer; in a
+        // composition only its attacker strip joins.
+        let stitched = (!origins.is_empty()).then(|| {
             deployment_zones_stitched(&grid, province_id, &cell_pid, &in_province, &strip_hex)
+        });
+        let zones = match (interior_battle, amphibious, stitched) {
+            (false, false, None) => deployment_zones(&grid, effective_dirs, &in_province),
+            (false, false, Some(st)) => st,
+            // Pure interior battle: anchor blobs for the defender (it MUST
+            // hold the keypoints), scattered pockets for the attacker; the
+            // province-boundary rim becomes the rout escape (a blob's east
+            // rim would sit mid-province). No room → plain edge strips.
+            (true, false, None) => {
+                deployment_zones_interior(&grid, &in_province, attacker_units, elevation_seed)
+                    .unwrap_or_else(|| deployment_zones(&grid, effective_dirs, &in_province))
+            }
+            // Pure amphibious landing: ALL beachheads along the sea shore
+            // for the attacker, everything else for the defender. No shore
+            // at all → plain edge strips.
+            (false, true, None) => {
+                deployment_zones_amphibious(&self.provinces, &grid, &in_province, &cell_pid)
+                    .unwrap_or_else(|| deployment_zones(&grid, effective_dirs, &in_province))
+            }
+            // Composed sources (landing + overland, melee + overland, …):
+            // each staging kind contributes its own part of the attacker
+            // zone; nothing resolves → plain edge strips.
+            (i, a, st) => compose_zones(
+                &self.provinces,
+                &grid,
+                &in_province,
+                &cell_pid,
+                i,
+                a,
+                st,
+                attacker_units,
+                elevation_seed,
+            )
+            .unwrap_or_else(|| deployment_zones(&grid, effective_dirs, &in_province)),
         };
+        let retreat_rim = interior_battle.then(|| province_rim(&grid, &in_province));
+        let staging = build_staging(
+            &self.provinces,
+            &grid,
+            &in_province,
+            &cell_pid,
+            strip_sources,
+            &origins,
+            interior_battle,
+            province_id,
+            &zones.attacker,
+        );
 
         Ok(TacticalMap {
             grid,
@@ -1186,6 +1297,8 @@ impl MapGenerator {
             origin_provinces: origins,
             cell_province: cell_pid,
             vp_label,
+            retreat_rim,
+            staging,
         })
     }
 
@@ -1278,9 +1391,15 @@ impl MapGenerator {
         // Pixel (float) → hex (inverse of the centre-sample mapping).
         // The `+ 0.5` on fx/fy is the pixel-CENTRE convention (a stroke
         // pixel spans [p, p+1) in the same continuous space §4.2 step 7
-        // samples), NOT a hex-unit offset: hexes are always ~7.9 px (true
-        // scale; the 512 cap only makes steps LARGER), so any residual
-        // convention error is ≤0.5 px ≈ 0.06 hex — below rounding.
+        // samples), NOT a hex-unit offset. The anchors that feed
+        // `pixel_to_hex{,_raw}` (VP city, road stubs, rail endpoints) take
+        // the same index-space pixels WITHOUT it, so the two inverse
+        // mappings disagree by half a pixel: on an uncapped province — the
+        // grid follows the §4.1 bitmap scale there, ~7.1 hex columns per
+        // pixel, i.e. one hex ≈ 0.14 px — that is ~3.5 hex columns and ~4
+        // hex rows. Where the 512 cap resamples the province coarser than
+        // the bitmap (col_step/row_step ≥ 1 px) the same half pixel shrinks
+        // to ≤ half a hex and sits on the round() boundary.
         let pixel_width = (max_x - min_x + 1) as f32;
         let pixel_height = (max_y - min_y + 1) as f32;
         let col_step = pixel_width / cols as f32;
@@ -1728,8 +1847,10 @@ fn place_factories(
     open.sort_by(by_roll);
     let mut picked = Vec::new();
     for h in villages.into_iter().chain(open).take(need) {
-        grid.set_terrain(h, Terrain::Village);
+        // Direct terrain swap — set_terrain would reset the elevation
+        // (a picked Hills hex keeps its 1–2, the road-village rule).
         if let Some(cell) = grid.cell_mut(h) {
+            cell.terrain = Terrain::Village;
             cell.factory = true;
             cell.road = true;
         }
@@ -3096,6 +3217,571 @@ fn deployment_zones(
     DeploymentZones { attacker, defender }
 }
 
+/// The province's boundary hexes — the interior-battle rout rim
+/// ([`deployment_zones_interior`]): in-province, passable cells with at
+/// least one neighbour outside the province (or off the grid). A rout
+/// walks a real BFS path out of the contested ground here; the defender
+/// blobs' own rims would sit mid-province.
+fn province_rim(grid: &HexGrid, in_province: &[bool]) -> Vec<HexCoord> {
+    let (w, h) = (grid.width, grid.height);
+    let mut rim = Vec::new();
+    for r in 0..h {
+        for q in 0..w {
+            if !in_province[r * w + q] {
+                continue;
+            }
+            let c = HexCoord::new(q as i32, r as i32);
+            if !grid.cell(c).map(|cell| cell.is_passable).unwrap_or(false) {
+                continue;
+            }
+            let boundary = c.neighbors().iter().any(|n| {
+                n.q < 0
+                    || n.r < 0
+                    || n.q as usize >= w
+                    || n.r as usize >= h
+                    || !in_province[n.r as usize * w + n.q as usize]
+            });
+            if boundary {
+                rim.push(c);
+            }
+        }
+    }
+    rim
+}
+
+/// Axial ring walk — every hex within `radius` of `center` (radius 2 is
+/// the ~19-hex neighbourhood the flag clusters also use).
+fn hexes_within(center: HexCoord, radius: i32) -> Vec<HexCoord> {
+    let mut out = Vec::new();
+    for dq in -radius..=radius {
+        let r1 = (-radius - dq).max(-radius);
+        let r2 = (radius - dq).min(radius);
+        for dr in r1..=r2 {
+            out.push(HexCoord::new(center.q + dq, center.r + dr));
+        }
+    }
+    out
+}
+
+/// Multi-source BFS margin over the hex lattice: every cell's distance to
+/// the nearest avoided cell (`avoid`) or non-interior cell (seeds, margin
+/// 0). Hex distance == graph distance on the lattice, so this is the
+/// "depth" of a candidate inside the interior minus the avoid set — the
+/// same metric the flag fallback's anchor sampling uses.
+fn margin_field(
+    grid: &HexGrid,
+    interior_set: &HashSet<(i32, i32)>,
+    avoid: &HashSet<(i32, i32)>,
+) -> Vec<u32> {
+    let (w, h) = (grid.width as i32, grid.height as i32);
+    let mut margin = vec![u32::MAX; grid.width * grid.height];
+    let mut queue: VecDeque<HexCoord> = VecDeque::new();
+    for r in 0..h {
+        for q in 0..w {
+            let c = HexCoord::new(q, r);
+            let idx = (r * w + q) as usize;
+            if !interior_set.contains(&(q, r)) || avoid.contains(&(q, r)) {
+                margin[idx] = 0;
+                queue.push_back(c);
+            }
+        }
+    }
+    while let Some(c) = queue.pop_front() {
+        let d = margin[(c.r * w + c.q) as usize] + 1;
+        for n in c.neighbors() {
+            if n.q < 0 || n.r < 0 || n.q >= w || n.r >= h {
+                continue;
+            }
+            let idx = (n.r * w + n.q) as usize;
+            if margin[idx] == u32::MAX {
+                margin[idx] = d;
+                queue.push_back(n);
+            }
+        }
+    }
+    margin
+}
+
+/// Greedy farthest-point sample over `cands`: candidates below
+/// `min_margin` (BFS margin from the avoid set + non-interior) are
+/// skipped, then the largest-margin candidate at least `min_pairwise`
+/// from every chosen one wins, iteratively. `rng` shuffles the pool first,
+/// so near-ties scatter per battle while staying deterministic per seed.
+#[allow(clippy::too_many_arguments)]
+fn farthest_sample(
+    grid: &HexGrid,
+    cands: &[HexCoord],
+    interior_set: &HashSet<(i32, i32)>,
+    avoid: &HashSet<(i32, i32)>,
+    n: usize,
+    min_pairwise: i32,
+    min_margin: u32,
+    rng: &mut XorShift64,
+) -> Vec<HexCoord> {
+    let margin = margin_field(grid, interior_set, avoid);
+    let w = grid.width as i32;
+    let mut pool: Vec<HexCoord> = cands
+        .iter()
+        .copied()
+        .filter(|c| margin[(c.r * w + c.q) as usize] >= min_margin)
+        .collect();
+    for i in (1..pool.len()).rev() {
+        let j = rng.next_below(i as u64 + 1) as usize;
+        pool.swap(i, j);
+    }
+    let mut chosen: Vec<HexCoord> = Vec::new();
+    while chosen.len() < n {
+        let mut best: Option<(u32, HexCoord)> = None;
+        for &c in &pool {
+            if chosen.iter().any(|cc| c.distance(*cc) < min_pairwise) {
+                continue;
+            }
+            let nearest = chosen
+                .iter()
+                .map(|cc| c.distance(*cc))
+                .min()
+                .unwrap_or(i32::MAX) as u32;
+            let score = margin[(c.r * w + c.q) as usize].min(nearest);
+            if best.map(|(s, _)| score > s).unwrap_or(true) {
+                best = Some((score, c));
+            }
+        }
+        let Some((_, c)) = best else { break };
+        chosen.push(c);
+    }
+    chosen
+}
+
+/// §4.2 step 9 interior battles (paradrop / civil war / military-access
+/// entrapment — the attacker's divisions physically STAND in the battle
+/// province, its source list naming the province itself): no origin
+/// stitch and no edge strip describes the front — the front is
+/// EVERYWHERE. The defender holds anchor blobs, the attacker holds
+/// scattered pockets woven between them — 你中有我，我中有你. Zones are
+/// disjoint by construction and deliberately NOT kept `MIN_ZONE_DISTANCE`
+/// apart — interleaving is the point. `None` when the province cannot
+/// house the defending force at all (the caller falls back).
+fn deployment_zones_interior(
+    grid: &HexGrid,
+    in_province: &[bool],
+    attacker_units: usize,
+    seed: u64,
+) -> Option<DeploymentZones> {
+    let (interior, interior_set) = interior_ground(grid, in_province)?;
+    let mut rng = XorShift64::new(seed);
+    let (defender, defender_set) =
+        interior_blobs(grid, in_province, &interior, &interior_set, &mut rng)?;
+    let attacker = interior_pockets(
+        grid,
+        in_province,
+        &interior,
+        &interior_set,
+        &defender_set,
+        attacker_units,
+        &mut rng,
+    )?;
+    Some(DeploymentZones { attacker, defender })
+}
+
+/// One deployable in-province hex (the deployment zones' shared filter:
+/// in-bounds, in-province, passable, not full-hex water).
+fn deployable_hex(grid: &HexGrid, in_province: &[bool], c: HexCoord) -> bool {
+    let (w, h) = (grid.width, grid.height);
+    c.q >= 0
+        && c.r >= 0
+        && (c.q as usize) < w
+        && (c.r as usize) < h
+        && in_province[c.r as usize * w + c.q as usize]
+        && grid
+            .cell(c)
+            .map(|cell| cell.is_passable && cell.terrain.is_deployable())
+            .unwrap_or(false)
+}
+
+/// The in-province deployable hexes of an interior battle's ground (plus
+/// the lookup set) — `None` below the interior form's floor, where the
+/// edge-strip form describes the cramped ground better.
+fn interior_ground(
+    grid: &HexGrid,
+    in_province: &[bool],
+) -> Option<(Vec<HexCoord>, HashSet<(i32, i32)>)> {
+    /// Floor for the interior form at all.
+    const MIN_INTERIOR_DEPLOYABLE: usize = 30;
+    let (w, h) = (grid.width, grid.height);
+    let interior: Vec<HexCoord> = (0..h)
+        .flat_map(|r| (0..w).map(move |q| HexCoord::new(q as i32, r as i32)))
+        .filter(|&c| deployable_hex(grid, in_province, c))
+        .collect();
+    if interior.len() < MIN_INTERIOR_DEPLOYABLE {
+        return None;
+    }
+    let set = interior.iter().map(|c| (c.q, c.r)).collect();
+    Some((interior, set))
+}
+
+/// The defender's anchor blobs of an interior battle (§4.2 step 9): the
+/// VP-city urban cluster plus its ring (a village-sized VP widens to
+/// radius 2 so the garrison actually fits), or on a city-less field 2–3
+/// blobs around margin-deep, well-separated centres — the same cores the
+/// flag fallback samples its anchors from, so the keypoints the defender
+/// MUST hold stay inside its zone by construction.
+fn interior_blobs(
+    grid: &HexGrid,
+    in_province: &[bool],
+    interior: &[HexCoord],
+    interior_set: &HashSet<(i32, i32)>,
+    rng: &mut XorShift64,
+) -> Option<(Vec<HexCoord>, HashSet<(i32, i32)>)> {
+    let mut defender: Vec<HexCoord> = Vec::new();
+    let mut defender_set: HashSet<(i32, i32)> = HashSet::new();
+    let urban: Vec<HexCoord> = interior
+        .iter()
+        .copied()
+        .filter(|&c| {
+            grid.cell(c)
+                .map(|cell| cell.terrain == Terrain::Urban)
+                .unwrap_or(false)
+        })
+        .collect();
+    if !urban.is_empty() {
+        let radius = if urban.len() < 8 { 2 } else { 1 };
+        for &u in &urban {
+            for c in hexes_within(u, radius) {
+                if deployable_hex(grid, in_province, c) && defender_set.insert((c.q, c.r)) {
+                    defender.push(c);
+                }
+            }
+        }
+    } else {
+        let blob_centres = farthest_sample(
+            grid,
+            interior,
+            interior_set,
+            &HashSet::new(),
+            if interior.len() >= 90 { 3 } else { 2 },
+            5,
+            3,
+            rng,
+        );
+        if blob_centres.is_empty() {
+            return None;
+        }
+        for centre in blob_centres {
+            for c in hexes_within(centre, 2) {
+                if deployable_hex(grid, in_province, c) && defender_set.insert((c.q, c.r)) {
+                    defender.push(c);
+                }
+            }
+        }
+    }
+    if defender.is_empty() {
+        return None;
+    }
+    Some((defender, defender_set))
+}
+
+/// The attacker's scattered pockets of an interior battle: the drop lands
+/// AROUND the held keypoints, not on top of them — pocket centres keep ≥3
+/// hexes from the defender blobs and ≥5 from each other, sized from the
+/// force they must house (a radius-2 pocket holds ~19). Short of room,
+/// the pockets widen twice; the last tier keeps whatever it could place.
+fn interior_pockets(
+    grid: &HexGrid,
+    in_province: &[bool],
+    interior: &[HexCoord],
+    interior_set: &HashSet<(i32, i32)>,
+    defender_set: &HashSet<(i32, i32)>,
+    attacker_units: usize,
+    rng: &mut XorShift64,
+) -> Option<Vec<HexCoord>> {
+    let want = ((attacker_units.max(1) as f32 * 1.3) / 19.0).ceil() as usize;
+    let want = want.clamp(1, 6);
+    for (i, radius) in [2i32, 3, 4].iter().enumerate() {
+        let centres = farthest_sample(grid, interior, interior_set, defender_set, want, 5, 3, rng);
+        let mut attacker: Vec<HexCoord> = Vec::new();
+        let mut attacker_set: HashSet<(i32, i32)> = HashSet::new();
+        for centre in &centres {
+            for c in hexes_within(*centre, *radius) {
+                if deployable_hex(grid, in_province, c)
+                    && !defender_set.contains(&(c.q, c.r))
+                    && attacker_set.insert((c.q, c.r))
+                {
+                    attacker.push(c);
+                }
+            }
+        }
+        let fits = attacker.len() as f32 >= attacker_units.max(1) as f32 * 1.2;
+        if fits || i == 2 {
+            return (!attacker.is_empty()).then_some(attacker);
+        }
+    }
+    unreachable!("the last pocket tier always returns")
+}
+
+/// All deployable in-province hexes outside the attacker zone, kept
+/// `MIN_ZONE_DISTANCE` off it — the defender rule of the amphibious form
+/// and of compositions without an interior part.
+fn rest_of_province(grid: &HexGrid, in_province: &[bool], attacker: &[HexCoord]) -> Vec<HexCoord> {
+    let attacker_set: HashSet<(i32, i32)> = attacker.iter().map(|c| (c.q, c.r)).collect();
+    let (w, h) = (grid.width, grid.height);
+    let mut defender = Vec::new();
+    for r in 0..h {
+        for q in 0..w {
+            let c = HexCoord::new(q as i32, r as i32);
+            if deployable_hex(grid, in_province, c) && !attacker_set.contains(&(c.q, c.r)) {
+                defender.push(c);
+            }
+        }
+    }
+    tactical_core::grid::filter_min_distance(
+        defender,
+        attacker,
+        tactical_core::grid::MIN_ZONE_DISTANCE,
+    )
+}
+
+/// §4.2 step 9 amphibious landings (the attacker's source provinces are SEA
+/// provinces — its divisions cross the water): the attacker stages on ALL
+/// beachheads along the sea shore, not just one compass edge — every
+/// in-province deployable hex within `DEPLOY_STRIP_DEPTH` of a sea-adjacent
+/// shoreline hex, a band that can dwarf the plain edge strip on a ragged
+/// coast. The defender holds EVERYTHING else in the province (it repositions
+/// against the landing anywhere; `MIN_ZONE_DISTANCE` no-man's land and the
+/// deployability filter apply as in [`deployment_zones`]). The flag anchors
+/// redistribute with it by construction — §6.11 samples them from the new,
+/// much larger defender zone. `None` when the province has no sea shore at
+/// all (odd bitmap — the caller falls back to the plain edge strips).
+fn deployment_zones_amphibious(
+    provinces: &HashMap<u32, ProvinceInfo>,
+    grid: &HexGrid,
+    in_province: &[bool],
+    cell_pid: &[u32],
+) -> Option<DeploymentZones> {
+    let attacker = amphibious_beach(provinces, grid, in_province, cell_pid, None)?;
+    let defender = rest_of_province(grid, in_province, &attacker);
+    Some(DeploymentZones { attacker, defender })
+}
+
+/// The amphibious beach band (§4.2 step 9): every in-province deployable
+/// hex within `DEPLOY_STRIP_DEPTH` of a sea-adjacent shoreline hex
+/// (multi-source BFS). `None` when the province has no sea shore at all.
+/// `sea` restricts the band to ONE sea province's own shoreline segment —
+/// the staging areas tie each landing division to the sea it sailed from.
+fn amphibious_beach(
+    provinces: &HashMap<u32, ProvinceInfo>,
+    grid: &HexGrid,
+    in_province: &[bool],
+    cell_pid: &[u32],
+    sea: Option<u32>,
+) -> Option<Vec<HexCoord>> {
+    let (w, h) = (grid.width, grid.height);
+    let sea_cell = |c: HexCoord| {
+        c.q >= 0
+            && c.r >= 0
+            && (c.q as usize) < w
+            && (c.r as usize) < h
+            && provinces
+                .get(&cell_pid[c.r as usize * w + c.q as usize])
+                .map(|i| i.kind)
+                == Some(crate::csv::ProvinceKind::Sea)
+            && sea
+                .map(|s| cell_pid[c.r as usize * w + c.q as usize] == s)
+                .unwrap_or(true)
+    };
+    // Beach seeds: in-province deployable hexes touching a sea hex. The
+    // band deepens from them (multi-source BFS, distance < STRIP_DEPTH).
+    let mut dist = vec![u32::MAX; w * h];
+    let mut queue: VecDeque<HexCoord> = VecDeque::new();
+    for r in 0..h {
+        for q in 0..w {
+            let c = HexCoord::new(q as i32, r as i32);
+            if !deployable_hex(grid, in_province, c) {
+                continue;
+            }
+            if c.neighbors().iter().any(|n| sea_cell(*n)) {
+                dist[r * w + q] = 0;
+                queue.push_back(c);
+            }
+        }
+    }
+    if queue.is_empty() {
+        return None;
+    }
+    let mut beach: Vec<HexCoord> = Vec::new();
+    let mut beach_set: HashSet<(i32, i32)> = HashSet::new();
+    while let Some(c) = queue.pop_front() {
+        let d = dist[c.r as usize * w + c.q as usize];
+        if d as usize >= DEPLOY_STRIP_DEPTH {
+            continue;
+        }
+        if beach_set.insert((c.q, c.r)) {
+            beach.push(c);
+        }
+        for n in c.neighbors() {
+            if n.q < 0 || n.r < 0 || n.q as usize >= w || n.r as usize >= h {
+                continue;
+            }
+            let i = n.r as usize * w + n.q as usize;
+            if dist[i] == u32::MAX && deployable_hex(grid, in_province, n) {
+                dist[i] = d + 1;
+                queue.push_back(n);
+            }
+        }
+    }
+    Some(beach)
+}
+
+/// §4.2 step 9 composed sources (landing + overland, melee + overland, …):
+/// each staging kind contributes its own part of the attacker zone —
+/// interior pockets, the sea beach, the land stitch's strip. The defender
+/// rule comes from the DOMINANT kind: with an interior part the defender
+/// keeps the anchor blobs (the keypoints must be held — blobs win any
+/// overlap with beach/strip hexes), otherwise it holds the rest of the
+/// province off the combined attacker zone. `None` when nothing resolved
+/// (the caller falls back to the plain edge strips).
+#[allow(clippy::too_many_arguments)]
+fn compose_zones(
+    provinces: &HashMap<u32, ProvinceInfo>,
+    grid: &HexGrid,
+    in_province: &[bool],
+    cell_pid: &[u32],
+    interior_battle: bool,
+    amphibious: bool,
+    stitched: Option<DeploymentZones>,
+    attacker_units: usize,
+    seed: u64,
+) -> Option<DeploymentZones> {
+    let mut rng = XorShift64::new(seed);
+    let mut claimed: HashSet<(i32, i32)> = HashSet::new();
+    let mut attacker: Vec<HexCoord> = Vec::new();
+    // 1. The interior part: blobs (→ the defender) then pockets around
+    //    them. A cramped/odd interior part is simply absent, not fatal.
+    let mut defender: Option<Vec<HexCoord>> = None;
+    if interior_battle {
+        if let Some((interior, interior_set)) = interior_ground(grid, in_province) {
+            if let Some((blobs, blob_set)) =
+                interior_blobs(grid, in_province, &interior, &interior_set, &mut rng)
+            {
+                claimed = blob_set;
+                defender = Some(blobs);
+                if let Some(pockets) = interior_pockets(
+                    grid,
+                    in_province,
+                    &interior,
+                    &interior_set,
+                    &claimed,
+                    attacker_units,
+                    &mut rng,
+                ) {
+                    for h in pockets {
+                        if claimed.insert((h.q, h.r)) {
+                            attacker.push(h);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 2. The sea beach (blobs keep their hexes — the keypoints stay the
+    //    defender's).
+    if amphibious {
+        if let Some(beach) = amphibious_beach(provinces, grid, in_province, cell_pid, None) {
+            for h in beach {
+                if claimed.insert((h.q, h.r)) {
+                    attacker.push(h);
+                }
+            }
+        }
+    }
+    // 3. The land stitch's strip (its dead-peninsula prune already ran).
+    if let Some(st) = stitched {
+        for h in st.attacker {
+            if claimed.insert((h.q, h.r)) {
+                attacker.push(h);
+            }
+        }
+    }
+    if attacker.is_empty() && defender.is_none() {
+        return None;
+    }
+    let defender = defender.unwrap_or_else(|| rest_of_province(grid, in_province, &attacker));
+    Some(DeploymentZones { attacker, defender })
+}
+
+/// §4.2 step 9 staging areas (live battles): each source province's own
+/// staging hexes inside the FINAL attacker zone — land origins' strip
+/// slices, sea sources' beach segments, the interior pockets. AI /
+/// auto-deploy ties each attacking division to the staging area of ITS
+/// source province; manual deployment stays free. Empty on fallback /
+/// script forms (no source information there).
+#[allow(clippy::too_many_arguments)]
+fn build_staging(
+    provinces: &HashMap<u32, ProvinceInfo>,
+    grid: &HexGrid,
+    in_province: &[bool],
+    cell_pid: &[u32],
+    strip_sources: Option<&[u32]>,
+    origins: &[u32],
+    interior_battle: bool,
+    battle: u32,
+    final_attacker: &[HexCoord],
+) -> Vec<(u32, Vec<HexCoord>)> {
+    let Some(sources) = strip_sources else {
+        return Vec::new();
+    };
+    let (w, h) = (grid.width, grid.height);
+    let final_set: HashSet<(i32, i32)> = final_attacker.iter().map(|c| (c.q, c.r)).collect();
+    let mut staging: Vec<(u32, Vec<HexCoord>)> = Vec::new();
+    let mut claimed: HashSet<(i32, i32)> = HashSet::new();
+    // Land origins: the final zone's cells that pixel-map to the origin
+    // (the strip slice that survived the composition).
+    for &o in origins {
+        let cells: Vec<HexCoord> = final_attacker
+            .iter()
+            .copied()
+            .filter(|c| cell_pid[c.r as usize * w + c.q as usize] == o)
+            .collect();
+        if !cells.is_empty() {
+            for c in &cells {
+                claimed.insert((c.q, c.r));
+            }
+            staging.push((o, cells));
+        }
+    }
+    // Sea sources: per-sea beach segments (first owner wins an overlap),
+    // clipped to the final zone (anchor blobs keep their hexes).
+    let mut seas: Vec<u32> = sources
+        .iter()
+        .copied()
+        .filter(|sp| provinces.get(sp).map(|i| i.kind) == Some(crate::csv::ProvinceKind::Sea))
+        .collect();
+    seas.sort_unstable();
+    seas.dedup();
+    for s in seas {
+        if let Some(segment) = amphibious_beach(provinces, grid, in_province, cell_pid, Some(s)) {
+            let cells: Vec<HexCoord> = segment
+                .into_iter()
+                .filter(|c| final_set.contains(&(c.q, c.r)) && claimed.insert((c.q, c.r)))
+                .collect();
+            if !cells.is_empty() {
+                staging.push((s, cells));
+            }
+        }
+    }
+    // Interior: whatever of the final zone is unclaimed (the pockets).
+    if interior_battle {
+        let pockets: Vec<HexCoord> = final_attacker
+            .iter()
+            .copied()
+            .filter(|c| !claimed.contains(&(c.q, c.r)))
+            .collect();
+        if !pockets.is_empty() {
+            staging.push((battle, pockets));
+        }
+    }
+    staging
+}
+
 /// §4.2 step 9 for stitched maps: the attacker deploys on their OWN
 /// province's 2px staging STRIP (hexes whose centre pixel lies within
 /// ORIGIN_STRIP_PX of the shared border — gifting the whole origin
@@ -3282,6 +3968,40 @@ mod tests {
         )
     }
 
+    #[test]
+    fn a_duplicated_palette_colour_resolves_deterministically() {
+        // definition.csv is expected to keep its RGBs unique, but when two
+        // rows share one colour the winner must not depend on the HashMap's
+        // per-process iteration order (same seed → same map, §4.2).
+        const SHARED: u32 = 0x0A0B0C;
+        let defs: HashMap<u32, ProvinceInfo> = (1u32..=64)
+            .map(|id| {
+                (
+                    id,
+                    ProvinceInfo {
+                        id,
+                        kind: crate::csv::ProvinceKind::Land,
+                        terrain: Terrain::Plains,
+                        is_coastal: false,
+                        continent_id: 1,
+                        rgb: (10, 11, 12),
+                    },
+                )
+            })
+            .collect();
+        let colors = vec![SHARED; 16 * 16];
+        let gen = MapGenerator::new(
+            ProvinceMap::from_colors(16, 16, colors).unwrap(),
+            defs,
+            vec![],
+        );
+        assert!(
+            gen.ids.iter().all(|id| *id == 1),
+            "the lowest id owns a duplicated colour, got {:?}",
+            gen.ids.iter().max()
+        );
+    }
+
     /// §4.2 step 3b: live battles stage from the source
     /// provinces' FULL shared border — no 60°-sector clip, no sliver
     /// minimum; unresolvable source lists fall back to the sector
@@ -3362,9 +4082,13 @@ mod tests {
                 })
             })
             .collect();
-        let gen = MapGenerator::new(ProvinceMap::from_colors(w, h, colors).unwrap(), defs(), vec![]);
+        let gen = MapGenerator::new(
+            ProvinceMap::from_colors(w, h, colors).unwrap(),
+            defs(),
+            vec![],
+        );
         let tm = gen
-            .generate_from_sources(1, &[3], &[HexDirection::W], 7)
+            .generate_from_sources(1, &[3], 10, &[HexDirection::W], 7)
             .unwrap();
         assert_eq!(tm.origin_provinces, vec![3]);
         assert!(!tm.zones.attacker.is_empty());
@@ -3376,6 +4100,535 @@ mod tests {
             .attacker
             .iter()
             .all(|c| tm.cell_province[c.r as usize * cols + c.q as usize] == 3));
+    }
+
+    /// Interior battle: a source list naming the BATTLE province itself
+    /// (paradrop / civil war / entrapment) skips the stitching, sets the
+    /// province-boundary retreat rim, and every zone hex stays on the
+    /// battle province's own soil.
+    #[test]
+    fn interior_battle_skips_stitching_and_sets_the_rim() {
+        let gen = world(48, 48, (16, 16, 31, 31), 1);
+        let tm = gen
+            .generate_from_sources(1, &[1], 10, &[HexDirection::W], 7)
+            .unwrap();
+        assert!(tm.origin_provinces.is_empty(), "no origin stitch");
+        let rim = tm.retreat_rim.expect("interior battle sets the rim");
+        assert!(!rim.is_empty());
+        assert!(!tm.zones.attacker.is_empty() && !tm.zones.defender.is_empty());
+        let cols = tm.grid.width;
+        for c in tm.zones.attacker.iter().chain(tm.zones.defender.iter()) {
+            assert_eq!(tm.cell_province[c.r as usize * cols + c.q as usize], 1);
+        }
+        let attacker: HashSet<(i32, i32)> = tm.zones.attacker.iter().map(|c| (c.q, c.r)).collect();
+        assert!(tm
+            .zones
+            .defender
+            .iter()
+            .all(|c| !attacker.contains(&(c.q, c.r))));
+    }
+
+    /// The defender blob MUST hold the keypoints: with a VP urban cluster
+    /// on the map, every urban hex lands in the defender zone.
+    #[test]
+    fn interior_city_blob_contains_the_vp_cluster() {
+        let mut grid = HexGrid::new(30, 30, Terrain::Plains);
+        for r in 14..=16 {
+            for q in 14..=16 {
+                grid.set_terrain(HexCoord::new(q, r), Terrain::Urban);
+            }
+        }
+        let in_province = vec![true; 30 * 30];
+        let zones = deployment_zones_interior(&grid, &in_province, 12, 7)
+            .expect("roomy province takes the interior form");
+        let defender: HashSet<(i32, i32)> = zones.defender.iter().map(|c| (c.q, c.r)).collect();
+        for r in 14..=16 {
+            for q in 14..=16 {
+                assert!(
+                    defender.contains(&(q, r)),
+                    "VP urban hex ({q},{r}) must deploy the defender"
+                );
+            }
+        }
+        assert!(!zones.attacker.is_empty(), "the drop pockets exist too");
+    }
+
+    /// Interior zones are disjoint, deployable-only and deterministic per
+    /// seed.
+    #[test]
+    fn interior_zones_are_disjoint_deployable_and_deterministic() {
+        let grid = HexGrid::new(30, 30, Terrain::Plains);
+        let in_province = vec![true; 30 * 30];
+        let a = deployment_zones_interior(&grid, &in_province, 12, 42).unwrap();
+        let b = deployment_zones_interior(&grid, &in_province, 12, 42).unwrap();
+        assert_eq!(a.attacker, b.attacker);
+        assert_eq!(a.defender, b.defender);
+        let attacker: HashSet<(i32, i32)> = a.attacker.iter().map(|c| (c.q, c.r)).collect();
+        assert_eq!(attacker.len(), a.attacker.len(), "duplicates");
+        for c in a.attacker.iter().chain(a.defender.iter()) {
+            let cell = grid.cell(*c).unwrap();
+            assert!(cell.is_passable && cell.terrain.is_deployable());
+        }
+        assert!(a.defender.iter().all(|c| !attacker.contains(&(c.q, c.r))));
+    }
+
+    /// Field battle (no VP city): the defender blobs feed the flag
+    /// sampler — three well-separated anchors, all inside the defender
+    /// zone, so the keypoints are defended by construction.
+    #[test]
+    fn interior_field_blobs_feed_the_flag_sampler() {
+        let grid = HexGrid::new(40, 40, Terrain::Plains);
+        let in_province = vec![true; 40 * 40];
+        let zones = deployment_zones_interior(&grid, &in_province, 12, 7).unwrap();
+        let params = tactical_core::params::CombatParams::default();
+        let mut rng = XorShift64::new(99);
+        let flags = tactical_core::flag::derive_flag_state(
+            &grid,
+            &zones.attacker,
+            &zones.defender,
+            &[],
+            &params,
+            &mut rng,
+        )
+        .expect("the interior blobs must feed the flag sampler");
+        assert_eq!(flags.flags.len(), 3, "field battle keeps three flags");
+        let defender: HashSet<(i32, i32)> = zones.defender.iter().map(|c| (c.q, c.r)).collect();
+        for f in &flags.flags {
+            assert!(
+                defender.contains(&(f.anchor.q, f.anchor.r)),
+                "flag anchor must sit in the defender zone"
+            );
+        }
+    }
+
+    /// The pockets house the attacking force: capacity scales with the
+    /// battalion hint.
+    #[test]
+    fn interior_pockets_house_the_attacking_force() {
+        let grid = HexGrid::new(40, 40, Terrain::Plains);
+        let in_province = vec![true; 40 * 40];
+        let small = deployment_zones_interior(&grid, &in_province, 12, 7).unwrap();
+        assert!(small.attacker.len() >= 12);
+        let big = deployment_zones_interior(&grid, &in_province, 40, 7).unwrap();
+        assert!(
+            big.attacker.len() >= 40,
+            "40 battalions need 40 hexes, got {}",
+            big.attacker.len()
+        );
+        assert!(big.attacker.len() > small.attacker.len());
+    }
+
+    /// A cramped province cannot take the interior form — the caller
+    /// falls back to the plain edge strips.
+    #[test]
+    fn cramped_province_rejects_the_interior_form() {
+        let grid = HexGrid::new(4, 4, Terrain::Plains);
+        let in_province = vec![true; 4 * 4];
+        assert!(deployment_zones_interior(&grid, &in_province, 12, 7).is_none());
+        // Just above the floor but far too tight for margin-3 blob
+        // centres: still no interior form.
+        let grid = HexGrid::new(6, 5, Terrain::Plains);
+        let in_province = vec![true; 6 * 5];
+        assert!(deployment_zones_interior(&grid, &in_province, 12, 7).is_none());
+    }
+
+    /// Cramped fixture helpers for the amphibious form: a 20×20 plains
+    /// grid with a SEA province (id 9) west of x<3 and south of y≥17.
+    fn amphibious_fixture() -> (HashMap<u32, ProvinceInfo>, HexGrid, Vec<bool>, Vec<u32>) {
+        let sea = ProvinceInfo {
+            id: 9,
+            kind: crate::csv::ProvinceKind::Sea,
+            terrain: Terrain::Plains,
+            is_coastal: false,
+            continent_id: 1,
+            rgb: (0, 0, 128),
+        };
+        let mut provinces = defs();
+        provinces.insert(9, sea);
+        let grid = HexGrid::new(20, 20, Terrain::Plains);
+        let mut in_province = vec![true; 20 * 20];
+        let mut cell_pid = vec![2u32; 20 * 20];
+        for r in 0..20usize {
+            for q in 0..20usize {
+                if q < 3 || r >= 17 {
+                    in_province[r * 20 + q] = false;
+                    cell_pid[r * 20 + q] = 9;
+                }
+            }
+        }
+        (provinces, grid, in_province, cell_pid)
+    }
+
+    /// The landing band wraps EVERY sea shore (west AND south here — the
+    /// plain fallback could only offer one compass edge), and the defender
+    /// holds the rest of the province, MIN_ZONE_DISTANCE off the beaches.
+    #[test]
+    fn amphibious_beach_wraps_every_sea_shore_and_defender_holds_the_rest() {
+        let (provinces, grid, in_province, cell_pid) = amphibious_fixture();
+        let zones = deployment_zones_amphibious(&provinces, &grid, &in_province, &cell_pid)
+            .expect("a sea shore takes the amphibious form");
+        let attacker: HashSet<(i32, i32)> = zones.attacker.iter().map(|c| (c.q, c.r)).collect();
+        // West beach (3-deep from the x=3 shoreline) AND south beach —
+        // "all beachheads", not one edge.
+        for r in 0..17 {
+            for q in 3..=5 {
+                assert!(attacker.contains(&(q, r)), "west beach ({q},{r}) missing");
+            }
+        }
+        for r in 14..=16 {
+            for q in 6..=19 {
+                assert!(attacker.contains(&(q, r)), "south beach ({q},{r}) missing");
+            }
+        }
+        // The defender holds the rest: far inland deploys, the beach does
+        // not, and the no-man's land is respected.
+        let defender: HashSet<(i32, i32)> = zones.defender.iter().map(|c| (c.q, c.r)).collect();
+        assert!(defender.contains(&(15, 5)));
+        assert!(!defender.contains(&(3, 5)));
+        assert!(attacker.iter().all(|&(aq, ar)| {
+            defender.iter().all(|&(dq, dr)| {
+                HexCoord::new(aq, ar).distance(HexCoord::new(dq, dr))
+                    >= tactical_core::grid::MIN_ZONE_DISTANCE
+            })
+        }));
+    }
+
+    /// No VP city on the map: the three flag anchors redistribute into the
+    /// new defender zone — none of them lands on a beachhead.
+    #[test]
+    fn amphibious_field_flags_redistribute_into_the_new_zone() {
+        let (provinces, grid, in_province, cell_pid) = amphibious_fixture();
+        let zones =
+            deployment_zones_amphibious(&provinces, &grid, &in_province, &cell_pid).unwrap();
+        let params = tactical_core::params::CombatParams::default();
+        let mut rng = XorShift64::new(99);
+        let flags = tactical_core::flag::derive_flag_state(
+            &grid,
+            &zones.attacker,
+            &zones.defender,
+            &[],
+            &params,
+            &mut rng,
+        )
+        .expect("the landing zone feeds the flag sampler");
+        assert_eq!(flags.flags.len(), 3);
+        let defender: HashSet<(i32, i32)> = zones.defender.iter().map(|c| (c.q, c.r)).collect();
+        for f in &flags.flags {
+            assert!(defender.contains(&(f.anchor.q, f.anchor.r)));
+            assert!(f.anchor.q > 5, "no anchor on a west beachhead");
+        }
+    }
+
+    /// A landlocked province has no beach — the caller falls back.
+    #[test]
+    fn landlocked_province_rejects_the_amphibious_form() {
+        let provinces = defs();
+        let grid = HexGrid::new(20, 20, Terrain::Plains);
+        let in_province = vec![true; 20 * 20];
+        let cell_pid = vec![2u32; 20 * 20];
+        assert!(deployment_zones_amphibious(&provinces, &grid, &in_province, &cell_pid).is_none());
+    }
+
+    /// A SEA source province triggers the amphibious form end to end: no
+    /// origin stitch, the band hugs the shore, the defender holds the rest.
+    #[test]
+    fn sea_source_triggers_the_amphibious_form() {
+        // Province 1 (battle) = 16×16 px rect; province 9 (sea) = a 4 px
+        // strip along its full west edge; province 2 fills the rest.
+        let (w, h) = (48u32, 48u32);
+        let colors: Vec<u32> = (0..h)
+            .flat_map(|y| {
+                (0..w).map(move |x| {
+                    if (16..=31).contains(&x) && (16..=31).contains(&y) {
+                        RED
+                    } else if (12..=15).contains(&x) && (16..=31).contains(&y) {
+                        0x000080
+                    } else {
+                        GREEN
+                    }
+                })
+            })
+            .collect();
+        let mut provinces = defs();
+        provinces.insert(
+            9,
+            ProvinceInfo {
+                id: 9,
+                kind: crate::csv::ProvinceKind::Sea,
+                terrain: Terrain::Plains,
+                is_coastal: false,
+                continent_id: 1,
+                rgb: (0, 0, 128),
+            },
+        );
+        let gen = MapGenerator::new(
+            ProvinceMap::from_colors(w, h, colors).unwrap(),
+            provinces,
+            vec![],
+        );
+        let tm = gen
+            .generate_from_sources(1, &[9], 12, &[HexDirection::W], 7)
+            .unwrap();
+        assert!(tm.origin_provinces.is_empty(), "the sea is no origin");
+        assert!(tm.retreat_rim.is_none(), "not an interior battle");
+        assert!(!tm.zones.attacker.is_empty() && !tm.zones.defender.is_empty());
+        let cols = tm.grid.width;
+        // The band hugs the battle province's west (sea-facing) edge.
+        let min_q = zones_min_q(&tm.zones.attacker);
+        let max_q = tm.zones.attacker.iter().map(|c| c.q).max().unwrap();
+        assert!(
+            max_q - min_q < DEPLOY_STRIP_DEPTH as i32,
+            "a strip-depth band"
+        );
+        assert!(tm
+            .zones
+            .attacker
+            .iter()
+            .all(|c| tm.cell_province[c.r as usize * cols + c.q as usize] == 1));
+        // …and the defender reaches past it (the rest of the province).
+        let defender_max_q = tm.zones.defender.iter().map(|c| c.q).max().unwrap();
+        assert!(defender_max_q > max_q + tactical_core::grid::MIN_ZONE_DISTANCE);
+    }
+
+    /// Smallest attacker-q in a zone (test helper).
+    fn zones_min_q(zone: &[HexCoord]) -> i32 {
+        zone.iter().map(|c| c.q).min().unwrap_or(0)
+    }
+
+    /// Mixed-source fixture: battle province 1 (16×16 px rect), SEA
+    /// province 9 along its west edge, LAND province 3 along its east
+    /// edge, province 2 filling the rest.
+    fn combination_world() -> MapGenerator {
+        let (w, h) = (48u32, 48u32);
+        let colors: Vec<u32> = (0..h)
+            .flat_map(|y| {
+                (0..w).map(move |x| {
+                    if (16..=31).contains(&x) && (16..=31).contains(&y) {
+                        RED
+                    } else if (12..=15).contains(&x) && (16..=31).contains(&y) {
+                        0x000080
+                    } else if (32..=35).contains(&x) && (16..=31).contains(&y) {
+                        BLUE
+                    } else {
+                        GREEN
+                    }
+                })
+            })
+            .collect();
+        let mut provinces = defs();
+        provinces.insert(
+            9,
+            ProvinceInfo {
+                id: 9,
+                kind: crate::csv::ProvinceKind::Sea,
+                terrain: Terrain::Plains,
+                is_coastal: false,
+                continent_id: 1,
+                rgb: (0, 0, 128),
+            },
+        );
+        MapGenerator::new(
+            ProvinceMap::from_colors(w, h, colors).unwrap(),
+            provinces,
+            vec![],
+        )
+    }
+
+    /// Landing + overland attack at once: the beach AND the land stitch's
+    /// strip both stage — neither swallows the other; the defender holds
+    /// the rest of the province.
+    #[test]
+    fn sea_and_land_sources_compose_beach_and_strip() {
+        let gen = combination_world();
+        let tm = gen
+            .generate_from_sources(1, &[9, 3], 24, &[HexDirection::W], 7)
+            .unwrap();
+        assert_eq!(
+            tm.origin_provinces,
+            vec![3],
+            "only the land source stitches"
+        );
+        assert!(tm.retreat_rim.is_none(), "not an interior battle");
+        let cols = tm.grid.width;
+        let cell = |c: HexCoord| tm.cell_province[c.r as usize * cols + c.q as usize];
+        let sea_adjacent = |c: HexCoord| {
+            c.neighbors().iter().any(|n| {
+                n.q >= 0
+                    && n.r >= 0
+                    && (n.q as usize) < cols
+                    && (n.r as usize) < tm.grid.height
+                    && tm.cell_province[n.r as usize * cols + n.q as usize] == 9
+            })
+        };
+        assert!(
+            tm.zones.attacker.iter().any(|&c| cell(c) == 3),
+            "the overland strip stages on province 3 soil"
+        );
+        assert!(
+            tm.zones
+                .attacker
+                .iter()
+                .any(|&c| cell(c) == 1 && sea_adjacent(c)),
+            "the landing force stages on the beach"
+        );
+        // The defender holds the rest: inland hexes deploy, zones disjoint.
+        assert!(tm.zones.defender.iter().any(|&c| cell(c) == 1));
+        let attacker: HashSet<(i32, i32)> = tm.zones.attacker.iter().map(|c| (c.q, c.r)).collect();
+        assert!(tm
+            .zones
+            .defender
+            .iter()
+            .all(|c| !attacker.contains(&(c.q, c.r))));
+    }
+
+    /// Melee + overland attack at once (paradrop / civil war reinforced
+    /// from outside): the defender keeps its anchor blobs (the keypoints
+    /// stay its — and feed the flag sampler), the attacker gets pockets
+    /// AND the overland strip.
+    #[test]
+    fn interior_and_land_sources_compose_pockets_and_strip() {
+        let gen = combination_world();
+        let tm = gen
+            .generate_from_sources(1, &[1, 3], 24, &[HexDirection::W], 7)
+            .unwrap();
+        assert_eq!(tm.origin_provinces, vec![3]);
+        assert!(tm.retreat_rim.is_some(), "interior part → boundary rim");
+        let cols = tm.grid.width;
+        let cell = |c: HexCoord| tm.cell_province[c.r as usize * cols + c.q as usize];
+        assert!(
+            tm.zones.attacker.iter().any(|&c| cell(c) == 3),
+            "the overland strip stages"
+        );
+        assert!(
+            tm.zones.attacker.iter().any(|&c| cell(c) == 1),
+            "interior pockets stage inside the province"
+        );
+        // The defender rule is the interior one: blobs on the battle
+        // province only, NOT the whole province (neutral ground remains),
+        // and they feed the flag sampler with all anchors inside.
+        assert!(tm.zones.defender.iter().all(|&c| cell(c) == 1));
+        let attacker: HashSet<(i32, i32)> = tm.zones.attacker.iter().map(|c| (c.q, c.r)).collect();
+        assert!(tm
+            .zones
+            .defender
+            .iter()
+            .all(|c| !attacker.contains(&(c.q, c.r))));
+        let params = tactical_core::params::CombatParams::default();
+        let mut rng = XorShift64::new(99);
+        let flags = tactical_core::flag::derive_flag_state(
+            &tm.grid,
+            &tm.zones.attacker,
+            &tm.zones.defender,
+            &[],
+            &params,
+            &mut rng,
+        )
+        .expect("blobs feed the flag sampler");
+        let defender: HashSet<(i32, i32)> = tm.zones.defender.iter().map(|c| (c.q, c.r)).collect();
+        for f in &flags.flags {
+            assert!(defender.contains(&(f.anchor.q, f.anchor.r)));
+        }
+    }
+
+    /// The staging areas partition the final attacker zone: each source's
+    /// own slice, disjoint, union = the whole zone.
+    #[test]
+    fn staging_union_equals_the_attacker_zone() {
+        let gen = combination_world();
+        let tm = gen
+            .generate_from_sources(1, &[9, 3], 24, &[HexDirection::W], 7)
+            .unwrap();
+        assert!(!tm.staging.is_empty());
+        let attacker: HashSet<(i32, i32)> = tm.zones.attacker.iter().map(|c| (c.q, c.r)).collect();
+        let mut union: HashSet<(i32, i32)> = HashSet::new();
+        let cols = tm.grid.width;
+        for (src, cells) in &tm.staging {
+            assert!(!cells.is_empty());
+            for c in cells {
+                assert!(
+                    attacker.contains(&(c.q, c.r)),
+                    "staging hex outside the zone"
+                );
+                assert!(union.insert((c.q, c.r)), "staging entries overlap");
+            }
+            if *src == 3 {
+                assert!(cells
+                    .iter()
+                    .all(|c| tm.cell_province[c.r as usize * cols + c.q as usize] == 3));
+            }
+        }
+        assert!(tm.staging.iter().any(|(s, _)| *s == 3), "land strip slice");
+        assert!(tm.staging.iter().any(|(s, _)| *s == 9), "sea beach segment");
+        assert_eq!(
+            union, attacker,
+            "staging partitions the whole attacker zone"
+        );
+    }
+
+    /// A two-sea landing: each sea gets its own beach segment, disjoint,
+    /// union = the whole band.
+    #[test]
+    fn staging_partitions_a_two_sea_landing() {
+        // Battle province 1 rect; sea 9 west, sea 10 south; province 2 rest.
+        let (w, h) = (48u32, 48u32);
+        let colors: Vec<u32> = (0..h)
+            .flat_map(|y| {
+                (0..w).map(move |x| {
+                    if (16..=31).contains(&x) && (16..=31).contains(&y) {
+                        RED
+                    } else if (12..=15).contains(&x) && (16..=31).contains(&y) {
+                        0x000080
+                    } else if (16..=31).contains(&x) && (32..=35).contains(&y) {
+                        0x400000
+                    } else {
+                        GREEN
+                    }
+                })
+            })
+            .collect();
+        let mut provinces = defs();
+        for (id, rgb) in [(9u32, (0, 0, 128)), (10, (64, 0, 0))] {
+            provinces.insert(
+                id,
+                ProvinceInfo {
+                    id,
+                    kind: crate::csv::ProvinceKind::Sea,
+                    terrain: Terrain::Plains,
+                    is_coastal: false,
+                    continent_id: 1,
+                    rgb,
+                },
+            );
+        }
+        let gen = MapGenerator::new(
+            ProvinceMap::from_colors(w, h, colors).unwrap(),
+            provinces,
+            vec![],
+        );
+        let tm = gen
+            .generate_from_sources(1, &[9, 10], 24, &[HexDirection::W], 7)
+            .unwrap();
+        assert!(tm.staging.iter().any(|(s, _)| *s == 9));
+        assert!(tm.staging.iter().any(|(s, _)| *s == 10));
+        let attacker: HashSet<(i32, i32)> = tm.zones.attacker.iter().map(|c| (c.q, c.r)).collect();
+        let mut union: HashSet<(i32, i32)> = HashSet::new();
+        for (_, cells) in &tm.staging {
+            for c in cells {
+                assert!(attacker.contains(&(c.q, c.r)));
+                assert!(union.insert((c.q, c.r)), "beach segments overlap");
+            }
+        }
+        assert_eq!(union, attacker, "segments partition the whole band");
+    }
+
+    /// Script battles carry no source information — no staging areas.
+    #[test]
+    fn script_battles_carry_no_staging() {
+        let gen = world(40, 40, (18, 18, 21, 21), 1);
+        let tm = gen
+            .generate_with_elevation_seed(1, &[HexDirection::W], 7)
+            .unwrap();
+        assert!(tm.staging.is_empty());
     }
 
     #[test]
@@ -4190,6 +5443,70 @@ mod tests {
             .grid
             .iter_coords()
             .any(|c| tm2.grid.cell(c).unwrap().river_edges & w_bit != 0));
+    }
+
+    /// Stitched maps: the river edge belongs to the battle↔origin SEAM
+    /// (the province boundary), not to the playable mask's outer edge —
+    /// otherwise the front crossing is free and the staging strip's rear
+    /// edge grows a phantom river (and bridge deck).
+    #[test]
+    fn stitched_river_marks_the_seam_not_the_strip_far_edge() {
+        // West half = province 2 (the attacker's origin), east half =
+        // province 1 (the battle province); river adjacency between them,
+        // attack from W → the origin strip folds the seam INTO the mask.
+        let colors: Vec<u32> = (0..40)
+            .flat_map(|_y| (0..40).map(move |x| if x < 20 { GREEN } else { RED }))
+            .collect();
+        let gen = MapGenerator::new(
+            ProvinceMap::from_colors(40, 40, colors).unwrap(),
+            defs(),
+            vec![Adjacency {
+                from: 1,
+                to: 2,
+                kind: AdjacencyKind::River,
+                through: -1,
+            }],
+        );
+        let tm = gen.generate(1, &[HexDirection::W]).unwrap();
+        assert_eq!(tm.origin_provinces, vec![2], "strip folded in");
+        let cols = tm.grid.width;
+        let w_bit = river_bit(HexDirection::W);
+        let pid = |c: HexCoord| tm.cell_province[c.r as usize * cols + c.q as usize];
+        // Seam hexes: battle soil whose W neighbour is IN-MASK origin soil
+        // (the staging strip — the true shared-border front).
+        let seam: Vec<HexCoord> = tm
+            .grid
+            .iter_coords()
+            .filter(|&c| {
+                pid(c) == 1 && {
+                    let w = c.neighbor(HexDirection::W);
+                    tm.grid.in_bounds(w) && pid(w) == 2 && !tm.grid.cell(w).unwrap().out_of_bounds
+                }
+            })
+            .collect();
+        assert!(!seam.is_empty(), "the fixture must hold the seam interior");
+        assert!(
+            seam.iter()
+                .all(|&c| tm.grid.cell(c).unwrap().river_edges & w_bit != 0),
+            "the river crossing must be marked along the whole seam"
+        );
+        // No origin-soil hex faces the river westward: the strip's far edge
+        // is not the riverbank, and no bridge deck stamps there either.
+        for c in tm.grid.iter_coords() {
+            if pid(c) == 2 {
+                let cell = tm.grid.cell(c).unwrap();
+                assert_eq!(
+                    cell.river_edges & w_bit,
+                    0,
+                    "phantom W river on strip hex {c:?}"
+                );
+                assert_eq!(
+                    cell.bridge_edges & w_bit,
+                    0,
+                    "phantom W bridge on strip hex {c:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -5516,6 +6833,34 @@ mod tests {
             3,
             "district count clamps to 3"
         );
+    }
+
+    /// A top-up factory stamped on a Hills hex must KEEP the hill's
+    /// elevation (movement pricing / LoS read it) — the stamp is a direct
+    /// terrain swap, never `set_terrain` (which flattens to 0).
+    #[test]
+    fn factory_stamp_on_hills_keeps_the_elevation() {
+        let in_province = vec![true; 24 * 24];
+        let anchor = HexCoord::new(12, 12);
+        let mut grid = HexGrid::new(24, 24, Terrain::Plains);
+        // Every ring-2..=4 hex is a 2-high hill, so any pick lands on one.
+        for r in 0..24i32 {
+            for q in 0..24i32 {
+                let h = HexCoord::new(q, r);
+                if (2..=4).contains(&h.distance(anchor)) {
+                    let c = grid.cell_mut(h).unwrap();
+                    c.terrain = Terrain::Hills;
+                    c.elevation = 2;
+                }
+            }
+        }
+        let picked = place_factories(&mut grid, &in_province, Some(anchor), 8, 1);
+        assert_eq!(picked.len(), 2);
+        for h in &picked {
+            let cell = grid.cell(*h).unwrap();
+            assert_eq!(cell.terrain, Terrain::Village);
+            assert_eq!(cell.elevation, 2, "hill elevation lost at {h:?}");
+        }
     }
 
     /// Rail painting on a synthetic grid: the straight line bridges the

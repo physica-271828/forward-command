@@ -6,9 +6,27 @@
 //! centroid in the generator).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::Result;
+
+/// The `.txt` files of a states directory, ordered by PATH. Every loader
+/// below lets the FIRST file that names an id win, so the order must not
+/// depend on the filesystem's `read_dir` order — with start-date variants of
+/// the same state (the reason duplicates exist at all) an unsorted walk made
+/// "which variant wins" machine-dependent.
+fn state_files(states_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(states_dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("txt"))
+        .collect();
+    paths.sort();
+    paths
+}
 
 /// Scan `history/states/*.txt` for `victory_points = { <pid> <level> }`
 /// blocks. Multiple VPs per state and entries spanning several lines are
@@ -17,14 +35,7 @@ use crate::Result;
 /// overlay, never a hard failure).
 pub fn load_victory_points(states_dir: &Path) -> Result<HashMap<u32, u32>> {
     let mut out: HashMap<u32, u32> = HashMap::new();
-    let Ok(entries) = std::fs::read_dir(states_dir) else {
-        return Ok(out);
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
-            continue;
-        }
+    for path in state_files(states_dir) {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -77,18 +88,12 @@ pub fn states_dir_of(hoi4_dir: &Path) -> std::path::PathBuf {
 /// (a top-level key of the state block, e.g. `state_category = town`).
 /// The category drives the tactical village density — urbanised states
 /// spawn a sparser countryside scatter. A missing/unreadable directory
-/// yields an empty map (never a hard failure); the first file wins when a
-/// state id repeats across start-date variants.
+/// yields an empty map (never a hard failure); files are walked in path
+/// order, so the first file wins deterministically when a state id repeats
+/// across start-date variants.
 pub fn load_state_categories(states_dir: &Path) -> Result<HashMap<u32, String>> {
     let mut out: HashMap<u32, String> = HashMap::new();
-    let Ok(entries) = std::fs::read_dir(states_dir) else {
-        return Ok(out);
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
-            continue;
-        }
+    for path in state_files(states_dir) {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -105,14 +110,7 @@ pub fn load_state_categories(states_dir: &Path) -> Result<HashMap<u32, String>> 
 /// factory-district overlay. Missing dir → empty map; first file wins.
 pub fn load_state_industry(states_dir: &Path) -> Result<HashMap<u32, u32>> {
     let mut out: HashMap<u32, u32> = HashMap::new();
-    let Ok(entries) = std::fs::read_dir(states_dir) else {
-        return Ok(out);
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
-            continue;
-        }
+    for path in state_files(states_dir) {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -128,14 +126,7 @@ pub fn load_state_industry(states_dir: &Path) -> Result<HashMap<u32, u32>> {
 /// Missing dir → empty map; first file wins.
 pub fn load_state_infrastructure(states_dir: &Path) -> Result<HashMap<u32, u32>> {
     let mut out: HashMap<u32, u32> = HashMap::new();
-    let Ok(entries) = std::fs::read_dir(states_dir) else {
-        return Ok(out);
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
-            continue;
-        }
+    for path in state_files(states_dir) {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -177,6 +168,11 @@ fn tokenize_state(text: &str) -> Vec<String> {
 
 /// The state id is the first `id = <n>` of the file (the state block
 /// opens the file; same convention as [`parse_state_provinces`]).
+///
+/// Every parser here assumes ONE state block per file, which is how vanilla
+/// and the maps shipped with mods write `history/states/*.txt`. A file
+/// holding several states would fold every block's industry/provinces onto
+/// this first id — the loaders would need a per-block walk to do better.
 fn first_state_id(tokens: &[String]) -> Option<u32> {
     tokens
         .windows(3)
@@ -281,14 +277,7 @@ fn parse_state_infrastructure(text: &str, out: &mut HashMap<u32, u32>) {
 /// A missing/unreadable directory yields an empty map (never a hard failure).
 pub fn load_province_to_state(states_dir: &Path) -> Result<HashMap<u32, u32>> {
     let mut out: HashMap<u32, u32> = HashMap::new();
-    let Ok(entries) = std::fs::read_dir(states_dir) else {
-        return Ok(out);
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
-            continue;
-        }
+    for path in state_files(states_dir) {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -301,7 +290,8 @@ pub fn load_province_to_state(states_dir: &Path) -> Result<HashMap<u32, u32>> {
 /// in the `provinces = { … }` block maps to it. Comments stripped. State ids
 /// repeat across files for different start dates (e.g. `123-FOO.txt` variants
 /// are separate files), so a later file only fills provinces not yet mapped —
-/// the base-map state list is authoritative for live battles.
+/// the base-map state list is authoritative for live battles. "Later" is by
+/// PATH (`state_files`), never by `read_dir` order.
 fn parse_state_provinces(text: &str, out: &mut HashMap<u32, u32>) {
     let no_comments: String = text
         .lines()
@@ -398,6 +388,46 @@ mod tests {
         parse_state_provinces("state = { id = 99 provinces = { 623 700 } }", &mut out);
         assert_eq!(out.get(&623), Some(&2)); // first file wins on conflict
         assert_eq!(out.get(&700), Some(&99));
+    }
+
+    #[test]
+    fn state_files_are_walked_in_path_order() {
+        // "First file wins" must not depend on `read_dir` order: the files
+        // are created newest-first so a filesystem-ordered walk would pick
+        // the other variant.
+        let dir = std::env::temp_dir().join(format!("tac_states_order_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("b-variant.txt"),
+            "state = { id = 99 provinces = { 623 700 } }",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("a-variant.txt"),
+            "state = { id = 2 provinces = { 623 } }",
+        )
+        .unwrap();
+        // A non-.txt sibling never joins the walk.
+        std::fs::write(
+            dir.join("notes.md"),
+            "state = { id = 7 provinces = { 999 } }",
+        )
+        .unwrap();
+
+        let files = state_files(&dir);
+        assert_eq!(
+            files
+                .iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["a-variant.txt".to_string(), "b-variant.txt".to_string()]
+        );
+        let map = load_province_to_state(&dir).unwrap();
+        // a-variant.txt sorts first, so ITS id owns the shared province.
+        assert_eq!(map.get(&623), Some(&2));
+        assert_eq!(map.get(&700), Some(&99));
+        assert_eq!(map.get(&999), None, "non-.txt file must not be read");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

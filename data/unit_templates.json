@@ -1,507 +1,5 @@
 {
   "line_battalions": {
-    "fighter": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "fighter"
-      ],
-      "needs": {
-        "small_plane_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_fighter"
-      ]
-    },
-    "cv_fighter": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "fighter"
-      ],
-      "needs": {
-        "cv_small_plane_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_fighter",
-        "category_carrier_fighter"
-      ]
-    },
-    "cas": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "cas"
-      ],
-      "needs": {
-        "small_plane_cas_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_cas"
-      ]
-    },
-    "cv_cas": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "cas"
-      ],
-      "needs": {
-        "cv_small_plane_cas_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_cas",
-        "category_carrier_cas"
-      ]
-    },
-    "nav_bomber": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "naval_bomber"
-      ],
-      "needs": {
-        "small_plane_naval_bomber_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_nav_bomber"
-      ]
-    },
-    "cv_nav_bomber": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "naval_bomber"
-      ],
-      "needs": {
-        "cv_small_plane_naval_bomber_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_nav_bomber",
-        "category_carrier_nav_bomber"
-      ]
-    },
-    "suicide_craft": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "suicide"
-      ],
-      "needs": {
-        "small_plane_suicide_airframe": 1
-      },
-      "terrain_modifiers": {}
-    },
-    "cv_suicide_craft": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "suicide"
-      ],
-      "needs": {
-        "cv_small_plane_suicide_airframe": 1
-      },
-      "terrain_modifiers": {}
-    },
-    "tac_bomber": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "tactical_bomber"
-      ],
-      "needs": {
-        "medium_plane_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_tac_bomber"
-      ]
-    },
-    "heavy_fighter": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "heavy_fighter"
-      ],
-      "needs": {
-        "medium_plane_fighter_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_heavy_fighter"
-      ]
-    },
-    "scout_plane": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "scout_plane"
-      ],
-      "needs": {
-        "medium_plane_scout_plane_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_scout_plane"
-      ]
-    },
-    "strat_bomber": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "strategic_bomber"
-      ],
-      "needs": {
-        "large_plane_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_strat_bomber"
-      ]
-    },
-    "maritime_patrol_plane": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "maritime_patrol_plane"
-      ],
-      "needs": {
-        "large_plane_maritime_patrol_plane_airframe": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_strat_bomber",
-        "category_maritime_patrol_bomber"
-      ]
-    },
-    "jet_fighter": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "fighter"
-      ],
-      "needs": {
-        "jet_fighter_equipment": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_fighter"
-      ]
-    },
-    "jet_tac_bomber": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "tactical_bomber"
-      ],
-      "needs": {
-        "jet_tac_bomber_equipment": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_tac_bomber"
-      ]
-    },
-    "jet_strat_bomber": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "strategic_bomber"
-      ],
-      "needs": {
-        "jet_strat_bomber_equipment": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_strat_bomber"
-      ]
-    },
-    "rocket_interceptor": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "interceptor"
-      ],
-      "needs": {
-        "rocket_interceptor_equipment": 1
-      },
-      "terrain_modifiers": {}
-    },
-    "transport_plane": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "air_transport"
-      ],
-      "needs": {
-        "transport_plane_equipment": 1
-      },
-      "terrain_modifiers": {}
-    },
-    "guided_missile": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "missile"
-      ],
-      "needs": {
-        "guided_missile_equipment": 1
-      },
-      "terrain_modifiers": {}
-    },
-    "explosive_ammo": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "emplacement_gun_ammo"
-      ],
-      "needs": {
-        "explosive_ammo_equipment": 1
-      },
-      "terrain_modifiers": {}
-    },
-    "ballistic_missile": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "ballistic_missile"
-      ],
-      "needs": {
-        "ballistic_missile_equipment": 1
-      },
-      "terrain_modifiers": {}
-    },
-    "nuclear_missile": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "nuclear_missile"
-      ],
-      "needs": {
-        "nuclear_missile_equipment": 1
-      },
-      "terrain_modifiers": {}
-    },
-    "sam_missile": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "sam_missile"
-      ],
-      "needs": {
-        "sam_missile_equipment": 1
-      },
-      "terrain_modifiers": {}
-    },
-    "mothership": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "fighter"
-      ],
-      "needs": {
-        "mothership_equipment": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_fighter"
-      ]
-    },
-    "strat_bomber_intercontinental": {
-      "max_strength": 0,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "strategic_bomber"
-      ],
-      "needs": {
-        "strat_bomber_intercontinental_equipment": 1
-      },
-      "terrain_modifiers": {},
-      "categories": [
-        "category_strat_bomber"
-      ]
-    },
     "amphibious_armor": {
       "max_strength": 2,
       "max_organisation": 10,
@@ -519,6 +17,9 @@
         "amphibious_tank_chassis": 50
       },
       "terrain_modifiers": {
+        "marsh": {
+          "attack": 0.3
+        },
         "plains": {
           "attack": -0.1,
           "movement": -0.1
@@ -529,23 +30,20 @@
         "mountain": {
           "attack": -0.1
         },
-        "forest": {
-          "attack": -0.2,
+        "jungle": {
+          "attack": -0.3,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.4,
           "defense": -0.1
         },
-        "jungle": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": 0.3
-        },
         "river": {
           "attack": 0.4
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.4
         }
       },
       "abbreviation": "ATK",
@@ -576,6 +74,9 @@
         "light_tank_amphibious_chassis": 50
       },
       "terrain_modifiers": {
+        "marsh": {
+          "attack": 0.3
+        },
         "plains": {
           "attack": -0.1,
           "movement": -0.1
@@ -586,23 +87,20 @@
         "mountain": {
           "attack": -0.1
         },
-        "forest": {
-          "attack": -0.2,
+        "jungle": {
+          "attack": -0.3,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.4,
           "defense": -0.1
         },
-        "jungle": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": 0.3
-        },
         "river": {
           "attack": 0.4
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.4
         }
       },
       "abbreviation": "LAM",
@@ -632,6 +130,9 @@
         "medium_tank_amphibious_chassis": 50
       },
       "terrain_modifiers": {
+        "marsh": {
+          "attack": 0.3
+        },
         "plains": {
           "attack": -0.1,
           "movement": -0.1
@@ -642,23 +143,20 @@
         "mountain": {
           "attack": -0.1
         },
-        "forest": {
-          "attack": -0.2,
+        "jungle": {
+          "attack": -0.3,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.4,
           "defense": -0.1
         },
-        "jungle": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": 0.3
-        },
         "river": {
           "attack": 0.4
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.4
         }
       },
       "abbreviation": "MAM",
@@ -688,6 +186,9 @@
         "heavy_tank_amphibious_chassis": 50
       },
       "terrain_modifiers": {
+        "marsh": {
+          "attack": 0.3
+        },
         "plains": {
           "attack": -0.1,
           "movement": -0.1
@@ -698,23 +199,20 @@
         "mountain": {
           "attack": -0.1
         },
-        "forest": {
-          "attack": -0.2,
+        "jungle": {
+          "attack": -0.3,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.4,
           "defense": -0.1
         },
-        "jungle": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": 0.3
-        },
         "river": {
           "attack": 0.4
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.4
         }
       },
       "abbreviation": "HAM",
@@ -748,27 +246,27 @@
         "amphibious_mechanized_equipment"
       ],
       "terrain_modifiers": {
+        "marsh": {
+          "attack": 0.2
+        },
         "amphibious": {
           "attack": 0.5
         },
         "mountain": {
           "attack": -0.05
         },
-        "forest": {
-          "attack": -0.2
+        "jungle": {
+          "attack": -0.3
         },
         "urban": {
           "attack": -0.2,
           "defense": -0.05
         },
-        "jungle": {
-          "attack": -0.3
-        },
-        "marsh": {
-          "attack": 0.2
-        },
         "river": {
           "attack": 0.3
+        },
+        "forest": {
+          "attack": -0.2
         }
       },
       "abbreviation": "AMT",
@@ -780,6 +278,216 @@
         "category_vehicle_infantry",
         "category_mobile_and_mobile_combat_sup",
         "category_marines_and_amphibious"
+      ]
+    },
+    "anti_air_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 1,
+      "manpower": 500,
+      "training_time": 120,
+      "supply_consumption": 0.1,
+      "weight": 0.5,
+      "group": "combat_support",
+      "types": [
+        "infantry",
+        "anti_air"
+      ],
+      "needs": {
+        "anti_air_equipment": 36
+      },
+      "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "amphibious": {
+          "attack": -0.4
+        },
+        "jungle": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.1,
+          "movement": -0.1
+        }
+      },
+      "abbreviation": "ANA",
+      "categories": [
+        "category_army",
+        "category_line_artillery",
+        "category_anti_air"
+      ]
+    },
+    "mot_anti_air_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 1,
+      "manpower": 500,
+      "training_time": 120,
+      "supply_consumption": 0.15,
+      "weight": 0.5,
+      "group": "mobile_combat_support",
+      "types": [
+        "motorized",
+        "anti_air"
+      ],
+      "needs": {
+        "anti_air_equipment": 36,
+        "motorized_equipment": 36
+      },
+      "essential": [
+        "motorized_equipment"
+      ],
+      "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "amphibious": {
+          "attack": -0.4
+        },
+        "jungle": {
+          "attack": -0.2,
+          "movement": -0.5
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.1,
+          "movement": -0.5
+        }
+      },
+      "abbreviation": "MAA",
+      "categories": [
+        "category_army",
+        "category_line_artillery",
+        "category_mobile_and_mobile_combat_sup"
+      ]
+    },
+    "anti_tank_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0,
+      "combat_width": 1,
+      "manpower": 500,
+      "training_time": 120,
+      "supply_consumption": 0.1,
+      "weight": 0.5,
+      "group": "combat_support",
+      "types": [
+        "infantry",
+        "anti_tank"
+      ],
+      "needs": {
+        "anti_tank_equipment": 36
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "movement": -0.05
+        },
+        "marsh": {
+          "attack": -0.2,
+          "movement": -0.3
+        },
+        "amphibious": {
+          "attack": -0.4
+        },
+        "mountain": {
+          "movement": -0.2
+        },
+        "jungle": {
+          "attack": -0.25,
+          "movement": -0.2
+        },
+        "fort": {
+          "attack": 0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.2
+        }
+      },
+      "abbreviation": "ANT",
+      "categories": [
+        "category_front_line",
+        "category_army",
+        "category_line_artillery",
+        "category_anti_tank"
+      ]
+    },
+    "mot_anti_tank_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0,
+      "combat_width": 1,
+      "manpower": 500,
+      "training_time": 120,
+      "supply_consumption": 0.15,
+      "weight": 0.5,
+      "group": "mobile_combat_support",
+      "types": [
+        "motorized",
+        "anti_tank"
+      ],
+      "needs": {
+        "anti_tank_equipment": 36,
+        "motorized_equipment": 36
+      },
+      "essential": [
+        "motorized_equipment"
+      ],
+      "terrain_modifiers": {
+        "hills": {
+          "movement": -0.05
+        },
+        "marsh": {
+          "attack": -0.2,
+          "movement": -0.3
+        },
+        "amphibious": {
+          "attack": -0.4
+        },
+        "mountain": {
+          "movement": -0.2
+        },
+        "jungle": {
+          "attack": -0.25,
+          "movement": -0.5
+        },
+        "fort": {
+          "attack": 0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.5
+        }
+      },
+      "abbreviation": "MAT",
+      "categories": [
+        "category_front_line",
+        "category_army",
+        "category_line_artillery",
+        "category_mobile_and_mobile_combat_sup",
+        "category_anti_tank",
+        "category_mobile_anti_tank"
       ]
     },
     "armored_car": {
@@ -799,6 +507,13 @@
         "armored_car_equipment": 60
       },
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.15
+        },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.2
+        },
         "amphibious": {
           "attack": -0.4
         },
@@ -806,27 +521,20 @@
           "attack": -0.1,
           "movement": -0.1
         },
-        "forest": {
-          "attack": -0.2,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.3
-        },
         "jungle": {
           "attack": -0.3,
           "movement": -0.5
         },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.2
+        "urban": {
+          "attack": -0.3
         },
         "river": {
           "attack": -0.2,
           "movement": -0.2
         },
-        "desert": {
-          "movement": 0.15
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.4
         }
       },
       "abbreviation": "CAR",
@@ -836,37 +544,288 @@
         "category_mobile_and_mobile_combat_sup"
       ]
     },
-    "battle_cruiser": {
-      "max_strength": 0,
-      "max_organisation": 50,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0.32,
-      "weight": 0,
-      "group": null,
+    "artillery_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 3,
+      "manpower": 500,
+      "training_time": 120,
+      "supply_consumption": 0.21,
+      "weight": 0.5,
+      "group": "combat_support",
       "types": [
-        "capital_ship"
+        "infantry",
+        "artillery"
       ],
-      "needs": {},
-      "terrain_modifiers": {}
+      "needs": {
+        "artillery_equipment": 24
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "movement": -0.05
+        },
+        "marsh": {
+          "attack": -0.2,
+          "movement": -0.3
+        },
+        "amphibious": {
+          "attack": -0.4
+        },
+        "mountain": {
+          "movement": -0.2
+        },
+        "jungle": {
+          "attack": -0.25,
+          "movement": -0.2
+        },
+        "fort": {
+          "attack": 0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.2
+        }
+      },
+      "abbreviation": "ART",
+      "categories": [
+        "category_army",
+        "category_line_artillery",
+        "category_artillery"
+      ]
     },
-    "battleship": {
-      "max_strength": 0,
-      "max_organisation": 50,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0.56,
-      "weight": 0,
-      "group": null,
+    "mot_artillery_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 3,
+      "manpower": 500,
+      "training_time": 120,
+      "supply_consumption": 0.25,
+      "weight": 0.5,
+      "group": "mobile_combat_support",
       "types": [
-        "capital_ship"
+        "motorized",
+        "artillery"
       ],
-      "needs": {},
-      "terrain_modifiers": {}
+      "needs": {
+        "artillery_equipment": 24,
+        "motorized_equipment": 36
+      },
+      "essential": [
+        "motorized_equipment"
+      ],
+      "terrain_modifiers": {
+        "hills": {
+          "movement": -0.05
+        },
+        "marsh": {
+          "attack": -0.2,
+          "movement": -0.3
+        },
+        "amphibious": {
+          "attack": -0.4
+        },
+        "mountain": {
+          "movement": -0.2
+        },
+        "jungle": {
+          "attack": -0.25,
+          "movement": -0.5
+        },
+        "fort": {
+          "attack": 0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.5
+        }
+      },
+      "abbreviation": "MRT",
+      "categories": [
+        "category_army",
+        "category_line_artillery",
+        "category_artillery",
+        "category_mobile_and_mobile_combat_sup"
+      ]
+    },
+    "rocket_artillery_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 3,
+      "manpower": 500,
+      "training_time": 120,
+      "supply_consumption": 0.22,
+      "weight": 0.5,
+      "group": "combat_support",
+      "types": [
+        "infantry",
+        "artillery"
+      ],
+      "needs": {
+        "rocket_artillery_equipment": 24
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "movement": -0.05
+        },
+        "marsh": {
+          "attack": -0.2,
+          "movement": -0.3
+        },
+        "amphibious": {
+          "attack": -0.4
+        },
+        "mountain": {
+          "movement": -0.2
+        },
+        "jungle": {
+          "attack": -0.25,
+          "movement": -0.2
+        },
+        "fort": {
+          "attack": 0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.2
+        }
+      },
+      "abbreviation": "RRT",
+      "categories": [
+        "category_army",
+        "category_line_artillery",
+        "category_artillery",
+        "category_rocket_artillery"
+      ]
+    },
+    "mot_rocket_artillery_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 3,
+      "manpower": 500,
+      "training_time": 120,
+      "supply_consumption": 0.25,
+      "weight": 0.5,
+      "group": "mobile_combat_support",
+      "types": [
+        "motorized",
+        "artillery"
+      ],
+      "needs": {
+        "rocket_artillery_equipment": 24,
+        "motorized_equipment": 36
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "movement": -0.05
+        },
+        "marsh": {
+          "attack": -0.2,
+          "movement": -0.3
+        },
+        "amphibious": {
+          "attack": -0.4
+        },
+        "mountain": {
+          "movement": -0.2
+        },
+        "jungle": {
+          "attack": -0.25,
+          "movement": -0.5
+        },
+        "fort": {
+          "attack": 0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.5
+        }
+      },
+      "abbreviation": "TRA",
+      "categories": [
+        "category_army",
+        "category_line_artillery",
+        "category_artillery",
+        "category_rocket_artillery",
+        "category_mobile_and_mobile_combat_sup"
+      ]
+    },
+    "motorized_rocket_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 3,
+      "manpower": 500,
+      "training_time": 120,
+      "supply_consumption": 0.25,
+      "weight": 0.5,
+      "group": "mobile_combat_support",
+      "types": [
+        "artillery",
+        "motorized",
+        "rocket"
+      ],
+      "needs": {
+        "motorized_rocket_equipment": 16,
+        "motorized_equipment": 16
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "movement": -0.05
+        },
+        "marsh": {
+          "attack": -0.2,
+          "movement": -0.5
+        },
+        "amphibious": {
+          "attack": -0.4
+        },
+        "mountain": {
+          "movement": -0.2
+        },
+        "jungle": {
+          "attack": -0.25,
+          "movement": -0.5
+        },
+        "fort": {
+          "attack": 0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.1,
+          "movement": -0.5
+        }
+      },
+      "abbreviation": "MRA",
+      "categories": [
+        "category_army",
+        "category_line_artillery",
+        "category_artillery",
+        "category_rocket_artillery",
+        "category_mobile_and_mobile_combat_sup"
+      ]
     },
     "bus": {
       "max_strength": 400,
@@ -887,54 +846,36 @@
         "infantry_equipment": 2
       },
       "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.3
+        },
         "amphibious": {
           "attack": -0.2
         },
         "mountain": {
           "attack": -0.05
         },
-        "forest": {
-          "attack": -0.1,
+        "jungle": {
+          "attack": -0.2,
           "movement": -0.5
         },
         "urban": {
           "attack": -0.1
         },
-        "jungle": {
-          "attack": -0.2,
-          "movement": -0.5
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.3
-        },
         "river": {
           "attack": -0.1,
           "movement": -0.1
+        },
+        "forest": {
+          "attack": -0.1,
+          "movement": -0.5
         }
       },
       "abbreviation": "BUS",
       "categories": [
         "category_bus"
       ]
-    },
-    "carrier": {
-      "max_strength": 0,
-      "max_organisation": 40,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0.8,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "carrier"
-      ],
-      "needs": {
-        "ship_hull_carrier": 1
-      },
-      "terrain_modifiers": {}
     },
     "cavalry": {
       "max_strength": 25,
@@ -963,14 +904,14 @@
           "attack": -0.1,
           "movement": -0.05
         },
-        "forest": {
-          "attack": -0.05
+        "jungle": {
+          "attack": -0.1
         },
         "urban": {
           "attack": -0.05
         },
-        "jungle": {
-          "attack": -0.1
+        "forest": {
+          "attack": -0.05
         }
       },
       "abbreviation": "CAV",
@@ -997,9 +938,17 @@
         "infantry_equipment": 150
       },
       "terrain_modifiers": {
+        "desert": {
+          "attack": 0.05,
+          "defense": 0.05,
+          "movement": 0.1
+        },
         "hills": {
           "attack": -0.05,
           "movement": -0.05
+        },
+        "marsh": {
+          "movement": 0.05
         },
         "plains": {
           "movement": 0.15
@@ -1011,23 +960,15 @@
           "attack": -0.1,
           "movement": -0.05
         },
-        "forest": {
-          "attack": -0.05
+        "jungle": {
+          "attack": -0.1
         },
         "urban": {
           "attack": -0.05,
           "movement": -0.05
         },
-        "jungle": {
-          "attack": -0.1
-        },
-        "marsh": {
-          "movement": 0.05
-        },
-        "desert": {
-          "attack": 0.05,
-          "defense": 0.05,
-          "movement": 0.1
+        "forest": {
+          "attack": -0.05
         }
       },
       "abbreviation": "CAM",
@@ -1059,6 +1000,10 @@
           "attack": 0.05,
           "movement": 0.15
         },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
         "amphibious": {
           "attack": -0.7
         },
@@ -1066,21 +1011,17 @@
           "attack": 0.05,
           "movement": 0.15
         },
-        "forest": {
-          "attack": 0.05,
-          "movement": 0.05
+        "jungle": {
+          "attack": 0.1,
+          "movement": 0.15
         },
         "urban": {
           "attack": -0.15,
           "movement": -0.25
         },
-        "jungle": {
-          "attack": 0.1,
-          "movement": 0.15
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
+        "forest": {
+          "attack": 0.05,
+          "movement": 0.05
         }
       },
       "abbreviation": "ELE",
@@ -1089,24 +1030,6 @@
         "category_cavalry",
         "category_army"
       ]
-    },
-    "destroyer": {
-      "max_strength": 0,
-      "max_organisation": 35,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0.04,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "screen_ship"
-      ],
-      "needs": {
-        "ship_hull_light": 1
-      },
-      "terrain_modifiers": {}
     },
     "heavy_armor": {
       "max_strength": 2,
@@ -1128,34 +1051,34 @@
         "hills": {
           "attack": -0.2
         },
+        "marsh": {
+          "attack": -0.4,
+          "movement": -0.2
+        },
         "amphibious": {
           "attack": -0.9
         },
         "mountain": {
           "attack": -0.3
         },
-        "forest": {
-          "attack": -0.4,
+        "jungle": {
+          "attack": -0.6,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.5,
           "defense": -0.2
         },
-        "jungle": {
-          "attack": -0.6,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.4,
-          "movement": -0.2
+        "fort": {
+          "attack": 0.1
         },
         "river": {
           "attack": -0.4,
           "movement": -0.4
         },
-        "fort": {
-          "attack": 0.1
+        "forest": {
+          "attack": -0.4,
+          "movement": -0.4
         }
       },
       "abbreviation": "HTK",
@@ -1166,23 +1089,31 @@
         "category_army"
       ]
     },
-    "heavy_cruiser": {
-      "max_strength": 0,
-      "max_organisation": 40,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0.24,
-      "weight": 0,
-      "group": null,
+    "hq_infantry": {
+      "max_strength": 15,
+      "max_organisation": 60,
+      "default_morale": 0.3,
+      "combat_width": 2,
+      "manpower": 600,
+      "training_time": 90,
+      "supply_consumption": 0,
+      "weight": 0.5,
+      "group": "infantry",
       "types": [
-        "capital_ship"
+        "infantry"
       ],
+      "regimental": false,
       "needs": {
-        "ship_hull_cruiser": 1
+        "infantry_equipment": 60
       },
-      "terrain_modifiers": {}
+      "terrain_modifiers": {},
+      "abbreviation": "HINF",
+      "categories": [
+        "category_front_line",
+        "category_light_infantry",
+        "category_all_infantry",
+        "category_army"
+      ]
     },
     "hq_motorized": {
       "max_strength": 15,
@@ -1202,30 +1133,30 @@
         "motorized_equipment": 20
       },
       "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.3
+        },
         "amphibious": {
           "attack": -0.2
         },
         "mountain": {
           "attack": -0.05
         },
-        "forest": {
-          "attack": -0.1,
+        "jungle": {
+          "attack": -0.2,
           "movement": -0.5
         },
         "urban": {
           "attack": -0.1
         },
-        "jungle": {
-          "attack": -0.2,
-          "movement": -0.5
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.3
-        },
         "river": {
           "attack": -0.1,
           "movement": -0.1
+        },
+        "forest": {
+          "attack": -0.1,
+          "movement": -0.5
         }
       },
       "abbreviation": "HMOT",
@@ -1281,31 +1212,31 @@
         "light_tank_chassis": 30
       },
       "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
         "amphibious": {
           "attack": -0.4
         },
         "mountain": {
           "attack": -0.1
         },
-        "forest": {
-          "attack": -0.2,
+        "jungle": {
+          "attack": -0.3,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.4,
           "defense": -0.1
         },
-        "jungle": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
         "river": {
           "attack": -0.2,
           "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.4
         }
       },
       "abbreviation": "HLTK",
@@ -1337,31 +1268,31 @@
         "hills": {
           "attack": -0.1
         },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
         "amphibious": {
           "attack": -0.8
         },
         "mountain": {
           "attack": -0.2
         },
-        "forest": {
-          "attack": -0.3,
+        "jungle": {
+          "attack": -0.4,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.4,
           "defense": -0.1
         },
-        "jungle": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
         "river": {
           "attack": -0.2,
           "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.3,
+          "movement": -0.4
         }
       },
       "abbreviation": "HMTK",
@@ -1393,34 +1324,34 @@
         "hills": {
           "attack": -0.2
         },
+        "marsh": {
+          "attack": -0.4,
+          "movement": -0.2
+        },
         "amphibious": {
           "attack": -0.9
         },
         "mountain": {
           "attack": -0.3
         },
-        "forest": {
-          "attack": -0.4,
+        "jungle": {
+          "attack": -0.6,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.5,
           "defense": -0.2
         },
-        "jungle": {
-          "attack": -0.6,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.4,
-          "movement": -0.2
+        "fort": {
+          "attack": 0.1
         },
         "river": {
           "attack": -0.4,
           "movement": -0.4
         },
-        "fort": {
-          "attack": 0.1
+        "forest": {
+          "attack": -0.4,
+          "movement": -0.4
         }
       },
       "abbreviation": "HHTK",
@@ -1475,8 +1406,14 @@
         "support_equipment": 10
       },
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.05
+        },
         "hills": {
           "movement": 0.1
+        },
+        "marsh": {
+          "movement": 0.05
         },
         "plains": {
           "movement": 0.2
@@ -1487,23 +1424,17 @@
         "mountain": {
           "movement": 0.05
         },
-        "forest": {
+        "jungle": {
           "movement": 0.0
         },
         "urban": {
           "movement": 0.2
         },
-        "jungle": {
-          "movement": 0.0
-        },
-        "marsh": {
-          "movement": 0.05
-        },
         "river": {
           "movement": -0.05
         },
-        "desert": {
-          "movement": 0.05
+        "forest": {
+          "movement": 0.0
         }
       },
       "abbreviation": "BIC",
@@ -1532,11 +1463,11 @@
         "infantry_equipment": 150
       },
       "terrain_modifiers": {
-        "amphibious": {
-          "attack": 0.5
-        },
         "marsh": {
           "attack": 0.3
+        },
+        "amphibious": {
+          "attack": 0.5
         },
         "river": {
           "attack": 0.3
@@ -1571,11 +1502,11 @@
         "infantry_equipment": 150
       },
       "terrain_modifiers": {
-        "amphibious": {
-          "attack": 0.5
-        },
         "marsh": {
           "attack": 0.3
+        },
+        "amphibious": {
+          "attack": 0.5
         },
         "river": {
           "attack": 0.3
@@ -1649,13 +1580,13 @@
         "infantry_equipment": 140
       },
       "terrain_modifiers": {
-        "forest": {
-          "attack": 0.1,
+        "jungle": {
+          "attack": 0.2,
           "defense": 0.1,
           "movement": 0.15
         },
-        "jungle": {
-          "attack": 0.2,
+        "forest": {
+          "attack": 0.1,
           "defense": 0.1,
           "movement": 0.15
         }
@@ -1717,30 +1648,30 @@
         "motorized_equipment": 35
       },
       "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.3
+        },
         "amphibious": {
           "attack": -0.2
         },
         "mountain": {
           "attack": -0.05
         },
-        "forest": {
-          "attack": -0.1,
+        "jungle": {
+          "attack": -0.2,
           "movement": -0.5
         },
         "urban": {
           "attack": -0.1
         },
-        "jungle": {
-          "attack": -0.2,
-          "movement": -0.5
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.3
-        },
         "river": {
           "attack": -0.1,
           "movement": -0.1
+        },
+        "forest": {
+          "attack": -0.1,
+          "movement": -0.5
         }
       },
       "abbreviation": "MOT",
@@ -1774,28 +1705,28 @@
         "mechanized_equipment"
       ],
       "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.1
+        },
         "amphibious": {
           "attack": -0.4
         },
         "mountain": {
           "attack": -0.05
         },
-        "forest": {
-          "attack": -0.2
+        "jungle": {
+          "attack": -0.3
         },
         "urban": {
           "attack": -0.2,
           "defense": -0.05
         },
-        "jungle": {
-          "attack": -0.3
-        },
-        "marsh": {
-          "attack": -0.1
-        },
         "river": {
           "attack": -0.2,
           "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2
         }
       },
       "abbreviation": "MEC",
@@ -1873,6 +1804,10 @@
         "infantry_equipment": 80
       },
       "terrain_modifiers": {
+        "desert": {
+          "attack": 0.25,
+          "defense": 0.1
+        },
         "hills": {
           "attack": 0.15,
           "defense": 0.05
@@ -1884,10 +1819,6 @@
         "forest": {
           "attack": 0.15,
           "defense": 0.05
-        },
-        "desert": {
-          "attack": 0.25,
-          "defense": 0.1
         }
       },
       "abbreviation": "IRR",
@@ -1941,31 +1872,31 @@
         "light_tank_chassis": 60
       },
       "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
         "amphibious": {
           "attack": -0.4
         },
         "mountain": {
           "attack": -0.1
         },
-        "forest": {
-          "attack": -0.2,
+        "jungle": {
+          "attack": -0.3,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.4,
           "defense": -0.1
         },
-        "jungle": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
         "river": {
           "attack": -0.2,
           "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.4
         }
       },
       "abbreviation": "LTK",
@@ -1975,24 +1906,6 @@
         "category_all_armor",
         "category_army"
       ]
-    },
-    "light_cruiser": {
-      "max_strength": 0,
-      "max_organisation": 40,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0.16,
-      "weight": 0,
-      "group": null,
-      "types": [
-        "screen_ship"
-      ],
-      "needs": {
-        "ship_hull_cruiser": 1
-      },
-      "terrain_modifiers": {}
     },
     "medium_armor": {
       "max_strength": 2,
@@ -2014,31 +1927,31 @@
         "hills": {
           "attack": -0.1
         },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
         "amphibious": {
           "attack": -0.8
         },
         "mountain": {
           "attack": -0.2
         },
-        "forest": {
-          "attack": -0.3,
+        "jungle": {
+          "attack": -0.4,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.4,
           "defense": -0.1
         },
-        "jungle": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
         "river": {
           "attack": -0.2,
           "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.3,
+          "movement": -0.4
         }
       },
       "abbreviation": "MTK",
@@ -2069,31 +1982,31 @@
         "hills": {
           "attack": -0.1
         },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
         "amphibious": {
           "attack": -0.7
         },
         "mountain": {
           "attack": -0.2
         },
-        "forest": {
-          "attack": -0.3,
+        "jungle": {
+          "attack": -0.4,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.4,
           "defense": -0.1
         },
-        "jungle": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
         "river": {
           "attack": -0.2,
           "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.3,
+          "movement": -0.4
         }
       },
       "abbreviation": "OTK",
@@ -2140,59 +2053,663 @@
       },
       "terrain_modifiers": {}
     },
-    "repair_ship": {
-      "max_strength": 0,
-      "max_organisation": 40,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0.04,
-      "weight": 0,
-      "group": null,
+    "light_sp_anti_air_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.1,
+      "weight": 1,
+      "group": "armor_combat_support",
       "types": [
-        "support_ship"
+        "armor",
+        "anti_air"
       ],
       "needs": {
-        "repair_ship_1": 1
+        "light_tank_aa_chassis": 40
       },
-      "terrain_modifiers": {}
+      "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
+        "amphibious": {
+          "attack": -0.6
+        },
+        "mountain": {
+          "attack": -0.1
+        },
+        "jungle": {
+          "attack": -0.3,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.4,
+          "defense": -0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "LAA",
+      "categories": [
+        "category_all_armor",
+        "category_army",
+        "category_self_propelled_anti_air"
+      ]
     },
-    "submarine": {
-      "max_strength": 0,
-      "max_organisation": 30,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0.04,
-      "weight": 0,
-      "group": null,
+    "medium_sp_anti_air_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.1,
+      "weight": 1.25,
+      "group": "armor_combat_support",
       "types": [
-        "submarine"
+        "armor",
+        "anti_air"
       ],
       "needs": {
-        "ship_hull_submarine": 1
+        "medium_tank_aa_chassis": 40
       },
-      "terrain_modifiers": {}
+      "terrain_modifiers": {
+        "hills": {
+          "attack": -0.1
+        },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
+        "amphibious": {
+          "attack": -0.7
+        },
+        "mountain": {
+          "attack": -0.2
+        },
+        "jungle": {
+          "attack": -0.4,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.4,
+          "defense": -0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.3,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "MAA",
+      "categories": [
+        "category_all_armor",
+        "category_army",
+        "category_self_propelled_anti_air"
+      ]
     },
-    "support_ship": {
-      "max_strength": 0,
-      "max_organisation": 40,
-      "default_morale": 0,
-      "combat_width": 0,
-      "manpower": 0,
-      "training_time": 0,
-      "supply_consumption": 0.04,
-      "weight": 0,
-      "group": null,
+    "heavy_sp_anti_air_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.1,
+      "weight": 1.5,
+      "group": "armor_combat_support",
       "types": [
-        "support_ship"
+        "armor",
+        "anti_air"
       ],
       "needs": {
-        "support_ship_1": 1
+        "heavy_tank_aa_chassis": 40
       },
-      "terrain_modifiers": {}
+      "terrain_modifiers": {
+        "hills": {
+          "attack": -0.2
+        },
+        "marsh": {
+          "attack": -0.4,
+          "movement": -0.2
+        },
+        "amphibious": {
+          "attack": -0.8
+        },
+        "mountain": {
+          "attack": -0.3
+        },
+        "jungle": {
+          "attack": -0.6,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.5,
+          "defense": -0.2
+        },
+        "river": {
+          "attack": -0.4,
+          "movement": -0.4
+        },
+        "forest": {
+          "attack": -0.4,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "HAA",
+      "categories": [
+        "category_all_armor",
+        "category_army",
+        "category_self_propelled_anti_air"
+      ]
+    },
+    "modern_sp_anti_air_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.1,
+      "weight": 1.5,
+      "group": "armor_combat_support",
+      "types": [
+        "armor",
+        "anti_air"
+      ],
+      "needs": {
+        "modern_tank_aa_chassis": 40
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "attack": -0.1
+        },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
+        "amphibious": {
+          "attack": -0.7
+        },
+        "mountain": {
+          "attack": -0.2
+        },
+        "jungle": {
+          "attack": -0.4,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.4,
+          "defense": -0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.3,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "OAA",
+      "categories": [
+        "category_all_armor",
+        "category_army",
+        "category_self_propelled_anti_air"
+      ]
+    },
+    "light_sp_artillery_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.42,
+      "weight": 1,
+      "group": "armor_combat_support",
+      "types": [
+        "armor",
+        "artillery"
+      ],
+      "needs": {
+        "light_tank_artillery_chassis": 40
+      },
+      "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
+        "amphibious": {
+          "attack": -0.6
+        },
+        "mountain": {
+          "attack": -0.1
+        },
+        "jungle": {
+          "attack": -0.3,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.4,
+          "defense": -0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "LAR",
+      "categories": [
+        "category_all_armor",
+        "category_army",
+        "category_self_propelled_artillery"
+      ]
+    },
+    "medium_sp_artillery_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.46,
+      "weight": 1.25,
+      "group": "armor_combat_support",
+      "types": [
+        "armor",
+        "artillery"
+      ],
+      "needs": {
+        "medium_tank_artillery_chassis": 40
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "attack": -0.1
+        },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
+        "amphibious": {
+          "attack": -0.7
+        },
+        "mountain": {
+          "attack": -0.2
+        },
+        "jungle": {
+          "attack": -0.4,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.4,
+          "defense": -0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.3,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "MAR",
+      "categories": [
+        "category_all_armor",
+        "category_army",
+        "category_self_propelled_artillery"
+      ]
+    },
+    "heavy_sp_artillery_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.6,
+      "weight": 1.5,
+      "group": "armor_combat_support",
+      "types": [
+        "armor",
+        "artillery"
+      ],
+      "needs": {
+        "heavy_tank_artillery_chassis": 40
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "attack": -0.2
+        },
+        "marsh": {
+          "attack": -0.4,
+          "movement": -0.2
+        },
+        "amphibious": {
+          "attack": -0.8
+        },
+        "mountain": {
+          "attack": -0.3
+        },
+        "jungle": {
+          "attack": -0.6,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.5,
+          "defense": -0.2
+        },
+        "river": {
+          "attack": -0.4,
+          "movement": -0.4
+        },
+        "forest": {
+          "attack": -0.4,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "HAR",
+      "categories": [
+        "category_all_armor",
+        "category_army",
+        "category_self_propelled_artillery"
+      ]
+    },
+    "modern_sp_artillery_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.1,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.5,
+      "weight": 1.5,
+      "group": "armor_combat_support",
+      "types": [
+        "armor",
+        "artillery"
+      ],
+      "needs": {
+        "modern_tank_artillery_chassis": 40
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "attack": -0.1
+        },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
+        "amphibious": {
+          "attack": -0.7
+        },
+        "mountain": {
+          "attack": -0.2
+        },
+        "jungle": {
+          "attack": -0.4,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.4,
+          "defense": -0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.3,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "OAR",
+      "categories": [
+        "category_all_armor",
+        "category_army",
+        "category_self_propelled_artillery"
+      ]
+    },
+    "light_tank_destroyer_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.3,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.2,
+      "weight": 1,
+      "group": "armor_combat_support",
+      "types": [
+        "armor",
+        "anti_tank"
+      ],
+      "needs": {
+        "light_tank_destroyer_chassis": 40
+      },
+      "terrain_modifiers": {
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
+        "amphibious": {
+          "attack": -0.6
+        },
+        "mountain": {
+          "attack": -0.1
+        },
+        "jungle": {
+          "attack": -0.3,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.4,
+          "defense": -0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.2,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "LTD",
+      "categories": [
+        "category_front_line",
+        "category_all_armor",
+        "category_army",
+        "category_tank_destroyers"
+      ]
+    },
+    "medium_tank_destroyer_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.3,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.22,
+      "weight": 1.25,
+      "group": "armor_combat_support",
+      "types": [
+        "armor",
+        "anti_tank"
+      ],
+      "needs": {
+        "medium_tank_destroyer_chassis": 40
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "attack": -0.1
+        },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
+        "amphibious": {
+          "attack": -0.7
+        },
+        "mountain": {
+          "attack": -0.2
+        },
+        "jungle": {
+          "attack": -0.4,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.4,
+          "defense": -0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.3,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "MTD",
+      "categories": [
+        "category_front_line",
+        "category_all_armor",
+        "category_army",
+        "category_tank_destroyers"
+      ]
+    },
+    "heavy_tank_destroyer_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.3,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.3,
+      "weight": 1.5,
+      "group": "armor_combat_support",
+      "types": [
+        "armor",
+        "anti_tank"
+      ],
+      "needs": {
+        "heavy_tank_destroyer_chassis": 40
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "attack": -0.2
+        },
+        "marsh": {
+          "attack": -0.4,
+          "movement": -0.2
+        },
+        "amphibious": {
+          "attack": -0.8
+        },
+        "mountain": {
+          "attack": -0.3
+        },
+        "jungle": {
+          "attack": -0.6,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.5,
+          "defense": -0.2
+        },
+        "fort": {
+          "attack": 0.05
+        },
+        "river": {
+          "attack": -0.4,
+          "movement": -0.4
+        },
+        "forest": {
+          "attack": -0.4,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "HTD",
+      "categories": [
+        "category_front_line",
+        "category_all_armor",
+        "category_army",
+        "category_tank_destroyers"
+      ]
+    },
+    "modern_tank_destroyer_brigade": {
+      "max_strength": 0.6,
+      "max_organisation": 0,
+      "default_morale": 0.3,
+      "combat_width": 2,
+      "manpower": 500,
+      "training_time": 180,
+      "supply_consumption": 0.25,
+      "weight": 1.5,
+      "group": "armor_combat_support",
+      "types": [
+        "armor",
+        "anti_tank"
+      ],
+      "needs": {
+        "modern_tank_destroyer_chassis": 40
+      },
+      "terrain_modifiers": {
+        "hills": {
+          "attack": -0.1
+        },
+        "marsh": {
+          "attack": -0.1,
+          "movement": -0.1
+        },
+        "amphibious": {
+          "attack": -0.7
+        },
+        "mountain": {
+          "attack": -0.2
+        },
+        "jungle": {
+          "attack": -0.4,
+          "movement": -0.4
+        },
+        "urban": {
+          "attack": -0.4,
+          "defense": -0.1
+        },
+        "river": {
+          "attack": -0.2,
+          "movement": -0.2
+        },
+        "forest": {
+          "attack": -0.3,
+          "movement": -0.4
+        }
+      },
+      "abbreviation": "OTD",
+      "categories": [
+        "category_front_line",
+        "category_all_armor",
+        "category_army",
+        "category_tank_destroyers"
+      ]
     }
   },
   "support_companies": {
@@ -2223,100 +2740,6 @@
         "category_divisional_support_battalions"
       ]
     },
-    "anti_air_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 1,
-      "manpower": 500,
-      "training_time": 120,
-      "supply_consumption": 0.1,
-      "weight": 0.5,
-      "group": "combat_support",
-      "types": [
-        "infantry",
-        "anti_air"
-      ],
-      "needs": {
-        "anti_air_equipment": 36
-      },
-      "terrain_modifiers": {
-        "amphibious": {
-          "attack": -0.4
-        },
-        "forest": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
-        "jungle": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "marsh": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "ANA",
-      "categories": [
-        "category_army",
-        "category_line_artillery",
-        "category_anti_air"
-      ]
-    },
-    "mot_anti_air_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 1,
-      "manpower": 500,
-      "training_time": 120,
-      "supply_consumption": 0.15,
-      "weight": 0.5,
-      "group": "mobile_combat_support",
-      "types": [
-        "motorized",
-        "anti_air"
-      ],
-      "needs": {
-        "anti_air_equipment": 36,
-        "motorized_equipment": 36
-      },
-      "essential": [
-        "motorized_equipment"
-      ],
-      "terrain_modifiers": {
-        "amphibious": {
-          "attack": -0.4
-        },
-        "forest": {
-          "attack": -0.1,
-          "movement": -0.5
-        },
-        "jungle": {
-          "attack": -0.2,
-          "movement": -0.5
-        },
-        "marsh": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "MAA",
-      "categories": [
-        "category_army",
-        "category_line_artillery",
-        "category_mobile_and_mobile_combat_sup"
-      ]
-    },
     "anti_tank": {
       "max_strength": 0.2,
       "max_organisation": 0,
@@ -2342,122 +2765,6 @@
         "category_support_battalions",
         "category_divisional_support_battalions",
         "category_army",
-        "category_anti_tank",
-        "category_mobile_anti_tank"
-      ]
-    },
-    "anti_tank_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 1,
-      "manpower": 500,
-      "training_time": 120,
-      "supply_consumption": 0.1,
-      "weight": 0.5,
-      "group": "combat_support",
-      "types": [
-        "infantry",
-        "anti_tank"
-      ],
-      "needs": {
-        "anti_tank_equipment": 36
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "movement": -0.05
-        },
-        "amphibious": {
-          "attack": -0.4
-        },
-        "mountain": {
-          "movement": -0.2
-        },
-        "forest": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "jungle": {
-          "attack": -0.25,
-          "movement": -0.2
-        },
-        "marsh": {
-          "attack": -0.2,
-          "movement": -0.3
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "fort": {
-          "attack": 0.1
-        }
-      },
-      "abbreviation": "ANT",
-      "categories": [
-        "category_front_line",
-        "category_army",
-        "category_line_artillery",
-        "category_anti_tank"
-      ]
-    },
-    "mot_anti_tank_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0,
-      "combat_width": 1,
-      "manpower": 500,
-      "training_time": 120,
-      "supply_consumption": 0.15,
-      "weight": 0.5,
-      "group": "mobile_combat_support",
-      "types": [
-        "motorized",
-        "anti_tank"
-      ],
-      "needs": {
-        "anti_tank_equipment": 36,
-        "motorized_equipment": 36
-      },
-      "essential": [
-        "motorized_equipment"
-      ],
-      "terrain_modifiers": {
-        "hills": {
-          "movement": -0.05
-        },
-        "amphibious": {
-          "attack": -0.4
-        },
-        "mountain": {
-          "movement": -0.2
-        },
-        "forest": {
-          "attack": -0.2,
-          "movement": -0.5
-        },
-        "jungle": {
-          "attack": -0.25,
-          "movement": -0.5
-        },
-        "marsh": {
-          "attack": -0.2,
-          "movement": -0.3
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "fort": {
-          "attack": 0.1
-        }
-      },
-      "abbreviation": "MAT",
-      "categories": [
-        "category_front_line",
-        "category_army",
-        "category_line_artillery",
-        "category_mobile_and_mobile_combat_sup",
         "category_anti_tank",
         "category_mobile_anti_tank"
       ]
@@ -2581,289 +2888,6 @@
         "category_support_artillery"
       ]
     },
-    "artillery_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 3,
-      "manpower": 500,
-      "training_time": 120,
-      "supply_consumption": 0.21,
-      "weight": 0.5,
-      "group": "combat_support",
-      "types": [
-        "infantry",
-        "artillery"
-      ],
-      "needs": {
-        "artillery_equipment": 24
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "movement": -0.05
-        },
-        "amphibious": {
-          "attack": -0.4
-        },
-        "mountain": {
-          "movement": -0.2
-        },
-        "forest": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "jungle": {
-          "attack": -0.25,
-          "movement": -0.2
-        },
-        "marsh": {
-          "attack": -0.2,
-          "movement": -0.3
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "fort": {
-          "attack": 0.1
-        }
-      },
-      "abbreviation": "ART",
-      "categories": [
-        "category_army",
-        "category_line_artillery",
-        "category_artillery"
-      ]
-    },
-    "mot_artillery_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 3,
-      "manpower": 500,
-      "training_time": 120,
-      "supply_consumption": 0.25,
-      "weight": 0.5,
-      "group": "mobile_combat_support",
-      "types": [
-        "motorized",
-        "artillery"
-      ],
-      "needs": {
-        "artillery_equipment": 24,
-        "motorized_equipment": 36
-      },
-      "essential": [
-        "motorized_equipment"
-      ],
-      "terrain_modifiers": {
-        "hills": {
-          "movement": -0.05
-        },
-        "amphibious": {
-          "attack": -0.4
-        },
-        "mountain": {
-          "movement": -0.2
-        },
-        "forest": {
-          "attack": -0.2,
-          "movement": -0.5
-        },
-        "jungle": {
-          "attack": -0.25,
-          "movement": -0.5
-        },
-        "marsh": {
-          "attack": -0.2,
-          "movement": -0.3
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "fort": {
-          "attack": 0.1
-        }
-      },
-      "abbreviation": "MRT",
-      "categories": [
-        "category_army",
-        "category_line_artillery",
-        "category_artillery",
-        "category_mobile_and_mobile_combat_sup"
-      ]
-    },
-    "rocket_artillery_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 3,
-      "manpower": 500,
-      "training_time": 120,
-      "supply_consumption": 0.22,
-      "weight": 0.5,
-      "group": "combat_support",
-      "types": [
-        "infantry",
-        "artillery"
-      ],
-      "needs": {
-        "rocket_artillery_equipment": 24
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "movement": -0.05
-        },
-        "amphibious": {
-          "attack": -0.4
-        },
-        "mountain": {
-          "movement": -0.2
-        },
-        "forest": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "jungle": {
-          "attack": -0.25,
-          "movement": -0.2
-        },
-        "marsh": {
-          "attack": -0.2,
-          "movement": -0.3
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "fort": {
-          "attack": 0.1
-        }
-      },
-      "abbreviation": "RRT",
-      "categories": [
-        "category_army",
-        "category_line_artillery",
-        "category_artillery",
-        "category_rocket_artillery"
-      ]
-    },
-    "mot_rocket_artillery_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 3,
-      "manpower": 500,
-      "training_time": 120,
-      "supply_consumption": 0.25,
-      "weight": 0.5,
-      "group": "mobile_combat_support",
-      "types": [
-        "motorized",
-        "artillery"
-      ],
-      "needs": {
-        "rocket_artillery_equipment": 24,
-        "motorized_equipment": 36
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "movement": -0.05
-        },
-        "amphibious": {
-          "attack": -0.4
-        },
-        "mountain": {
-          "movement": -0.2
-        },
-        "forest": {
-          "attack": -0.2,
-          "movement": -0.5
-        },
-        "jungle": {
-          "attack": -0.25,
-          "movement": -0.5
-        },
-        "marsh": {
-          "attack": -0.2,
-          "movement": -0.3
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "fort": {
-          "attack": 0.1
-        }
-      },
-      "abbreviation": "TRA",
-      "categories": [
-        "category_army",
-        "category_line_artillery",
-        "category_artillery",
-        "category_rocket_artillery",
-        "category_mobile_and_mobile_combat_sup"
-      ]
-    },
-    "motorized_rocket_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 3,
-      "manpower": 500,
-      "training_time": 120,
-      "supply_consumption": 0.25,
-      "weight": 0.5,
-      "group": "mobile_combat_support",
-      "types": [
-        "artillery",
-        "motorized",
-        "rocket"
-      ],
-      "needs": {
-        "motorized_rocket_equipment": 16,
-        "motorized_equipment": 16
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "movement": -0.05
-        },
-        "amphibious": {
-          "attack": -0.4
-        },
-        "mountain": {
-          "movement": -0.2
-        },
-        "forest": {
-          "attack": -0.1,
-          "movement": -0.5
-        },
-        "jungle": {
-          "attack": -0.25,
-          "movement": -0.5
-        },
-        "marsh": {
-          "attack": -0.2,
-          "movement": -0.5
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        },
-        "fort": {
-          "attack": 0.1
-        }
-      },
-      "abbreviation": "MRA",
-      "categories": [
-        "category_army",
-        "category_line_artillery",
-        "category_artillery",
-        "category_rocket_artillery",
-        "category_mobile_and_mobile_combat_sup"
-      ]
-    },
     "blackshirt_assault_battalion": {
       "max_strength": 40,
       "max_organisation": 10,
@@ -2917,27 +2941,27 @@
         "hills": {
           "defense": 0.1
         },
+        "marsh": {
+          "defense": 0.25,
+          "movement": 0.2
+        },
         "amphibious": {
           "attack": 0.15
-        },
-        "forest": {
-          "defense": 0.25,
-          "movement": 0.05
         },
         "jungle": {
           "defense": 0.25
         },
-        "marsh": {
-          "defense": 0.25,
-          "movement": 0.2
+        "fort": {
+          "attack": 0.1,
+          "defense": 0.25
         },
         "river": {
           "defense": 0.25,
           "movement": 0.25
         },
-        "fort": {
-          "attack": 0.1,
-          "defense": 0.25
+        "forest": {
+          "defense": 0.25,
+          "movement": 0.05
         }
       },
       "abbreviation": "ENG",
@@ -2976,14 +3000,14 @@
           "defense": 0.2,
           "movement": 0.2
         },
+        "fort": {
+          "attack": 0.15,
+          "defense": 0.2
+        },
         "river": {
           "attack": 0.1,
           "defense": 0.2,
           "movement": 0.25
-        },
-        "fort": {
-          "attack": 0.15,
-          "defense": 0.2
         }
       },
       "abbreviation": "PIO",
@@ -3020,11 +3044,6 @@
         "support_equipment"
       ],
       "terrain_modifiers": {
-        "forest": {
-          "attack": 0.1,
-          "defense": 0.05,
-          "movement": 0.3
-        },
         "jungle": {
           "attack": 0.1,
           "defense": 0.2,
@@ -3034,6 +3053,11 @@
           "attack": 0.1,
           "defense": 0.25,
           "movement": 0.25
+        },
+        "forest": {
+          "attack": 0.1,
+          "defense": 0.05,
+          "movement": 0.3
         }
       },
       "abbreviation": "JLS",
@@ -3071,10 +3095,15 @@
           "attack": 0.05,
           "defense": 0.1
         },
+        "marsh": {
+          "attack": 0.05,
+          "defense": 0.1,
+          "movement": 0.1
+        },
         "amphibious": {
           "attack": 0.15
         },
-        "forest": {
+        "jungle": {
           "attack": 0.05,
           "defense": 0.1
         },
@@ -3082,22 +3111,17 @@
           "attack": 0.2,
           "movement": 0.05
         },
-        "jungle": {
-          "attack": 0.05,
+        "fort": {
+          "attack": 0.25,
           "defense": 0.1
-        },
-        "marsh": {
-          "attack": 0.05,
-          "defense": 0.1,
-          "movement": 0.1
         },
         "river": {
           "attack": 0.05,
           "defense": 0.1,
           "movement": 0.25
         },
-        "fort": {
-          "attack": 0.25,
+        "forest": {
+          "attack": 0.05,
           "defense": 0.1
         }
       },
@@ -3135,9 +3159,16 @@
         "armored_support_vehicle"
       ],
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.1
+        },
         "hills": {
           "defense": 0.1,
           "movement": 0.05
+        },
+        "marsh": {
+          "defense": 0.15,
+          "movement": 0.2
         },
         "plains": {
           "movement": 0.1
@@ -3145,34 +3176,27 @@
         "amphibious": {
           "attack": 0.2
         },
-        "forest": {
-          "defense": 0.25,
-          "movement": 0.1
+        "jungle": {
+          "defense": 0.15,
+          "movement": 0.05
         },
         "urban": {
           "attack": 0.2,
           "defense": 0.1,
           "movement": 0.1
         },
-        "jungle": {
-          "defense": 0.15,
-          "movement": 0.05
-        },
-        "marsh": {
-          "defense": 0.15,
-          "movement": 0.2
+        "fort": {
+          "attack": 0.15,
+          "defense": 0.25
         },
         "river": {
           "attack": 0.1,
           "defense": 0.15,
           "movement": 0.4
         },
-        "desert": {
+        "forest": {
+          "defense": 0.25,
           "movement": 0.1
-        },
-        "fort": {
-          "attack": 0.15,
-          "defense": 0.25
         }
       },
       "abbreviation": "AREC",
@@ -3431,30 +3455,30 @@
         "hills": {
           "attack": 0.05
         },
+        "marsh": {
+          "attack": 0.05
+        },
         "amphibious": {
           "attack": 0.1
         },
         "mountain": {
           "attack": 0.05
         },
-        "forest": {
-          "attack": 0.05
-        },
-        "urban": {
-          "attack": 0.1
-        },
         "jungle": {
           "attack": 0.1
         },
-        "marsh": {
-          "attack": 0.05
-        },
-        "river": {
+        "urban": {
           "attack": 0.1
         },
         "fort": {
           "attack": 0.1,
           "movement": 0.1
+        },
+        "river": {
+          "attack": 0.1
+        },
+        "forest": {
+          "attack": 0.05
         }
       },
       "abbreviation": "LFT",
@@ -3490,30 +3514,30 @@
         "hills": {
           "attack": 0.05
         },
+        "marsh": {
+          "attack": 0.05
+        },
         "amphibious": {
           "attack": 0.1
         },
         "mountain": {
           "attack": 0.05
         },
-        "forest": {
-          "attack": 0.1
+        "jungle": {
+          "attack": 0.15
         },
         "urban": {
           "attack": 0.15
         },
-        "jungle": {
-          "attack": 0.15
-        },
-        "marsh": {
-          "attack": 0.05
+        "fort": {
+          "attack": 0.2,
+          "movement": 0.1
         },
         "river": {
           "attack": 0.1
         },
-        "fort": {
-          "attack": 0.2,
-          "movement": 0.1
+        "forest": {
+          "attack": 0.1
         }
       },
       "abbreviation": "MFT",
@@ -3549,27 +3573,27 @@
         "hills": {
           "attack": 0.05
         },
+        "marsh": {
+          "attack": 0.05
+        },
         "amphibious": {
           "attack": 0.05
         },
-        "forest": {
+        "jungle": {
           "attack": 0.1
         },
         "urban": {
           "attack": 0.1
         },
-        "jungle": {
-          "attack": 0.1
-        },
-        "marsh": {
-          "attack": 0.05
+        "fort": {
+          "attack": 0.25,
+          "movement": 0.1
         },
         "river": {
           "attack": 0.05
         },
-        "fort": {
-          "attack": 0.25,
-          "movement": 0.1
+        "forest": {
+          "attack": 0.1
         }
       },
       "abbreviation": "HFT",
@@ -3905,32 +3929,6 @@
         "category_army"
       ]
     },
-    "hq_infantry": {
-      "max_strength": 15,
-      "max_organisation": 60,
-      "default_morale": 0.3,
-      "combat_width": 2,
-      "manpower": 600,
-      "training_time": 90,
-      "supply_consumption": 0,
-      "weight": 0.5,
-      "group": "infantry",
-      "types": [
-        "infantry"
-      ],
-      "regimental": false,
-      "needs": {
-        "infantry_equipment": 60
-      },
-      "terrain_modifiers": {},
-      "abbreviation": "HINF",
-      "categories": [
-        "category_front_line",
-        "category_light_infantry",
-        "category_all_infantry",
-        "category_army"
-      ]
-    },
     "land_cruiser": {
       "max_strength": 15,
       "max_organisation": 60,
@@ -3955,6 +3953,11 @@
           "defense": -0.2,
           "movement": -0.25
         },
+        "marsh": {
+          "attack": -0.4,
+          "defense": -0.4,
+          "movement": -0.5
+        },
         "amphibious": {
           "attack": -0.7
         },
@@ -3963,33 +3966,28 @@
           "defense": -0.3,
           "movement": -0.3
         },
-        "forest": {
-          "attack": -0.3,
-          "defense": -0.3,
-          "movement": -0.2
-        },
-        "urban": {
-          "attack": -0.3,
-          "defense": -0.3
-        },
         "jungle": {
           "attack": -0.4,
           "defense": -0.4,
           "movement": -0.35
         },
-        "marsh": {
-          "attack": -0.4,
-          "defense": -0.4,
-          "movement": -0.5
+        "urban": {
+          "attack": -0.3,
+          "defense": -0.3
+        },
+        "fort": {
+          "attack": 0.2,
+          "defense": 0.1
         },
         "river": {
           "attack": -0.35,
           "defense": -0.35,
           "movement": -0.5
         },
-        "fort": {
-          "attack": 0.2,
-          "defense": 0.1
+        "forest": {
+          "attack": -0.3,
+          "defense": -0.3,
+          "movement": -0.2
         }
       },
       "abbreviation": "LCB",
@@ -4057,7 +4055,13 @@
         "helicopter_equipment"
       ],
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.05
+        },
         "hills": {
+          "movement": 0.05
+        },
+        "marsh": {
           "movement": 0.05
         },
         "plains": {
@@ -4066,19 +4070,13 @@
         "mountain": {
           "movement": 0.05
         },
-        "forest": {
-          "movement": 0.05
-        },
         "jungle": {
-          "movement": 0.05
-        },
-        "marsh": {
           "movement": 0.05
         },
         "river": {
           "movement": 0.05
         },
-        "desert": {
+        "forest": {
           "movement": 0.05
         }
       },
@@ -4240,7 +4238,13 @@
         "support_equipment"
       ],
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.05
+        },
         "hills": {
+          "movement": 0.1
+        },
+        "marsh": {
           "movement": 0.1
         },
         "plains": {
@@ -4249,19 +4253,13 @@
         "mountain": {
           "movement": 0.1
         },
-        "forest": {
-          "movement": 0.05
-        },
         "jungle": {
-          "movement": 0.1
-        },
-        "marsh": {
           "movement": 0.1
         },
         "river": {
           "movement": 0.1
         },
-        "desert": {
+        "forest": {
           "movement": 0.05
         }
       },
@@ -4300,7 +4298,13 @@
         "motorized_equipment"
       ],
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.2
+        },
         "hills": {
+          "movement": 0.1
+        },
+        "marsh": {
           "movement": 0.1
         },
         "plains": {
@@ -4309,20 +4313,14 @@
         "mountain": {
           "movement": 0.1
         },
-        "forest": {
-          "movement": 0.05
-        },
         "jungle": {
           "movement": 0.05
-        },
-        "marsh": {
-          "movement": 0.1
         },
         "river": {
           "movement": 0.1
         },
-        "desert": {
-          "movement": 0.2
+        "forest": {
+          "movement": 0.05
         }
       },
       "abbreviation": "MREC",
@@ -4356,6 +4354,9 @@
         "armored_car_equipment"
       ],
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.15
+        },
         "hills": {
           "movement": 0.1
         },
@@ -4365,17 +4366,14 @@
         "mountain": {
           "movement": 0.05
         },
-        "forest": {
-          "movement": 0.05
-        },
         "jungle": {
           "movement": 0.05
         },
         "river": {
           "movement": 0.1
         },
-        "desert": {
-          "movement": 0.15
+        "forest": {
+          "movement": 0.05
         }
       },
       "abbreviation": "AREC",
@@ -4409,7 +4407,13 @@
         "light_tank_chassis"
       ],
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.1
+        },
         "hills": {
+          "movement": 0.1
+        },
+        "marsh": {
           "movement": 0.1
         },
         "plains": {
@@ -4418,19 +4422,13 @@
         "mountain": {
           "movement": 0.1
         },
-        "forest": {
-          "movement": 0.1
-        },
         "jungle": {
-          "movement": 0.1
-        },
-        "marsh": {
           "movement": 0.1
         },
         "river": {
           "movement": 0.1
         },
-        "desert": {
+        "forest": {
           "movement": 0.1
         }
       },
@@ -4466,7 +4464,13 @@
         "light_tank_chassis"
       ],
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.1
+        },
         "hills": {
+          "movement": 0.1
+        },
+        "marsh": {
           "movement": 0.1
         },
         "plains": {
@@ -4475,19 +4479,13 @@
         "mountain": {
           "movement": 0.1
         },
-        "forest": {
-          "movement": 0.1
-        },
         "jungle": {
-          "movement": 0.1
-        },
-        "marsh": {
           "movement": 0.1
         },
         "river": {
           "movement": 0.1
         },
-        "desert": {
+        "forest": {
           "movement": 0.1
         }
       },
@@ -4537,12 +4535,12 @@
           "defense": 0.05,
           "movement": 0.1
         },
+        "jungle": {
+          "movement": 0.1
+        },
         "forest": {
           "attack": 0.05,
           "movement": 0.15
-        },
-        "jungle": {
-          "movement": 0.1
         }
       },
       "abbreviation": "RAN",
@@ -4592,12 +4590,12 @@
           "defense": 0.05,
           "movement": 0.1
         },
+        "jungle": {
+          "movement": 0.1
+        },
         "forest": {
           "attack": 0.075,
           "movement": 0.2
-        },
-        "jungle": {
-          "movement": 0.1
         }
       },
       "abbreviation": "NTR",
@@ -4667,9 +4665,16 @@
         "support_equipment"
       ],
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.1
+        },
         "hills": {
           "attack": 0.05,
           "movement": 0.15
+        },
+        "marsh": {
+          "attack": 0.05,
+          "movement": 0.1
         },
         "plains": {
           "attack": 0.05,
@@ -4678,22 +4683,15 @@
         "mountain": {
           "movement": 0.15
         },
-        "forest": {
-          "attack": 0.05,
-          "movement": 0.15
-        },
         "jungle": {
-          "movement": 0.1
-        },
-        "marsh": {
-          "attack": 0.05,
           "movement": 0.1
         },
         "river": {
           "movement": 0.1
         },
-        "desert": {
-          "movement": 0.1
+        "forest": {
+          "attack": 0.05,
+          "movement": 0.15
         }
       },
       "abbreviation": "LRP",
@@ -4730,8 +4728,14 @@
         "helicopter_equipment"
       ],
       "terrain_modifiers": {
+        "desert": {
+          "movement": 0.15
+        },
         "hills": {
           "movement": 0.1
+        },
+        "marsh": {
+          "movement": 0.15
         },
         "plains": {
           "movement": 0.15
@@ -4739,19 +4743,13 @@
         "mountain": {
           "movement": 0.1
         },
-        "forest": {
-          "movement": 0.15
-        },
         "jungle": {
-          "movement": 0.15
-        },
-        "marsh": {
           "movement": 0.15
         },
         "river": {
           "movement": 0.15
         },
-        "desert": {
+        "forest": {
           "movement": 0.15
         }
       },
@@ -4828,168 +4826,6 @@
         "category_army"
       ]
     },
-    "light_sp_anti_air_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.1,
-      "weight": 1,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "anti_air"
-      ],
-      "needs": {
-        "light_tank_aa_chassis": 40
-      },
-      "terrain_modifiers": {
-        "amphibious": {
-          "attack": -0.6
-        },
-        "mountain": {
-          "attack": -0.1
-        },
-        "forest": {
-          "attack": -0.2,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.4,
-          "defense": -0.1
-        },
-        "jungle": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "LAA",
-      "categories": [
-        "category_all_armor",
-        "category_army",
-        "category_self_propelled_anti_air"
-      ]
-    },
-    "medium_sp_anti_air_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.1,
-      "weight": 1.25,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "anti_air"
-      ],
-      "needs": {
-        "medium_tank_aa_chassis": 40
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "attack": -0.1
-        },
-        "amphibious": {
-          "attack": -0.7
-        },
-        "mountain": {
-          "attack": -0.2
-        },
-        "forest": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.4,
-          "defense": -0.1
-        },
-        "jungle": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "MAA",
-      "categories": [
-        "category_all_armor",
-        "category_army",
-        "category_self_propelled_anti_air"
-      ]
-    },
-    "heavy_sp_anti_air_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.1,
-      "weight": 1.5,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "anti_air"
-      ],
-      "needs": {
-        "heavy_tank_aa_chassis": 40
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "attack": -0.2
-        },
-        "amphibious": {
-          "attack": -0.8
-        },
-        "mountain": {
-          "attack": -0.3
-        },
-        "forest": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.5,
-          "defense": -0.2
-        },
-        "jungle": {
-          "attack": -0.6,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.4,
-          "movement": -0.2
-        },
-        "river": {
-          "attack": -0.4,
-          "movement": -0.4
-        }
-      },
-      "abbreviation": "HAA",
-      "categories": [
-        "category_all_armor",
-        "category_army",
-        "category_self_propelled_anti_air"
-      ]
-    },
     "super_heavy_sp_anti_air_brigade": {
       "max_strength": 0.6,
       "max_organisation": 0,
@@ -5013,29 +4849,29 @@
         "hills": {
           "attack": -0.3
         },
+        "marsh": {
+          "attack": -0.5,
+          "movement": -0.2
+        },
         "amphibious": {
           "attack": -1.0
         },
         "mountain": {
           "attack": -0.4
         },
-        "forest": {
-          "attack": -0.5,
+        "jungle": {
+          "attack": -0.7,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.6,
           "defense": -0.2
         },
-        "jungle": {
-          "attack": -0.7,
+        "river": {
+          "attack": -0.5,
           "movement": -0.4
         },
-        "marsh": {
-          "attack": -0.5,
-          "movement": -0.2
-        },
-        "river": {
+        "forest": {
           "attack": -0.5,
           "movement": -0.4
         }
@@ -5047,61 +4883,6 @@
         "category_self_propelled_anti_air",
         "category_divisional_support_battalions",
         "category_support_battalions"
-      ]
-    },
-    "modern_sp_anti_air_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.1,
-      "weight": 1.5,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "anti_air"
-      ],
-      "needs": {
-        "modern_tank_aa_chassis": 40
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "attack": -0.1
-        },
-        "amphibious": {
-          "attack": -0.7
-        },
-        "mountain": {
-          "attack": -0.2
-        },
-        "forest": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.4,
-          "defense": -0.1
-        },
-        "jungle": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "OAA",
-      "categories": [
-        "category_all_armor",
-        "category_army",
-        "category_self_propelled_anti_air"
       ]
     },
     "light_sp_anti_air_support": {
@@ -5220,168 +5001,6 @@
         "category_self_propelled_anti_air_regimental_support"
       ]
     },
-    "light_sp_artillery_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.42,
-      "weight": 1,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "artillery"
-      ],
-      "needs": {
-        "light_tank_artillery_chassis": 40
-      },
-      "terrain_modifiers": {
-        "amphibious": {
-          "attack": -0.6
-        },
-        "mountain": {
-          "attack": -0.1
-        },
-        "forest": {
-          "attack": -0.2,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.4,
-          "defense": -0.1
-        },
-        "jungle": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "LAR",
-      "categories": [
-        "category_all_armor",
-        "category_army",
-        "category_self_propelled_artillery"
-      ]
-    },
-    "medium_sp_artillery_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.46,
-      "weight": 1.25,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "artillery"
-      ],
-      "needs": {
-        "medium_tank_artillery_chassis": 40
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "attack": -0.1
-        },
-        "amphibious": {
-          "attack": -0.7
-        },
-        "mountain": {
-          "attack": -0.2
-        },
-        "forest": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.4,
-          "defense": -0.1
-        },
-        "jungle": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "MAR",
-      "categories": [
-        "category_all_armor",
-        "category_army",
-        "category_self_propelled_artillery"
-      ]
-    },
-    "heavy_sp_artillery_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.6,
-      "weight": 1.5,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "artillery"
-      ],
-      "needs": {
-        "heavy_tank_artillery_chassis": 40
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "attack": -0.2
-        },
-        "amphibious": {
-          "attack": -0.8
-        },
-        "mountain": {
-          "attack": -0.3
-        },
-        "forest": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.5,
-          "defense": -0.2
-        },
-        "jungle": {
-          "attack": -0.6,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.4,
-          "movement": -0.2
-        },
-        "river": {
-          "attack": -0.4,
-          "movement": -0.4
-        }
-      },
-      "abbreviation": "HAR",
-      "categories": [
-        "category_all_armor",
-        "category_army",
-        "category_self_propelled_artillery"
-      ]
-    },
     "super_heavy_sp_artillery_brigade": {
       "max_strength": 0.6,
       "max_organisation": 0,
@@ -5405,31 +5024,31 @@
         "hills": {
           "attack": -0.3
         },
+        "marsh": {
+          "attack": -0.5,
+          "movement": -0.2
+        },
         "amphibious": {
           "attack": -1.0
         },
         "mountain": {
           "attack": -0.4
         },
-        "forest": {
-          "attack": -0.5,
+        "jungle": {
+          "attack": -0.7,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.6,
           "defense": -0.2
         },
-        "jungle": {
-          "attack": -0.7,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.5,
-          "movement": -0.2
-        },
         "river": {
           "attack": -0.5,
           "movement": -0.5
+        },
+        "forest": {
+          "attack": -0.5,
+          "movement": -0.4
         }
       },
       "abbreviation": "SAR",
@@ -5439,61 +5058,6 @@
         "category_self_propelled_artillery",
         "category_divisional_support_battalions",
         "category_support_battalions"
-      ]
-    },
-    "modern_sp_artillery_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.1,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.5,
-      "weight": 1.5,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "artillery"
-      ],
-      "needs": {
-        "modern_tank_artillery_chassis": 40
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "attack": -0.1
-        },
-        "amphibious": {
-          "attack": -0.7
-        },
-        "mountain": {
-          "attack": -0.2
-        },
-        "forest": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.4,
-          "defense": -0.1
-        },
-        "jungle": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "OAR",
-      "categories": [
-        "category_all_armor",
-        "category_army",
-        "category_self_propelled_artillery"
       ]
     },
     "sturmtruppe_battalion": {
@@ -5553,6 +5117,11 @@
           "attack": -0.15,
           "defense": -0.15
         },
+        "marsh": {
+          "attack": -0.3,
+          "defense": -0.3,
+          "movement": -0.3
+        },
         "amphibious": {
           "attack": -0.6
         },
@@ -5560,32 +5129,27 @@
           "attack": -0.2,
           "defense": -0.2
         },
-        "forest": {
-          "attack": -0.25,
+        "jungle": {
+          "attack": -0.35,
+          "defense": -0.35,
           "movement": -0.3
         },
         "urban": {
           "attack": -0.3,
           "defense": -0.3
         },
-        "jungle": {
-          "attack": -0.35,
-          "defense": -0.35,
-          "movement": -0.3
-        },
-        "marsh": {
-          "attack": -0.3,
-          "defense": -0.3,
-          "movement": -0.3
+        "fort": {
+          "attack": 0.1,
+          "defense": 0.05
         },
         "river": {
           "attack": -0.25,
           "defense": -0.25,
           "movement": -0.3
         },
-        "fort": {
-          "attack": 0.1,
-          "defense": 0.05
+        "forest": {
+          "attack": -0.25,
+          "movement": -0.3
         }
       },
       "abbreviation": "STK",
@@ -5596,174 +5160,6 @@
         "category_front_line",
         "category_all_armor",
         "category_army"
-      ]
-    },
-    "light_tank_destroyer_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.3,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.2,
-      "weight": 1,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "anti_tank"
-      ],
-      "needs": {
-        "light_tank_destroyer_chassis": 40
-      },
-      "terrain_modifiers": {
-        "amphibious": {
-          "attack": -0.6
-        },
-        "mountain": {
-          "attack": -0.1
-        },
-        "forest": {
-          "attack": -0.2,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.4,
-          "defense": -0.1
-        },
-        "jungle": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "LTD",
-      "categories": [
-        "category_front_line",
-        "category_all_armor",
-        "category_army",
-        "category_tank_destroyers"
-      ]
-    },
-    "medium_tank_destroyer_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.3,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.22,
-      "weight": 1.25,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "anti_tank"
-      ],
-      "needs": {
-        "medium_tank_destroyer_chassis": 40
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "attack": -0.1
-        },
-        "amphibious": {
-          "attack": -0.7
-        },
-        "mountain": {
-          "attack": -0.2
-        },
-        "forest": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.4,
-          "defense": -0.1
-        },
-        "jungle": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "MTD",
-      "categories": [
-        "category_front_line",
-        "category_all_armor",
-        "category_army",
-        "category_tank_destroyers"
-      ]
-    },
-    "heavy_tank_destroyer_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.3,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.3,
-      "weight": 1.5,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "anti_tank"
-      ],
-      "needs": {
-        "heavy_tank_destroyer_chassis": 40
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "attack": -0.2
-        },
-        "amphibious": {
-          "attack": -0.8
-        },
-        "mountain": {
-          "attack": -0.3
-        },
-        "forest": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.5,
-          "defense": -0.2
-        },
-        "jungle": {
-          "attack": -0.6,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.4,
-          "movement": -0.2
-        },
-        "river": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "fort": {
-          "attack": 0.05
-        }
-      },
-      "abbreviation": "HTD",
-      "categories": [
-        "category_front_line",
-        "category_all_armor",
-        "category_army",
-        "category_tank_destroyers"
       ]
     },
     "super_heavy_tank_destroyer_brigade": {
@@ -5789,34 +5185,34 @@
         "hills": {
           "attack": -0.3
         },
+        "marsh": {
+          "attack": -0.5,
+          "movement": -0.2
+        },
         "amphibious": {
           "attack": -1.0
         },
         "mountain": {
           "attack": -0.4
         },
-        "forest": {
-          "attack": -0.5,
+        "jungle": {
+          "attack": -0.7,
           "movement": -0.4
         },
         "urban": {
           "attack": -0.6,
           "defense": -0.2
         },
-        "jungle": {
-          "attack": -0.7,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.5,
-          "movement": -0.2
+        "fort": {
+          "attack": 0.3
         },
         "river": {
           "attack": -0.5,
           "movement": -0.5
         },
-        "fort": {
-          "attack": 0.3
+        "forest": {
+          "attack": -0.5,
+          "movement": -0.4
         }
       },
       "abbreviation": "STD",
@@ -5827,62 +5223,6 @@
         "category_tank_destroyers",
         "category_support_battalions",
         "category_divisional_support_battalions"
-      ]
-    },
-    "modern_tank_destroyer_brigade": {
-      "max_strength": 0.6,
-      "max_organisation": 0,
-      "default_morale": 0.3,
-      "combat_width": 2,
-      "manpower": 500,
-      "training_time": 180,
-      "supply_consumption": 0.25,
-      "weight": 1.5,
-      "group": "armor_combat_support",
-      "types": [
-        "armor",
-        "anti_tank"
-      ],
-      "needs": {
-        "modern_tank_destroyer_chassis": 40
-      },
-      "terrain_modifiers": {
-        "hills": {
-          "attack": -0.1
-        },
-        "amphibious": {
-          "attack": -0.7
-        },
-        "mountain": {
-          "attack": -0.2
-        },
-        "forest": {
-          "attack": -0.3,
-          "movement": -0.4
-        },
-        "urban": {
-          "attack": -0.4,
-          "defense": -0.1
-        },
-        "jungle": {
-          "attack": -0.4,
-          "movement": -0.4
-        },
-        "marsh": {
-          "attack": -0.1,
-          "movement": -0.1
-        },
-        "river": {
-          "attack": -0.2,
-          "movement": -0.2
-        }
-      },
-      "abbreviation": "OTD",
-      "categories": [
-        "category_front_line",
-        "category_all_armor",
-        "category_army",
-        "category_tank_destroyers"
       ]
     },
     "light_tank_destroyer_support": {

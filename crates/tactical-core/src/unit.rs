@@ -445,6 +445,13 @@ impl Chassis {
         matches!(self, Chassis::Towed | Chassis::TruckTowed)
     }
 
+    /// Engine-driven carriage (truck-towed and everything self-propelled):
+    /// the maintenance-company speed bonus (§6.3) applies to these only —
+    /// foot and horse-towed hosts have no engine to keep tuned.
+    pub fn has_engine(self) -> bool {
+        !matches!(self, Chassis::None | Chassis::Towed)
+    }
+
     /// Road speed override in km/h; `None` = fall back to the type table
     /// (foot-mobile units).
     pub fn speed_kmh(self) -> Option<f32> {
@@ -617,14 +624,21 @@ impl TerrainAdjusters {
 /// A support company attached to a battalion. NOT a map unit —
 /// the attachment rides with its host, dies with it, and confers stat
 /// bonuses / ongoing abilities. One-shot stat bonuses (attack / piercing /
-/// sight) are baked into the host's fields at attach time; ongoing effects
-/// (maintenance regen, hospital damage reduction) are queried via
-/// [`BattalionUnit::has_support`] and the aggregators.
+/// sight / armor / speed) are baked into the host's fields at attach time;
+/// ongoing effects (damage reduction, engineer terrain craft, military-
+/// police discipline) are queried via [`BattalionUnit::has_support`] and
+/// the aggregators. Every effect is writeback-safe (§6.3): less damage
+/// taken, more output, or a rule read — never mid-battle recovery.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SupportAttachment {
     pub kind: SupportKind,
     /// Display name for the OOB tree / hover card (e.g. "1. AT").
     pub name: String,
+    /// The HOI4 company token from the save (e.g. "light_flame_tank";
+    /// §5.3). Empty for hand-built scenarios — effects then resolve by
+    /// `kind` alone. The named companies with their own modelled rules
+    /// (§6.3) key on this token INSTEAD of the kind family default.
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -658,43 +672,170 @@ impl SupportKind {
 }
 
 impl SupportAttachment {
+    /// The named companies with their own modelled rules (§6.3): a
+    /// special token takes its own effect row INSTEAD of the kind family
+    /// default — a flame tank is no military police, so these tokens never
+    /// inherit the MilitaryPolice family effects their kind maps to.
+    fn is_token_special(&self) -> bool {
+        matches!(
+            self.token.as_str(),
+            "light_flame_tank"
+                | "medium_flame_tank"
+                | "heavy_flame_tank"
+                | "super_heavy_armor"
+                | "land_cruiser"
+                | "blackshirt_assault_battalion"
+                | "sturmtruppe_battalion"
+                | "helicopter_brigade"
+        )
+    }
+
     /// Baked into the host at attach time (first-pass values, tune by feel).
     pub fn hard_attack_bonus(&self) -> f32 {
+        if self.is_token_special() {
+            return 0.0;
+        }
         match self.kind {
             SupportKind::AntiTank => 4.0,
             _ => 0.0,
         }
     }
     pub fn piercing_bonus(&self) -> f32 {
+        if self.is_token_special() {
+            return 0.0;
+        }
         match self.kind {
             SupportKind::AntiTank => 10.0,
             _ => 0.0,
         }
     }
     pub fn soft_attack_bonus(&self) -> f32 {
+        match self.token.as_str() {
+            "land_cruiser" => return 3.0,
+            "blackshirt_assault_battalion" | "sturmtruppe_battalion" => return 2.0,
+            _ => {}
+        }
+        if self.is_token_special() {
+            return 0.0;
+        }
         match self.kind {
             SupportKind::Artillery => 5.0,
             SupportKind::AntiAir => 1.0,
             _ => 0.0,
         }
     }
+    pub fn breakthrough_bonus(&self) -> f32 {
+        match self.token.as_str() {
+            "light_flame_tank" | "medium_flame_tank" | "heavy_flame_tank" => 3.0,
+            _ => 0.0,
+        }
+    }
+    pub fn armor_bonus(&self) -> f32 {
+        match self.token.as_str() {
+            "super_heavy_armor" => 3.0,
+            "land_cruiser" => 5.0,
+            _ => 0.0,
+        }
+    }
+    pub fn hardness_bonus(&self) -> f32 {
+        match self.token.as_str() {
+            "super_heavy_armor" => 0.15,
+            _ => 0.0,
+        }
+    }
     pub fn sight_bonus(&self) -> i32 {
+        if self.token.as_str() == "helicopter_brigade" {
+            return 1;
+        }
+        if self.is_token_special() {
+            return 0;
+        }
         match self.kind {
             SupportKind::Recon => 1,
             _ => 0,
         }
     }
-    /// Ongoing: per-turn strength regeneration (maintenance crews).
-    pub fn str_regen(&self) -> f32 {
+    /// Baked road-speed multiplier (maintenance crews keep engines
+    /// tuned, §6.3); the engine-carriage condition is judged by the host
+    /// at attach time.
+    pub fn speed_mult(&self) -> f32 {
+        if self.is_token_special() {
+            return 1.0;
+        }
         match self.kind {
-            SupportKind::Maintenance => 0.5,
-            _ => 0.0,
+            SupportKind::Maintenance => 1.1,
+            _ => 1.0,
         }
     }
-    /// Ongoing: multiplier on strength damage the HOST takes (hospital).
+    /// Ongoing: multiplier on strength damage the HOST takes (hospital,
+    /// maintenance, helicopter escort — stacked multiplicatively).
     pub fn str_damage_taken_mult(&self) -> f32 {
+        if self.token.as_str() == "helicopter_brigade" {
+            return 0.95;
+        }
+        if self.is_token_special() {
+            return 1.0;
+        }
         match self.kind {
             SupportKind::FieldHospital => 0.75,
+            SupportKind::Maintenance => 0.85,
+            _ => 1.0,
+        }
+    }
+    /// Ongoing: multiplier on org damage the host takes in combat
+    /// (military-police discipline, §6.3).
+    pub fn org_damage_taken_mult(&self) -> f32 {
+        if self.is_token_special() {
+            return 1.0;
+        }
+        match self.kind {
+            SupportKind::MilitaryPolice => 0.9,
+            _ => 1.0,
+        }
+    }
+    /// Ongoing: multiplier on encirclement attrition (§6.4) — logistics
+    /// companies stretch the pocket's supplies, military police keep the
+    /// ranks from fraying; both ride the same multiplicative stack.
+    pub fn encirclement_attrition_mult(&self) -> f32 {
+        if self.is_token_special() {
+            return 1.0;
+        }
+        match self.kind {
+            SupportKind::Logistics => 0.5,
+            SupportKind::MilitaryPolice => 0.9,
+            _ => 1.0,
+        }
+    }
+    /// Ongoing: a host with military police attached never surrenders
+    /// (§6.4) — fully encircled at org 0 it routs instead of giving up,
+    /// and only annihilation clears it. The host alone is covered, never
+    /// the other battalions of its pocket.
+    pub fn never_surrenders(&self) -> bool {
+        if self.is_token_special() {
+            return false;
+        }
+        matches!(self.kind, SupportKind::MilitaryPolice)
+    }
+    /// Baked multiplier on the off-road excess-over-baseline movement
+    /// cost (§6.6): engineer terrain craft shaves the terrain penalty,
+    /// road pricing is untouched.
+    pub fn terrain_cost_mult(&self) -> f32 {
+        if self.is_token_special() {
+            return 1.0;
+        }
+        match self.kind {
+            SupportKind::Engineer => 0.75,
+            _ => 1.0,
+        }
+    }
+    /// Ongoing: multiplier on the per-layer entrenchment defense
+    /// contribution (§6.8) — engineer digging doubles-down on fieldworks.
+    pub fn entrenchment_mult(&self) -> f32 {
+        if self.is_token_special() {
+            return 1.0;
+        }
+        match self.kind {
+            SupportKind::Engineer => 1.5,
             _ => 1.0,
         }
     }
@@ -757,6 +898,13 @@ pub struct BattalionUnit {
     /// Road speed in km/h (§6.1); movement consumes hours, not AP (§6.2).
     pub speed_kmh: f32,
 
+    /// Strategic logistics state of the parent division at battle start
+    /// (§6.7): supply storage ratio and fuel reserve ratio, 0..=1, already
+    /// baked into the stat block at assembly; 1.0 outside from-save
+    /// assemblies. Display + future in-battle supply model input.
+    pub supply: f32,
+    pub fuel: f32,
+
     pub attack_range: i32,
     pub sight_range: i32,
 
@@ -792,6 +940,16 @@ pub struct BattalionUnit {
     pub fire_cooldown: i32,
     /// Standing movement order (§6.2).
     pub move_order: Option<MoveOrder>,
+    /// Step-progress memory (§6.2): the first-step hex and invested hours
+    /// of the most recently ABANDONED march order (re-pointed onto a
+    /// different first step, or stood by). Re-pointing back onto that
+    /// first step — while the unit still stands next to it — picks the
+    /// investment back up, clamped to the step's current cost, and
+    /// consumes the memory; a unit that marched away from the remembered
+    /// hex lets it lapse. The memory never ticks down on its own: it
+    /// survives turn rollovers until consumed or overwritten by a fresher
+    /// abandonment.
+    pub step_memory: Option<(HexCoord, f32)>,
 
     /// Shocked by a single hit ≥ 25% of max org (the hard cap is
     /// 40%, so only serious hits trigger). The flag blocks new attack orders;
@@ -804,6 +962,18 @@ pub struct BattalionUnit {
     /// Support companies riding with this battalion (attachments
     /// are not map units — see [`SupportAttachment`]).
     pub support: Vec<SupportAttachment>,
+
+    /// The hardness delta each attachment actually applied at attach time
+    /// (parallel to `support`, same order): when the 1.0 clamp ate part of
+    /// a bonus, detach subtracts exactly what attach added, keeping the
+    /// deployment-phase re-assignment round trip lossless (§5.3).
+    support_hardness_applied: Vec<f32>,
+
+    /// Baked engineer terrain craft (§6.6): multiplies the off-road
+    /// excess-over-baseline movement cost — the terrain penalty shrinks,
+    /// the 1 km baseline and road pricing are untouched. Accumulated at
+    /// attach time ([`Self::attach`]) and divided back out on detach.
+    pub terrain_cost_mult: f32,
 
     /// Division-order automation: set when the PLAYER personally
     /// issued this battalion a command (move / attack / hold / emplace /
@@ -868,6 +1038,8 @@ impl BattalionUnit {
             max_strength: unit_type.base_strength(),
             strength: unit_type.base_strength(),
             speed_kmh: chassis.speed_kmh().unwrap_or_else(|| unit_type.speed_kmh()),
+            supply: 1.0,
+            fuel: 1.0,
             attack_range: unit_type.attack_range(),
             sight_range: unit_type.base_sight(),
             armor: 0.0,
@@ -880,8 +1052,11 @@ impl BattalionUnit {
             acted: false,
             fire_cooldown: 0,
             move_order: None,
+            step_memory: None,
             shocked: false,
             support: Vec::new(),
+            support_hardness_applied: Vec::new(),
+            terrain_cost_mult: 1.0,
             manual_override: false,
             oob_turns: 0,
         }
@@ -905,8 +1080,17 @@ impl BattalionUnit {
     /// both call this. The headless used to mirror the check with
     /// `is_combat_effective() || Retreating`, which diverges on an `Active`
     /// unit with org/strength ≤ 0 (beaten there, alive here).
+    ///
+    /// An `OFFBOARD` (undeployed) battalion does NOT count: it is not on
+    /// the map, cannot be attacked, and can never be resolved by combat. A
+    /// side kept alive only by one would make the battle unwinnable for its
+    /// opponent (the interactive flow resolves this by never starting a
+    /// battle with undeployed units; headless deploys everyone before the
+    /// first turn).
     pub fn counts_for_victory(&self) -> bool {
-        !self.is_hq() && matches!(self.state, UnitState::Active | UnitState::Retreating)
+        !self.is_hq()
+            && self.position != Self::OFFBOARD
+            && matches!(self.state, UnitState::Active | UnitState::Retreating)
     }
 
     /// Normalization fallback, run by both frontends' full-turn
@@ -999,12 +1183,30 @@ impl BattalionUnit {
         }
     }
 
+    /// Bank the standing order's invested first-step progress into the
+    /// step memory (§6.2). The memory always holds the MOST RECENTLY
+    /// abandoned investment, so the write happens only when real progress
+    /// dies (`hours > 0`): an unmarched order abandons nothing and leaves
+    /// an older memory in place.
+    pub fn bank_step_memory(&mut self) {
+        if let Some(o) = &self.move_order {
+            if o.hours > 0.0 {
+                if let Some(&first) = o.path.first() {
+                    self.step_memory = Some((first, o.hours));
+                }
+            }
+        }
+    }
+
     /// Stand the battalion by (§7.4): cancel the standing march and
     /// release it back to its division order — the player's command is
-    /// over. Unconditional: this is the release that ends a manual
-    /// override under EVERY retention policy. Stance, emplacement and the
-    /// acted flag are untouched.
+    /// over. The cancelled march's step progress banks into the §6.2
+    /// memory first, so a later re-issue toward the same first step picks
+    /// the investment back up. Unconditional: this is the release that
+    /// ends a manual override under EVERY retention policy. Stance,
+    /// emplacement and the acted flag are untouched.
     pub fn stand_by(&mut self) {
+        self.bank_step_memory();
         self.move_order = None;
         self.manual_override = false;
     }
@@ -1061,14 +1263,29 @@ impl BattalionUnit {
     }
 
     /// Attach a support company: one-shot stat bonuses are baked
-    /// into the host's fields immediately; ongoing effects (maintenance
-    /// regen, hospital damage reduction) are queried via the aggregators.
-    /// First pass has no detach — attachments ride until the host dies.
+    /// into the host's fields immediately; ongoing effects (damage
+    /// reduction, engineer terrain craft, military-police discipline) are
+    /// queried via the aggregators. First pass has no detach — attachments
+    /// ride until the host dies.
     pub fn attach(&mut self, att: SupportAttachment) {
         self.soft_attack += att.soft_attack_bonus();
         self.hard_attack += att.hard_attack_bonus();
         self.piercing += att.piercing_bonus();
         self.sight_range += att.sight_bonus();
+        self.breakthrough += att.breakthrough_bonus();
+        self.armor += att.armor_bonus();
+        // Record the post-clamp delta actually applied, so detach can
+        // subtract exactly that — the raw bonus is unrecoverable once the
+        // 1.0 ceiling bites.
+        let applied = (self.hardness + att.hardness_bonus()).clamp(0.0, 1.0) - self.hardness;
+        self.hardness += applied;
+        self.support_hardness_applied.push(applied);
+        self.terrain_cost_mult *= att.terrain_cost_mult();
+        // Maintenance crews tune engines: a motorised host marches
+        // faster; foot and horse-towed hosts gain nothing (§6.3).
+        if att.speed_mult() != 1.0 && self.chassis.has_engine() {
+            self.speed_kmh *= att.speed_mult();
+        }
         self.support.push(att);
     }
 
@@ -1084,50 +1301,133 @@ impl BattalionUnit {
         self.hard_attack -= att.hard_attack_bonus();
         self.piercing -= att.piercing_bonus();
         self.sight_range -= att.sight_bonus();
+        self.breakthrough -= att.breakthrough_bonus();
+        self.armor -= att.armor_bonus();
+        let applied = self.support_hardness_applied.remove(index);
+        self.hardness = (self.hardness - applied).clamp(0.0, 1.0);
+        self.terrain_cost_mult /= att.terrain_cost_mult();
+        if att.speed_mult() != 1.0 && self.chassis.has_engine() {
+            self.speed_kmh /= att.speed_mult();
+        }
         Some(att)
     }
 
-    /// One-line effect summary for tooltips ("hard +4, piercing +10").
-    pub fn support_effects_line(&self) -> String {
-        let mut parts: Vec<String> = Vec::new();
+    /// One line per attached support company: the company's display name
+    /// plus its effect tokens as `(locale key, value)` pairs. Locale-free
+    /// by design — the UI layer renders the keys through `Locale::trf`
+    /// (a battle unit is also assembled in tests and headless runs with no
+    /// locale loaded).
+    pub fn support_effect_tokens(&self) -> Vec<(String, Vec<(&'static str, String)>)> {
+        let mut parts: Vec<(String, Vec<(&'static str, String)>)> = Vec::new();
         for att in &self.support {
-            let mut e: Vec<String> = Vec::new();
+            let mut e: Vec<(&'static str, String)> = Vec::new();
             if att.soft_attack_bonus() != 0.0 {
-                e.push(format!("soft +{}", att.soft_attack_bonus()));
+                e.push(("support.effect.soft", att.soft_attack_bonus().to_string()));
             }
             if att.hard_attack_bonus() != 0.0 {
-                e.push(format!("hard +{}", att.hard_attack_bonus()));
+                e.push(("support.effect.hard", att.hard_attack_bonus().to_string()));
             }
             if att.piercing_bonus() != 0.0 {
-                e.push(format!("pierce +{}", att.piercing_bonus()));
+                e.push(("support.effect.pierce", att.piercing_bonus().to_string()));
+            }
+            if att.breakthrough_bonus() != 0.0 {
+                e.push((
+                    "support.effect.breakthrough",
+                    att.breakthrough_bonus().to_string(),
+                ));
+            }
+            if att.armor_bonus() != 0.0 {
+                e.push(("support.effect.armor", att.armor_bonus().to_string()));
+            }
+            if att.hardness_bonus() != 0.0 {
+                e.push(("support.effect.hardness", att.hardness_bonus().to_string()));
             }
             if att.sight_bonus() != 0 {
-                e.push(format!("sight +{}", att.sight_bonus()));
+                e.push(("support.effect.sight", att.sight_bonus().to_string()));
             }
-            if att.str_regen() != 0.0 {
-                e.push(format!("str +{}/turn", att.str_regen()));
+            if att.speed_mult() != 1.0 && self.chassis.has_engine() {
+                e.push((
+                    "support.effect.speed",
+                    format!("{:.0}", (att.speed_mult() - 1.0) * 100.0),
+                ));
+            }
+            if att.terrain_cost_mult() != 1.0 {
+                e.push((
+                    "support.effect.terrain_cost",
+                    att.terrain_cost_mult().to_string(),
+                ));
+            }
+            if att.entrenchment_mult() != 1.0 {
+                e.push((
+                    "support.effect.entrenchment",
+                    att.entrenchment_mult().to_string(),
+                ));
             }
             if att.str_damage_taken_mult() != 1.0 {
-                e.push(format!("str dmg ×{}", att.str_damage_taken_mult()));
+                e.push((
+                    "support.effect.str_damage",
+                    att.str_damage_taken_mult().to_string(),
+                ));
+            }
+            if att.org_damage_taken_mult() != 1.0 {
+                e.push((
+                    "support.effect.org_damage",
+                    att.org_damage_taken_mult().to_string(),
+                ));
+            }
+            if att.encirclement_attrition_mult() != 1.0 {
+                e.push((
+                    "support.effect.siege_attrition",
+                    att.encirclement_attrition_mult().to_string(),
+                ));
+            }
+            if att.never_surrenders() {
+                e.push(("support.effect.never_surrenders", String::new()));
             }
             if !e.is_empty() {
-                parts.push(format!("{}: {}", att.name, e.join(", ")));
+                parts.push((att.name.clone(), e));
             }
         }
-        parts.join(" | ")
+        parts
     }
 
-    /// Total per-turn strength regen from attachments (maintenance).
-    pub fn support_str_regen(&self) -> f32 {
-        self.support.iter().map(|s| s.str_regen()).sum()
-    }
-
-    /// Combined multiplier on strength damage taken (field hospital).
+    /// Combined multiplier on strength damage taken (field hospital,
+    /// maintenance, helicopter escort).
     pub fn support_str_damage_mult(&self) -> f32 {
         self.support
             .iter()
             .map(|s| s.str_damage_taken_mult())
             .product()
+    }
+
+    /// Combined multiplier on org damage taken in combat
+    /// (military-police discipline, §6.3).
+    pub fn support_org_damage_mult(&self) -> f32 {
+        self.support
+            .iter()
+            .map(|s| s.org_damage_taken_mult())
+            .product()
+    }
+
+    /// Combined multiplier on encirclement attrition (§6.4): logistics
+    /// halves it, military police shave it — both stack multiplicatively.
+    pub fn support_encirclement_attrition_mult(&self) -> f32 {
+        self.support
+            .iter()
+            .map(|s| s.encirclement_attrition_mult())
+            .product()
+    }
+
+    /// Any military-police attachment riding with this battalion keeps
+    /// it from surrendering (§6.4) — it routs instead, to the death.
+    pub fn support_never_surrenders(&self) -> bool {
+        self.support.iter().any(|s| s.never_surrenders())
+    }
+
+    /// Combined multiplier on the per-layer entrenchment defense
+    /// contribution (§6.8) — engineer fieldworks.
+    pub fn support_entrenchment_mult(&self) -> f32 {
+        self.support.iter().map(|s| s.entrenchment_mult()).product()
     }
 
     /// Hold stance eligibility (§6.8): every infantry-attribute unit may dig
@@ -1243,16 +1543,6 @@ impl BattalionUnit {
             && !self.is_hq()
             && self.fire_cooldown <= 0
             && (!self.requires_emplacement() || self.is_emplaced)
-    }
-
-    /// Effective defense including Hold stance and entrenchment (§6.8).
-    pub fn effective_defense(&self, entrench_defense_per_layer: f32, hold_bonus: f32) -> f32 {
-        let mut d = self.defense;
-        if self.is_holding {
-            d *= 1.0 + hold_bonus;
-        }
-        d *= 1.0 + self.entrenchment as f32 * entrench_defense_per_layer;
-        d
     }
 }
 
@@ -1402,6 +1692,42 @@ mod tests {
         u.manual_override = true;
         u.stand_by();
         assert!(!u.manual_override, "idle manual battalion stands by");
+    }
+
+    #[test]
+    fn stand_by_banks_the_step_progress_memory() {
+        // §6.2 step memory: stand-by abandons the march but banks its
+        // invested first-step progress for a later re-issue; an
+        // unmarched order abandons nothing and banks nothing.
+        let mut u = BattalionUnit::new(
+            0,
+            "1.Inf",
+            UnitType::Infantry,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(1, 0)],
+            hours: 0.3,
+            queue: Default::default(),
+        });
+        u.stand_by();
+        assert_eq!(u.step_memory, Some((HexCoord::new(1, 0), 0.3)));
+
+        let mut u = BattalionUnit::new(
+            1,
+            "2.Inf",
+            UnitType::Infantry,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(1, 0)],
+            hours: 0.0,
+            queue: Default::default(),
+        });
+        u.stand_by();
+        assert_eq!(u.step_memory, None, "nothing invested — nothing banked");
     }
 
     #[test]
@@ -1557,8 +1883,14 @@ mod tests {
         u.defense = 100.0;
         u.is_holding = true;
         u.entrenchment = 2;
-        // 100 × 1.25 (hold) × 1.20 (2 layers × 10%)
-        let d = u.effective_defense(0.10, 0.25);
+        // 100 × 1.25 (hold) × 1.20 (2 layers × 10%) — through the resolver
+        // the hit step actually calls.
+        let d = crate::damage::defense_value(
+            &u,
+            false,
+            crate::Terrain::Plains,
+            &crate::params::CombatParams::default(),
+        );
         assert!((d - 150.0).abs() < 1e-4);
     }
 
@@ -1606,6 +1938,28 @@ mod tests {
     }
 
     #[test]
+    fn offboard_battalion_does_not_keep_its_side_alive() {
+        // An undeployed battalion cannot be attacked or resolved, so
+        // counting it would make its side permanently un-beatable.
+        let mut u = BattalionUnit::new(
+            0,
+            "1.Inf",
+            UnitType::Infantry,
+            Side::Defender,
+            BattalionUnit::OFFBOARD,
+        );
+        assert!(!u.counts_for_victory(), "OFFBOARD keeps nobody alive");
+        u.undeployed = false;
+        u.position = HexCoord::new(3, 3);
+        assert!(u.counts_for_victory(), "deployed and active counts");
+        // The flag alone is not the criterion — the position is (a routed
+        // unit pushed off the map is already Withdrawn/LeftBattle).
+        u.position = BattalionUnit::OFFBOARD;
+        u.state = UnitState::Retreating;
+        assert!(!u.counts_for_victory());
+    }
+
+    #[test]
     fn normalize_broken_state_repairs_transient_zeroes() {
         // Active with org/strength ≤ 0 is transient or forged —
         // upkeep normalizes it so the victory predicate can't stall on a
@@ -1643,5 +1997,290 @@ mod tests {
         u.state = UnitState::Withdrawn;
         u.normalize_broken_state();
         assert_eq!(u.state, UnitState::Withdrawn);
+    }
+
+    fn sup(kind: SupportKind, token: &str) -> SupportAttachment {
+        SupportAttachment {
+            kind,
+            name: "X".to_string(),
+            token: token.to_string(),
+        }
+    }
+
+    #[test]
+    fn support_effect_table_per_design() {
+        // Kind-family rows (§6.3).
+        let eng = sup(SupportKind::Engineer, "engineer");
+        assert_eq!(eng.terrain_cost_mult(), 0.75);
+        assert_eq!(eng.entrenchment_mult(), 1.5);
+        let log = sup(SupportKind::Logistics, "logistics_company");
+        assert_eq!(log.encirclement_attrition_mult(), 0.5);
+        let mp = sup(SupportKind::MilitaryPolice, "military_police");
+        assert_eq!(mp.org_damage_taken_mult(), 0.9);
+        assert_eq!(mp.encirclement_attrition_mult(), 0.9);
+        assert!(mp.never_surrenders());
+        let mnt = sup(SupportKind::Maintenance, "maintenance_company");
+        assert_eq!(mnt.str_damage_taken_mult(), 0.85);
+        assert_eq!(mnt.speed_mult(), 1.1);
+        // Token rows (§6.3 named companies).
+        for token in ["light_flame_tank", "medium_flame_tank", "heavy_flame_tank"] {
+            assert_eq!(
+                sup(SupportKind::MilitaryPolice, token).breakthrough_bonus(),
+                3.0,
+                "{token}"
+            );
+        }
+        let sh = sup(SupportKind::MilitaryPolice, "super_heavy_armor");
+        assert_eq!(sh.armor_bonus(), 3.0);
+        assert_eq!(sh.hardness_bonus(), 0.15);
+        let lc = sup(SupportKind::MilitaryPolice, "land_cruiser");
+        assert_eq!(lc.armor_bonus(), 5.0);
+        assert_eq!(lc.soft_attack_bonus(), 3.0);
+        for token in ["blackshirt_assault_battalion", "sturmtruppe_battalion"] {
+            assert_eq!(
+                sup(SupportKind::MilitaryPolice, token).soft_attack_bonus(),
+                2.0,
+                "{token}"
+            );
+        }
+        let heli = sup(SupportKind::MilitaryPolice, "helicopter_brigade");
+        assert_eq!(heli.sight_bonus(), 1);
+        assert_eq!(heli.str_damage_taken_mult(), 0.95);
+        // An unnamed (script-side) attachment resolves by kind alone.
+        let plain = sup(SupportKind::Artillery, "");
+        assert_eq!(plain.soft_attack_bonus(), 5.0);
+        assert!(!plain.never_surrenders());
+    }
+
+    #[test]
+    fn special_tokens_never_inherit_the_mp_family() {
+        // The named companies map to the MP kind as the no-bonus
+        // placeholder, but their own effect row REPLACES the family
+        // default — a flame tank must not police anyone.
+        for token in [
+            "light_flame_tank",
+            "medium_flame_tank",
+            "heavy_flame_tank",
+            "super_heavy_armor",
+            "land_cruiser",
+            "blackshirt_assault_battalion",
+            "sturmtruppe_battalion",
+            "helicopter_brigade",
+        ] {
+            let a = sup(SupportKind::MilitaryPolice, token);
+            assert_eq!(a.org_damage_taken_mult(), 1.0, "{token}");
+            assert_eq!(a.encirclement_attrition_mult(), 1.0, "{token}");
+            assert!(!a.never_surrenders(), "{token}");
+        }
+        // The HQ placeholder companies carry no token rule of their
+        // own — they ride the MP family row like any unnamed MP company.
+        for token in ["hq_support_company", "hq_specops"] {
+            let a = sup(SupportKind::MilitaryPolice, token);
+            assert_eq!(a.org_damage_taken_mult(), 0.9, "{token}");
+            assert_eq!(a.encirclement_attrition_mult(), 0.9, "{token}");
+            assert!(a.never_surrenders(), "{token}");
+        }
+    }
+
+    #[test]
+    fn attach_and_detach_bake_and_restore_the_new_stats() {
+        let mut u = BattalionUnit::new(
+            0,
+            "1.Pz",
+            UnitType::MediumArmor,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        let (soft, btk, armor, hardness, sight, speed) = (
+            u.soft_attack,
+            u.breakthrough,
+            u.armor,
+            u.hardness,
+            u.sight_range,
+            u.speed_kmh,
+        );
+        u.attach(sup(SupportKind::MilitaryPolice, "medium_flame_tank"));
+        u.attach(sup(SupportKind::MilitaryPolice, "super_heavy_armor"));
+        u.attach(sup(SupportKind::MilitaryPolice, "helicopter_brigade"));
+        u.attach(sup(SupportKind::Maintenance, "maintenance_company"));
+        u.attach(sup(SupportKind::Engineer, "engineer"));
+        assert_eq!(u.soft_attack, soft);
+        assert_eq!(u.breakthrough, btk + 3.0);
+        assert_eq!(u.armor, armor + 3.0);
+        assert!((u.hardness - (hardness + 0.15)).abs() < 1e-6);
+        assert_eq!(u.sight_range, sight + 1);
+        assert!((u.speed_kmh - speed * 1.1).abs() < 1e-4, "{}", u.speed_kmh);
+        assert!((u.terrain_cost_mult - 0.75).abs() < 1e-6);
+        // Detaching all five (reverse order) restores every field.
+        for _ in 0..5 {
+            u.detach(u.support.len() - 1);
+        }
+        assert!(u.support.is_empty());
+        assert_eq!(u.soft_attack, soft);
+        assert_eq!(u.breakthrough, btk);
+        assert_eq!(u.armor, armor);
+        assert!((u.hardness - hardness).abs() < 1e-6);
+        assert_eq!(u.sight_range, sight);
+        assert!((u.speed_kmh - speed).abs() < 1e-4, "{}", u.speed_kmh);
+        assert!((u.terrain_cost_mult - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn maintenance_speed_bonus_needs_an_engine() {
+        // Horse-towed gun: no engine, no bonus.
+        let mut towed = BattalionUnit::new(
+            0,
+            "1.Art",
+            UnitType::ArtilleryBrigade,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        let s = towed.speed_kmh;
+        towed.attach(sup(SupportKind::Maintenance, "maintenance_company"));
+        assert_eq!(towed.speed_kmh, s);
+        // Truck-towed: an engine to keep tuned — +10%, reversed on detach.
+        let mut truck = BattalionUnit::new(
+            1,
+            "2.Art",
+            UnitType::ArtilleryBrigade,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        truck.set_chassis(Chassis::TruckTowed);
+        let s = truck.speed_kmh;
+        truck.attach(sup(SupportKind::Maintenance, "maintenance_company"));
+        assert!((truck.speed_kmh - s * 1.1).abs() < 1e-4);
+        truck.detach(0);
+        assert!((truck.speed_kmh - s).abs() < 1e-4);
+        // Foot infantry: no engine either.
+        let mut leg = BattalionUnit::new(
+            2,
+            "1.Inf",
+            UnitType::Infantry,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        let s = leg.speed_kmh;
+        leg.attach(sup(SupportKind::Maintenance, "hq_maintenance"));
+        assert_eq!(leg.speed_kmh, s);
+    }
+
+    #[test]
+    fn hardness_bonus_clamps_at_one() {
+        let mut u = BattalionUnit::new(
+            0,
+            "1.Pz",
+            UnitType::MediumArmor,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        u.hardness = 0.9;
+        u.attach(sup(SupportKind::MilitaryPolice, "super_heavy_armor"));
+        assert_eq!(u.hardness, 1.0);
+    }
+
+    #[test]
+    fn attach_detach_round_trips_a_clamped_hardness_bonus() {
+        // A 0.9-hardness host + the 0.15 bonus clamps to 1.0 at attach;
+        // detach must hand back the pre-attach 0.9, not 0.85 (§5.3).
+        let mut u = BattalionUnit::new(
+            0,
+            "1.Pz",
+            UnitType::MediumArmor,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        u.hardness = 0.9;
+        u.attach(sup(SupportKind::MilitaryPolice, "super_heavy_armor"));
+        assert_eq!(u.hardness, 1.0);
+        u.detach(0);
+        assert!((u.hardness - 0.9).abs() < 1e-6, "{}", u.hardness);
+        assert!(u.support.is_empty());
+    }
+
+    #[test]
+    fn engineer_fieldworks_amplify_entrenchment() {
+        let mut u = BattalionUnit::new(
+            0,
+            "1.Inf",
+            UnitType::Infantry,
+            Side::Defender,
+            HexCoord::ZERO,
+        );
+        u.defense = 100.0;
+        u.entrenchment = 2;
+        u.attach(sup(SupportKind::Engineer, "engineer"));
+        // 100 × (1 + 2 layers × 0.10 × 1.5 engineer fieldworks), resolved
+        // by the hit step's own defense function.
+        let d = crate::damage::defense_value(
+            &u,
+            false,
+            crate::Terrain::Plains,
+            &crate::params::CombatParams::default(),
+        );
+        assert!((d - 130.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn damage_reduction_stacks_multiplicatively() {
+        let mut u = BattalionUnit::new(
+            0,
+            "1.Inf",
+            UnitType::Infantry,
+            Side::Defender,
+            HexCoord::ZERO,
+        );
+        u.attach(sup(SupportKind::FieldHospital, "field_hospital"));
+        u.attach(sup(SupportKind::Maintenance, "maintenance_company"));
+        u.attach(sup(SupportKind::MilitaryPolice, "helicopter_brigade"));
+        let expect = 0.75 * 0.85 * 0.95;
+        assert!((u.support_str_damage_mult() - expect).abs() < 1e-6);
+        // Logistics + military police ride the same attrition stack.
+        u.attach(sup(SupportKind::MilitaryPolice, "military_police"));
+        u.attach(sup(SupportKind::Logistics, "logistics_company"));
+        assert!((u.support_encirclement_attrition_mult() - 0.45).abs() < 1e-6);
+        assert!((u.support_org_damage_mult() - 0.9).abs() < 1e-6);
+        assert!(u.support_never_surrenders());
+        assert!((u.support_entrenchment_mult() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn support_effect_tokens_list_the_new_effects() {
+        let mut u = BattalionUnit::new(
+            0,
+            "1.Pz",
+            UnitType::MediumArmor,
+            Side::Attacker,
+            HexCoord::ZERO,
+        );
+        u.attach(sup(SupportKind::MilitaryPolice, "medium_flame_tank"));
+        u.attach(sup(SupportKind::Maintenance, "maintenance_company"));
+        u.attach(sup(SupportKind::MilitaryPolice, "military_police"));
+        u.attach(sup(SupportKind::Engineer, "engineer"));
+        let tokens = u.support_effect_tokens();
+        let flat: Vec<(String, &str, String)> = tokens
+            .iter()
+            .flat_map(|(name, effects)| {
+                effects
+                    .iter()
+                    .map(|(key, value)| (name.clone(), *key, value.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let has = |key: &str, value: &str| {
+            flat.iter()
+                .any(|(_, k, v)| *k == key && v.as_str() == value)
+        };
+        // The per-attachment grouping survives (each name carries its own
+        // effects), and the values stay raw so the locale layer can format
+        // them.
+        assert_eq!(tokens.len(), 4, "{tokens:?}");
+        assert!(has("support.effect.breakthrough", "3"), "{flat:?}");
+        assert!(has("support.effect.speed", "10"), "{flat:?}");
+        assert!(has("support.effect.str_damage", "0.85"), "{flat:?}");
+        assert!(has("support.effect.org_damage", "0.9"), "{flat:?}");
+        assert!(has("support.effect.never_surrenders", ""), "{flat:?}");
+        assert!(has("support.effect.terrain_cost", "0.75"), "{flat:?}");
+        assert!(has("support.effect.entrenchment", "1.5"), "{flat:?}");
     }
 }

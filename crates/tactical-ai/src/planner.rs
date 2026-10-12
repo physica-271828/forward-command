@@ -17,6 +17,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 
 use tactical_core::flag::FlagState;
+use tactical_core::fog::FogOfWar;
 use tactical_core::hex::HexCoord;
 use tactical_core::pathfinding::find_path;
 use tactical_core::{
@@ -176,6 +177,21 @@ struct Ctx<'a> {
     /// outranks the flag doctrine — and movement/fire goals point at the
     /// order target.
     order: Option<DivOrderTarget>,
+    /// §6.1 sound ranging: enemy fire positions this side HEARD, as
+    /// (hex, age in turns) — built by the caller from this side's OWN fog.
+    /// Feeds the counter-battery fallback in `plan_support_fire`; empty
+    /// (every caller that predates the tell) keeps the old behavior.
+    enemy_sound_marks: Vec<(HexCoord, u32)>,
+    /// §6.1: ids of our own guns the ENEMY has heard — the marks in the
+    /// opponent's fog. Reserved for the shoot-and-scoot response: fed now,
+    /// deliberately unread until that behavior ships.
+    #[allow(dead_code)]
+    own_marked_units: Vec<usize>,
+    /// The acting side's OWN fog view — used ONLY to prove a blast circle
+    /// provably empty (every hex observed, no visible enemy inside), so
+    /// blind bombardment stops shelling a graveyard. None = unknown
+    /// (tests/preview paths): never proves emptiness, blind fire stands.
+    fog: Option<&'a FogOfWar>,
 }
 
 impl<'a> Ctx<'a> {
@@ -198,7 +214,17 @@ impl<'a> Ctx<'a> {
             intel: Vec::new(),
             flags: Vec::new(),
             order: None,
+            enemy_sound_marks: Vec::new(),
+            own_marked_units: Vec::new(),
+            fog: None,
         }
+    }
+
+    /// TRUE when the acting side currently observes `h` (this turn's raw
+    /// sight — not stale intel). Without a fog attached (tests, preview
+    /// paths) nothing is provably observed.
+    fn can_see(&self, h: HexCoord) -> bool {
+        self.fog.is_some_and(|f| f.is_visible(h))
     }
 
     /// The whole same-side force for STATISTICS (§7.5): own units
@@ -629,6 +655,40 @@ impl TacticalAi {
         passive_friendlies: Option<&[BattalionUnit]>,
         physical_foes: Option<&[BattalionUnit]>,
     ) -> Vec<AiAction> {
+        self.plan_turn_full_with_sound(
+            grid,
+            own_units,
+            enemy_units,
+            intel_zone,
+            flags,
+            passive_friendlies,
+            physical_foes,
+            &[],
+            &[],
+            None,
+        )
+    }
+
+    /// [`Self::plan_turn_full`] with the §6.1 sound-ranging intel attached:
+    /// `enemy_sound_marks` are the enemy fire positions this side HEARD and
+    /// `own_marked_units` the ids of its own guns the enemy heard — both as
+    /// the caller read them from its own (and the opponent's) fog. Empty
+    /// slices plan exactly as before the tell existed. `fog` is the acting
+    /// side's own fog view (used only to prove a blast circle empty).
+    #[allow(clippy::too_many_arguments)]
+    pub fn plan_turn_full_with_sound(
+        &mut self,
+        grid: &HexGrid,
+        own_units: &[BattalionUnit],
+        enemy_units: &[BattalionUnit],
+        intel_zone: Option<&[HexCoord]>,
+        flags: Option<&FlagState>,
+        passive_friendlies: Option<&[BattalionUnit]>,
+        physical_foes: Option<&[BattalionUnit]>,
+        enemy_sound_marks: &[(HexCoord, u32)],
+        own_marked_units: &[usize],
+        fog: Option<&FogOfWar>,
+    ) -> Vec<AiAction> {
         let mut ctx = Ctx::new(grid, own_units, enemy_units, self.side);
         if let Some(p) = passive_friendlies {
             ctx.passive = p.to_vec();
@@ -643,6 +703,9 @@ impl TacticalAi {
         if let Some(fs) = flags {
             ctx.flags.clone_from(&fs.flags);
         }
+        ctx.enemy_sound_marks.extend_from_slice(enemy_sound_marks);
+        ctx.own_marked_units.extend_from_slice(own_marked_units);
+        ctx.fog = fog;
 
         // Layer 1: strategic objective (§7.2 table + §7.1 global evaluation).
         // The §7.1 global force ratio counts the WHOLE side —
@@ -728,6 +791,34 @@ impl TacticalAi {
         flags: Option<&FlagState>,
         order: Option<DivOrderTarget>,
     ) -> Vec<AiAction> {
+        self.plan_turn_div_order_with_sound(
+            grid,
+            own_units,
+            enemy_units,
+            intel_zone,
+            flags,
+            order,
+            &[],
+            &[],
+            None,
+        )
+    }
+
+    /// [`Self::plan_turn_div_order`] with the §6.1 sound-ranging intel
+    /// attached (see [`Self::plan_turn_full_with_sound`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn plan_turn_div_order_with_sound(
+        &mut self,
+        grid: &HexGrid,
+        own_units: &[BattalionUnit],
+        enemy_units: &[BattalionUnit],
+        intel_zone: Option<&[HexCoord]>,
+        flags: Option<&FlagState>,
+        order: Option<DivOrderTarget>,
+        enemy_sound_marks: &[(HexCoord, u32)],
+        own_marked_units: &[usize],
+        fog: Option<&FogOfWar>,
+    ) -> Vec<AiAction> {
         // §7.4: the DIVISION SENSOR RADIUS — a
         // division-order plan reacts only to enemies within
         // `div_sensor_radius` of its own battalions, so an Advance pushes
@@ -760,6 +851,9 @@ impl TacticalAi {
             ctx.flags.clone_from(&fs.flags);
         }
         ctx.order = order;
+        ctx.enemy_sound_marks.extend_from_slice(enemy_sound_marks);
+        ctx.own_marked_units.extend_from_slice(own_marked_units);
+        ctx.fog = fog;
 
         let objective = self.select_objective(own_units, enemy_units);
 
@@ -967,15 +1061,33 @@ impl TacticalAi {
                 CombatTactic::Encirclement => UnitRole::Flank,
                 // Elastic defense counter-punches around the flanks.
                 CombatTactic::ElasticDefense => UnitRole::Flank,
-                CombatTactic::TacticalWithdrawal | CombatTactic::OverwhelmingFire => {
-                    UnitRole::HoldPosition
-                }
+                // The no-maneuver cards hold their armor too (§7.2 card
+                // text: ambush "never moves", urban_defense "never leaves
+                // the city", hold_bridge "no retreat ever", delay keeps
+                // the contact band) — the hold-role arms carry each card's
+                // doctrine, conditional strikes included.
+                CombatTactic::TacticalWithdrawal
+                | CombatTactic::OverwhelmingFire
+                | CombatTactic::Ambush
+                | CombatTactic::UrbanDefense
+                | CombatTactic::RiverDefense
+                | CombatTactic::Delay => UnitRole::HoldPosition,
                 _ => UnitRole::Assault,
             };
         }
         match t {
-            // §7.2 infiltration_assault: recon probes the far flanks.
-            UnitType::Recon => UnitRole::Probe,
+            // §7.2: recon probes the far flanks on the maneuver cards;
+            // on the hold / no-maneuver cards (ambush, urban defense,
+            // the river line, …) the scout holds with the line.
+            UnitType::Recon => match self.tactic {
+                CombatTactic::Assault
+                | CombatTactic::RiverAssault
+                | CombatTactic::Blitz
+                | CombatTactic::MassCharge
+                | CombatTactic::InfiltrationAssault
+                | CombatTactic::GuerrillaTactics => UnitRole::Probe,
+                _ => UnitRole::HoldPosition,
+            },
             // §6.8 non-combat support companies buff co-located battalions.
             t if t.is_support_company() => UnitRole::Attached,
             UnitType::Motorized | UnitType::Mechanized => match self.tactic {
@@ -988,7 +1100,8 @@ impl TacticalAi {
                 // crossing advance together, motorized included.
                 | CombatTactic::Assault
                 | CombatTactic::RiverAssault => UnitRole::Assault,
-                CombatTactic::Encirclement => UnitRole::HoldPosition,
+                // Every other card (Encirclement included) holds the motor
+                // pool with the line.
                 _ => UnitRole::HoldPosition,
             },
             // Line infantry (incl. marine/mountaineer/paratrooper/cavalry).
@@ -1365,7 +1478,13 @@ impl TacticalAi {
 
         if towed && !unit.is_emplaced {
             // Enemy inside the firing envelope → emplace (fires next turn).
-            if d_fire <= unit.attack_range {
+            // A live sound mark inside the envelope is the same call to
+            // action for a gun that sees nothing: the tubes must be laid
+            // before the counter-battery mission can answer the tell, and
+            // standing limbered is what kept the attacker's guns silent
+            // through exactly the battles where the enemy shelled from
+            // beyond sight.
+            if d_fire <= unit.attack_range || self.mark_in_envelope(unit, ctx) {
                 return AiAction::Emplace { unit_id: unit.id };
             }
             // Out of range: the defender emplaces as a fire base (the enemy
@@ -1402,12 +1521,16 @@ impl TacticalAi {
         // it (blind bombardment below) instead of wandering off.
         // A commanded division's gun keeps its emplacement and
         // shells the order goal instead of limbering away after it.
+        // A live sound mark in the envelope also keeps the gun in action:
+        // limbering here would oscillate emplace → limber → emplace with
+        // §6.1's emplacement trigger and the mission would never fire.
         if towed
             && unit.is_emplaced
             && d_fire > unit.attack_range
             && self.side == Side::Attacker
             && ctx.order.is_none()
             && self.intel_goal_in_range(unit, ctx).is_none()
+            && !self.mark_in_envelope(unit, ctx)
         {
             return AiAction::Limber { unit_id: unit.id };
         }
@@ -1422,6 +1545,23 @@ impl TacticalAi {
                     attacker_id: unit.id,
                     target_hex,
                 };
+            }
+            // COUNTER-BATTERY (§6.1): with nothing visible, a heard enemy
+            // battery still gets an AREA mission on its firing hex — the
+            // tell exists precisely so the guns can answer what the eye
+            // cannot find. Ranked BELOW any visible target (the tell is
+            // hex intel, not a sighting) and ABOVE blind bombardment (a
+            // located gun beats a guess at the deployment zone).
+            // Direct-fire guns are excluded like they are from blind fire:
+            // their missions are precision-only, and the registration gate
+            // refuses a hex with no combat-effective enemy standing on it.
+            if !direct_gun {
+                if let Some(hex) = self.counter_battery_hex(unit, ctx) {
+                    return AiAction::FireSupport {
+                        attacker_id: unit.id,
+                        target_hex: hex,
+                    };
+                }
             }
             // BLIND BOMBARDMENT — with no visible
             // target, an emplaced tube/rocket battery shells its intel goal
@@ -1445,12 +1585,15 @@ impl TacticalAi {
             }
         }
 
-        // Mobile battery (rocket) out of range: creep into the envelope
-        // (toward the objective when blind) — unless the intel zone is
-        // already in range, then shell it instead (same own-troops-free
-        // gate as above). Direct-fire guns (AT/AA) never blind-bombard
-        // (precision-only missions).
-        if !towed && d_fire > unit.attack_range {
+        // Mobile battery (rocket) out of range: the ATTACKER creeps into
+        // the envelope (toward the objective when blind) — unless the intel
+        // zone is already in range, then shell it instead (same
+        // own-troops-free gate as above). The defender's mobile guns are a
+        // fire base like its towed ones, so they hold and let the enemy
+        // close instead of chasing (the sparse-front rule above applies to
+        // every gun class, not just the limbering ones). Direct-fire guns
+        // (AT/AA) never blind-bombard (precision-only missions).
+        if !towed && d_fire > unit.attack_range && self.side == Side::Attacker {
             if !direct_gun {
                 if let Some(hex) = self.blind_fire_hex(unit, ctx) {
                     return AiAction::FireSupport {
@@ -1500,12 +1643,60 @@ impl TacticalAi {
     /// battery simply holds — visible targets are the only acceptable
     /// fire.
     fn blind_fire_hex(&self, unit: &BattalionUnit, ctx: &Ctx) -> Option<HexCoord> {
-        ctx.order_goal_in_range(unit)
+        let goal = ctx
+            .order_goal_in_range(unit)
             .filter(|&hex| self.zone_friend_free(ctx, hex))
             .or_else(|| {
                 self.intel_goal_in_range(unit, ctx)
                     .filter(|&hex| self.zone_friend_free(ctx, hex))
-            })
+            })?;
+        // §7.3: never shell a provably empty circle. Blind fire exists for
+        // the fog-hidden garrison; when every blast hex is currently
+        // observed and no visible enemy stands in the circle, the garrison
+        // is gone — the battery holds instead of farming "target lost"
+        // fizzles on a graveyard.
+        if std::iter::once(goal)
+            .chain(goal.neighbors())
+            .all(|h| ctx.can_see(h))
+            && !ctx
+                .enemy
+                .iter()
+                .any(|e| e.is_targetable() && e.position.distance(goal) <= 1)
+        {
+            return None;
+        }
+        Some(goal)
+    }
+
+    /// §6.1 counter-battery: the aim hex for an AREA mission on a HEARD
+    /// enemy battery, if one lies in the firing envelope with a blast circle
+    /// free of own troops (`zone_friend_free` — the same gate the
+    /// registration backstop applies). The tell is hex intel, never a
+    /// sighting, so the mission resolves as area fire and the ÷7 zone
+    /// weighting IS the sound-ranging location error. Deterministic:
+    /// nearest mark first, ties broken by the lower (q, r).
+    fn counter_battery_hex(&self, unit: &BattalionUnit, ctx: &Ctx) -> Option<HexCoord> {
+        ctx.enemy_sound_marks
+            .iter()
+            .map(|&(hex, _age)| hex)
+            .filter(|&hex| self.in_envelope(unit, hex))
+            .filter(|&hex| self.zone_friend_free(ctx, hex))
+            .min_by_key(|&hex| (unit.position.distance(hex), hex.q, hex.r))
+    }
+
+    /// Whether any live enemy sound mark lies inside `unit`'s firing
+    /// envelope — the §6.1 emplacement trigger for a gun that sees nothing.
+    fn mark_in_envelope(&self, unit: &BattalionUnit, ctx: &Ctx) -> bool {
+        ctx.enemy_sound_marks
+            .iter()
+            .any(|&(hex, _age)| self.in_envelope(unit, hex))
+    }
+
+    /// The firing envelope test both §6.1 helpers share: `unit` may engage
+    /// `hex` (rockets keep their minimum range).
+    fn in_envelope(&self, unit: &BattalionUnit, hex: HexCoord) -> bool {
+        let d = unit.position.distance(hex);
+        d <= unit.attack_range && d >= unit.min_attack_range()
     }
 
     /// §7.2 infiltration_assault: recon probes the far flanks.
@@ -1835,15 +2026,32 @@ impl TacticalAi {
                 // ~constant (split across the pool ÷n), so the counter
                 // estimate stays the solo one. Firepower regime: aimed.
                 let dealt = self.pooled_assault_estimate(unit, e, ctx);
-                let taken = est_org_damage(
-                    e,
-                    unit,
-                    true,
-                    &self.params,
-                    ctx.grid,
-                    1,
-                    tactical_core::damage::FirepowerForm::Aimed,
-                );
+                // The counter estimate must respect the resolver's reply
+                // gates (`add_counter` in tactical-combat): rockets and
+                // limbered towed guns never counter, and indirect
+                // artillery replies only inside its direct-lay circle —
+                // against those defenders the assault is free. (An
+                // assault is always adjacency, distance 1.)
+                let reply_range = if e.is_rocket() || (e.requires_emplacement() && !e.is_emplaced) {
+                    0
+                } else if e.is_indirect_artillery() {
+                    self.params.counter_direct_lay_range
+                } else {
+                    e.attack_range
+                };
+                let taken = if reply_range < 1 {
+                    0.0
+                } else {
+                    est_org_damage(
+                        e,
+                        unit,
+                        true,
+                        &self.params,
+                        ctx.grid,
+                        1,
+                        tactical_core::damage::FirepowerForm::Aimed,
+                    )
+                };
                 // The break-outright exemption must respect the delivery cap:
                 // one strike can never break more than org_cap_ratio of the
                 // target's max org (the pre-fix estimate had no
@@ -1971,7 +2179,7 @@ impl TacticalAi {
                         && o.position.distance(target.position) == 1
                 }),
         );
-        tactical_core::damage::strike_group_org_estimate(&pool, target, ctx.grid, &self.params)
+        tactical_core::damage::group_delivered_org_estimate(&pool, target, ctx.grid, &self.params)
     }
 
     /// The volley of the assault pool that COULD
@@ -1996,7 +2204,7 @@ impl TacticalAi {
         if pool.is_empty() {
             return 0.0;
         }
-        tactical_core::damage::strike_group_org_estimate(&pool, target, ctx.grid, &self.params)
+        tactical_core::damage::group_delivered_org_estimate(&pool, target, ctx.grid, &self.params)
     }
 
     /// The besieger storms — an urban garrison
@@ -2627,8 +2835,8 @@ impl TacticalAi {
         ctx: &Ctx,
         score: impl Fn(HexCoord, f32) -> Option<f32>,
     ) -> Option<(HexCoord, Vec<HexCoord>)> {
-        let enemy_zoc =
-            tactical_core::pathfinding::zoc_hexes(ctx.grid, &ctx.all, unit.side.opponent());
+        let control =
+            tactical_core::pathfinding::control_field(ctx.grid, &ctx.all, unit.side.opponent());
         let occupied: Vec<HexCoord> = ctx
             .all
             .iter()
@@ -2644,7 +2852,7 @@ impl TacticalAi {
                 let cost = tactical_core::pathfinding::step_hours(
                     ctx.grid,
                     unit,
-                    &enemy_zoc,
+                    &control,
                     unit.position,
                     h,
                     &self.params,
@@ -2823,9 +3031,12 @@ fn local_odds_acceptable(attacker: &BattalionUnit, target_hex: HexCoord, ctx: &C
 /// breakthrough when the enemy counter-fires it. `form` is the
 /// firepower regime — callers pass the resolver's rule: Aimed for assault /
 /// direct estimates and for every counter (the direct-lay gate removed
-/// long-range counter-battery), Area for fire missions. One deliberate
-/// plan-side gap: the command aura is absent (planning has no links),
-/// making the estimate slightly conservative.
+/// long-range counter-battery), Area for fire missions.
+///
+/// The estimate carries the target's own delivery rows (support org/strength
+/// multipliers) so a command-linked or NCO-led defender is not over-estimated.
+/// One deliberate plan-side gap remains: the command aura (planning has no
+/// links), which makes the estimate conservative on that row alone.
 /// (The old `flanked = false` gap retired with the
 /// flank bonus itself.)
 ///
@@ -2843,7 +3054,7 @@ fn est_org_damage(
     distance: i32,
     form: tactical_core::damage::FirepowerForm,
 ) -> f32 {
-    tactical_core::damage::strike_org_damage(
+    tactical_core::damage::delivered_estimate(
         attacker,
         target,
         target_uses_breakthrough,
@@ -2854,6 +3065,7 @@ fn est_org_damage(
         params,
         form,
     )
+    .0
 }
 
 /// §7.2 tactical_withdrawal: the rearguard is the healthy, frontline

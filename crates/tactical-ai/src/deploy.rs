@@ -43,7 +43,7 @@
 //! hills / ruins), RiverDefense doubles the river-shield bonus and adds a
 //! bank-hugging term, Blitz concentrates on the centre of the front with a
 //! deep second wave, Encirclement splits the force into two wing sectors,
-//! ElasticDefense/Counterattack hold a band plus an armor reserve echelon,
+//! ElasticDefense/Counterattack hold a band plus a reserve echelon,
 //! TacticalWithdrawal deploys in three fallback echelons, Delay in two. The
 //! other cards deploy by the side rule. The profiles mirror the §7.2 card
 //! table so the deployment's initial positions and the planner's doctrine
@@ -84,7 +84,8 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
-use tactical_core::{Attrs, BattalionUnit, HexCoord, HexGrid, Side, Terrain};
+use tactical_core::params::CombatParams;
+use tactical_core::{Attrs, BattalionUnit, HexCoord, HexGrid, Side, Terrain, UnitType};
 
 use crate::tactic::CombatTactic;
 
@@ -182,7 +183,9 @@ const REVERSE_SLOPE_W: f32 = 45.0;
 const OBSERVER_QUOTA_DIV: usize = 8;
 
 /// Pass-1 LINE class: direct-fire battalions that HOLD GROUND —
-/// infantry, cavalry, armor. AA (attack range 1) is excluded: a flak battery
+/// infantry, cavalry. Armor never qualifies: every tank type has attack
+/// range 2, so tanks deploy in the pass-2 support band instead (standoff
+/// 1 — the accepted behavior). AA (attack range 1) is excluded: a flak battery
 /// is a support asset, not a line weapon — it must sit behind the line with
 /// the guns (or garrison the city) so infantry assault cannot overrun it at
 /// battle start.
@@ -215,8 +218,6 @@ struct DeployProfile {
     shape: Shape,
     /// Crowd-penalty multiplier — loose cards (ambush / guerrilla) scatter.
     loose: f32,
-    /// Armor units go to the deepest echelon (the counter-punch reserve).
-    armor_reserve: bool,
 }
 
 impl DeployProfile {
@@ -226,7 +227,6 @@ impl DeployProfile {
             echelons: &[(0, 0.75), (2, 0.25)],
             shape: Shape::Full,
             loose: 1.0,
-            armor_reserve: false,
         }
     }
 
@@ -236,7 +236,6 @@ impl DeployProfile {
             echelons: &[(0, 0.7), (2, 0.3)],
             shape: Shape::Full,
             loose: 1.0,
-            armor_reserve: false,
         }
     }
 }
@@ -254,7 +253,6 @@ fn profile_for(defending: bool, tactic: CombatTactic) -> DeployProfile {
                 echelons: &[(0, 0.6), (2, 0.4)],
                 shape: Shape::CenterFocus(0.7),
                 loose: 1.0,
-                armor_reserve: false,
             },
             // Full frontal assault: everyone on the razor edge, no depth.
             CombatTactic::MassCharge => DeployProfile {
@@ -262,7 +260,6 @@ fn profile_for(defending: bool, tactic: CombatTactic) -> DeployProfile {
                 echelons: &[(0, 1.0)],
                 shape: Shape::Full,
                 loose: 1.0,
-                armor_reserve: false,
             },
             // Pincer: two wing sectors, the centre stays empty.
             CombatTactic::Encirclement => DeployProfile {
@@ -270,7 +267,6 @@ fn profile_for(defending: bool, tactic: CombatTactic) -> DeployProfile {
                 echelons: &[(0, 0.8), (2, 0.2)],
                 shape: Shape::TwoWings(0.3),
                 loose: 1.0,
-                armor_reserve: false,
             },
             // Exploit gaps: thin, loose, a little deeper.
             CombatTactic::InfiltrationAssault => DeployProfile {
@@ -278,7 +274,6 @@ fn profile_for(defending: bool, tactic: CombatTactic) -> DeployProfile {
                 echelons: &[(0, 1.0)],
                 shape: Shape::Full,
                 loose: 0.5,
-                armor_reserve: false,
             },
             _ => DeployProfile::default_attacker(),
         };
@@ -295,16 +290,14 @@ fn profile_for(defending: bool, tactic: CombatTactic) -> DeployProfile {
             echelons: &[(0, 1.0)],
             shape: Shape::Full,
             loose: 0.5,
-            armor_reserve: false,
         },
-        // Delay & preserve: a holding band + a counter-punch reserve of the
-        // mobile troops.
+        // Delay & preserve: a holding band + a reserve echelon for the
+        // counter-punch.
         CombatTactic::ElasticDefense => DeployProfile {
             band: DEF_FRONT_BAND,
             echelons: &[(0, 0.65), (2, 0.35)],
             shape: Shape::Full,
             loose: 1.0,
-            armor_reserve: true,
         },
         // Hold + strike: the reserve echelon IS the counter-punch force.
         CombatTactic::Counterattack => DeployProfile {
@@ -312,7 +305,6 @@ fn profile_for(defending: bool, tactic: CombatTactic) -> DeployProfile {
             echelons: &[(0, 0.6), (2, 0.4)],
             shape: Shape::Full,
             loose: 1.0,
-            armor_reserve: true,
         },
         // Systematic retreat: a thin screening echelon then two fallback
         // lines the retreat steps through.
@@ -321,7 +313,6 @@ fn profile_for(defending: bool, tactic: CombatTactic) -> DeployProfile {
             echelons: &[(0, 0.35), (3, 0.35), (6, 0.3)],
             shape: Shape::Full,
             loose: 1.0,
-            armor_reserve: false,
         },
         // Moving screen: two thin echelons, the rear one ready to relieve.
         CombatTactic::Delay => DeployProfile {
@@ -329,7 +320,6 @@ fn profile_for(defending: bool, tactic: CombatTactic) -> DeployProfile {
             echelons: &[(0, 0.5), (2, 0.5)],
             shape: Shape::Full,
             loose: 1.0,
-            armor_reserve: false,
         },
         // Attrition warfare: a dense line, little reserve (all guns on the
         // line's side anyway).
@@ -338,7 +328,6 @@ fn profile_for(defending: bool, tactic: CombatTactic) -> DeployProfile {
             echelons: &[(0, 0.85), (2, 0.15)],
             shape: Shape::Full,
             loose: 1.0,
-            armor_reserve: false,
         },
         // Pincer on defence: hold the two shoulders, the centre screens.
         CombatTactic::Encirclement => DeployProfile {
@@ -346,10 +335,26 @@ fn profile_for(defending: bool, tactic: CombatTactic) -> DeployProfile {
             echelons: &[(0, 0.75), (2, 0.25)],
             shape: Shape::TwoWings(0.35),
             loose: 1.0,
-            armor_reserve: false,
         },
         _ => DeployProfile::default_defender(),
     }
+}
+
+/// Distance-to-the-opposing-zone map for one deployment zone: the "front"
+/// metric every placement score reads. Shared by the single call and the
+/// division-by-division flow, which would otherwise recompute the same
+/// O(zone × foe-zone) table once per division.
+pub type FrontMap = HashMap<(i32, i32), f32>;
+
+/// Build the [`FrontMap`] for a deployment zone.
+pub fn front_map(e_zone: &[HexCoord], p_zone: &[HexCoord]) -> FrontMap {
+    e_zone
+        .iter()
+        .map(|h| {
+            let d = p_zone.iter().map(|p| h.distance(*p)).min().unwrap_or(0) as f32;
+            ((h.q, h.r), d)
+        })
+        .collect()
 }
 
 /// Arrange `enemy`'s combat-effective units inside `e_zone` (the whole-side
@@ -365,6 +370,7 @@ pub fn ai_deploy(
     pre_used: &HashSet<(i32, i32)>,
     only_division: Option<&str>,
     only_tag: Option<&str>,
+    corridor: Option<&[HexCoord]>,
 ) {
     ai_deploy_impl(
         grid,
@@ -378,7 +384,157 @@ pub fn ai_deploy(
         only_tag,
         None,
         false, // the AI/whole-side flow — `only_undeployed` is the player knob
+        corridor,
     )
+}
+
+/// ENH-0157 origin-tied staging (AI / auto-deploy only — manual deployment
+/// stays free): each attacking division deploys on ITS source province's
+/// staging area — a beach segment per sea, a strip slice per land origin,
+/// the pockets for an interior drop. Divisions with no source (script
+/// units) or an unmapped one (stragglers from third provinces) fall back
+/// to the whole `e_zone`. Returns false when the staging path does not
+/// apply (not the attacker / empty staging) so the caller keeps its plain
+/// whole-zone path. `exclude` carries the (tag, division) pairs that must
+/// stay OFFBOARD (allied AI slices), same semantics as [`ai_deploy`].
+#[allow(clippy::too_many_arguments)]
+pub fn ai_deploy_staged(
+    grid: &HexGrid,
+    units: &mut [BattalionUnit],
+    staging: &[(u32, Vec<HexCoord>)],
+    e_zone: &[HexCoord],
+    p_zone: &[HexCoord],
+    enemy: Side,
+    tactic: CombatTactic,
+    pre_used: &HashSet<(i32, i32)>,
+    exclude: &HashSet<(String, String)>,
+    only_undeployed: bool,
+) -> bool {
+    if enemy != Side::Attacker || staging.is_empty() {
+        return false;
+    }
+    let excluded = |u: &BattalionUnit| exclude.iter().any(|(t, d)| *t == u.tag && *d == u.division);
+    let mut used = pre_used.clone();
+    let mut keys: Vec<(String, String)> = Vec::new();
+    for u in units.iter() {
+        if u.side == enemy && (!only_undeployed || u.undeployed) && !excluded(u) {
+            let key = (u.tag.clone(), u.division.clone());
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+    }
+    let divisions: Vec<String> = keys.iter().map(|(_, d)| d.clone()).collect();
+    for (tag, division) in &keys {
+        let prov = units
+            .iter()
+            .find(|u| u.side == enemy && u.tag == *tag && u.division == *division)
+            .and_then(|u| u.hoi4_province);
+        let zone: &[HexCoord] = prov
+            .and_then(|p| {
+                staging
+                    .iter()
+                    .find(|(s, _)| *s == p)
+                    .map(|(_, c)| c.as_slice())
+            })
+            .unwrap_or(e_zone);
+        // The front metric is O(zone × foe-zone) — one table per staging
+        // area (each source has its own).
+        let front = front_map(zone, p_zone);
+        ai_deploy_impl_with_front(
+            grid,
+            units,
+            zone,
+            p_zone,
+            enemy,
+            tactic,
+            &used,
+            Some(division),
+            Some(tag),
+            Some(&divisions),
+            only_undeployed,
+            Some(&front),
+            None, // attacker side — the corridor quota is defender-only
+        );
+        for u in units.iter().filter(|u| {
+            u.side == enemy
+                && u.tag == *tag
+                && u.division == *division
+                && u.position != BattalionUnit::OFFBOARD
+        }) {
+            used.insert((u.position.q, u.position.r));
+        }
+    }
+    true
+}
+
+/// ENH-0158: the attacker's approach corridors to the keypoints — for
+/// every flag anchor, the A* route from each attacker staging area's
+/// centroid (the whole attacker zone's centroid when no staging exists —
+/// script battles) to the anchor, unioned with a 1-hex ring and clipped
+/// to the defender zone. Empty when the battle has no flags (nothing to
+/// cover — the corridor quota stays out of the way).
+pub fn approach_corridor(
+    grid: &HexGrid,
+    staging: &[(u32, Vec<HexCoord>)],
+    attacker_zone: &[HexCoord],
+    defender_zone: &[HexCoord],
+    anchors: &[HexCoord],
+    params: &CombatParams,
+) -> Vec<HexCoord> {
+    if anchors.is_empty() || attacker_zone.is_empty() {
+        return Vec::new();
+    }
+    let centroid = |zone: &[HexCoord]| -> HexCoord {
+        let n = zone.len() as f32;
+        let (sq, sr) = zone.iter().fold((0i64, 0i64), |(aq, ar), h| {
+            (aq + h.q as i64, ar + h.r as i64)
+        });
+        HexCoord::new(
+            (sq as f32 / n).round() as i32,
+            (sr as f32 / n).round() as i32,
+        )
+    };
+    let mut starts: Vec<HexCoord> = staging
+        .iter()
+        .filter(|(_, cells)| !cells.is_empty())
+        .map(|(_, cells)| centroid(cells))
+        .collect();
+    if starts.is_empty() {
+        starts.push(centroid(attacker_zone));
+    }
+    let mut out: Vec<HexCoord> = Vec::new();
+    let mut seen: HashSet<(i32, i32)> = HashSet::new();
+    let mut push = |h: HexCoord, seen: &mut HashSet<(i32, i32)>, out: &mut Vec<HexCoord>| {
+        if defender_zone.contains(&h) && seen.insert((h.q, h.r)) {
+            out.push(h);
+        }
+    };
+    for anchor in anchors {
+        for start in &starts {
+            // A dummy infantry probe — only the route's hexes matter.
+            let mut probe = BattalionUnit::new(
+                usize::MAX,
+                "corridor".to_string(),
+                UnitType::Infantry,
+                Side::Attacker,
+                *start,
+            );
+            probe.attack_range = 1;
+            let Some((path, _)) =
+                tactical_core::pathfinding::find_path(grid, &probe, &[], *anchor, params)
+            else {
+                continue;
+            };
+            for h in path {
+                push(h, &mut seen, &mut out);
+                for n in h.neighbors() {
+                    push(n, &mut seen, &mut out);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Arrange `enemy`'s combat-effective units inside `e_zone`. `p_zone` is the
@@ -417,6 +573,47 @@ pub fn ai_deploy_impl(
     only_tag: Option<&str>,
     sector_divisions: Option<&[String]>,
     only_undeployed: bool,
+    corridor: Option<&[HexCoord]>,
+) {
+    ai_deploy_impl_with_front(
+        grid,
+        units,
+        e_zone,
+        p_zone,
+        enemy,
+        tactic,
+        pre_used,
+        only_division,
+        only_tag,
+        sector_divisions,
+        only_undeployed,
+        None,
+        corridor,
+    );
+}
+
+/// [`ai_deploy_impl`] with the front map supplied by the caller — the
+/// division-by-division flow recomputes it per division otherwise, and the
+/// map is O(zone × foe-zone) per call. Same field semantics.
+/// `corridor` (defender side only, ENH-0158): the attacker's approach
+/// routes to the keypoints — a quota of the weakest direct-fire line units
+/// mans them front-first before the band fills (a bias, not a hard
+/// partition).
+#[allow(clippy::too_many_arguments)]
+pub fn ai_deploy_impl_with_front(
+    grid: &HexGrid,
+    units: &mut [BattalionUnit],
+    e_zone: &[HexCoord],
+    p_zone: &[HexCoord],
+    enemy: Side,
+    tactic: CombatTactic,
+    pre_used: &HashSet<(i32, i32)>,
+    only_division: Option<&str>,
+    only_tag: Option<&str>,
+    sector_divisions: Option<&[String]>,
+    only_undeployed: bool,
+    front_cache: Option<&FrontMap>,
+    corridor: Option<&[HexCoord]>,
 ) {
     if e_zone.is_empty() || p_zone.is_empty() {
         return;
@@ -437,14 +634,12 @@ pub fn ai_deploy_impl(
     // boundary). The old enemy-centroid anchor collapses on large stitched
     // maps: Warsaw's origin strip centroid sits 10+ hexes off the border
     // and the whole line formed at one point instead of along the boundary.
-    // Precomputed once; O(e_zone × p_zone).
-    let front_of: HashMap<(i32, i32), f32> = e_zone
-        .iter()
-        .map(|h| {
-            let d = p_zone.iter().map(|p| h.distance(*p)).min().unwrap_or(0) as f32;
-            ((h.q, h.r), d)
-        })
-        .collect();
+    // O(e_zone × p_zone) — reused from the caller when it deploys several
+    // divisions into the same zone.
+    let front_of: HashMap<(i32, i32), f32> = match front_cache {
+        Some(m) => m.clone(),
+        None => front_map(e_zone, p_zone),
+    };
     // River-shield direction: the enemy zone's centroid (coarse by design —
     // the sampled line just needs to point at the enemy's side).
     let (sq, sr) = p_zone.iter().fold((0i64, 0i64), |(aq, ar), h| {
@@ -467,7 +662,7 @@ pub fn ai_deploy_impl(
     // units to the garrison, so the rest of the division still holds its
     // sector (an un-capped weak division's battalion once landed 57 hexes
     // from the front).
-    let mut city_assigned: HashSet<usize> = HashSet::new();
+    let mut pre_placed: HashSet<usize> = HashSet::new();
     let city_hexes: Vec<HexCoord> = if defending {
         e_zone
             .iter()
@@ -557,7 +752,67 @@ pub fn ai_deploy_impl(
                 if let Some(&h) = best {
                     used.insert((h.q, h.r));
                     units[i].position = h;
-                    city_assigned.insert(units[i].id);
+                    pre_placed.insert(units[i].id);
+                }
+            }
+        }
+    }
+
+    // ── Corridor cover quota (ENH-0158, defender only) ────────────────
+    // A quota of the weakest direct-fire line units mans the attacker's
+    // approach corridors to the keypoints, front-first — the same spirit
+    // as the city garrison above (the screen covers the approaches). A
+    // bias, not a partition: the rest of the line takes the band as usual.
+    if defending {
+        if let Some(corridor) = corridor {
+            let mut chex: Vec<HexCoord> = corridor
+                .iter()
+                .copied()
+                .filter(|h| e_zone.contains(h) && !used.contains(&(h.q, h.r)))
+                .collect();
+            if !chex.is_empty() {
+                // Front-most corridor hexes first (nearest the foe zone).
+                chex.sort_by(|a, b| {
+                    let score = |h: &HexCoord| front_of.get(&(h.q, h.r)).copied().unwrap_or(0.0);
+                    score(a)
+                        .partial_cmp(&score(b))
+                        .unwrap_or(Ordering::Equal)
+                        .then(a.q.cmp(&b.q))
+                        .then(a.r.cmp(&b.r))
+                });
+                let mut pool: Vec<usize> = units
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, u)| {
+                        u.side == enemy
+                            && u.is_combat_effective()
+                            && u.attack_range <= 1
+                            && !u.is_hq()
+                            && in_division(u)
+                            && u_ok(u)
+                            && !pre_placed.contains(&u.id)
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                // Weakest first — the screen covers the corridor, the
+                // strong take the open band.
+                pool.sort_by(|&a, &b| {
+                    units[a]
+                        .org_ratio()
+                        .partial_cmp(&units[b].org_ratio())
+                        .unwrap_or(Ordering::Equal)
+                        .then(a.cmp(&b))
+                });
+                let quota = (pool.len() / 3).clamp(1, chex.len().min(pool.len()));
+                let mut ci = 0usize;
+                for &i in pool.iter().take(quota) {
+                    while ci < chex.len() && used.contains(&(chex[ci].q, chex[ci].r)) {
+                        ci += 1;
+                    }
+                    let Some(&h) = chex.get(ci) else { break };
+                    used.insert((h.q, h.r));
+                    units[i].position = h;
+                    pre_placed.insert(units[i].id);
                 }
             }
         }
@@ -788,7 +1043,7 @@ pub fn ai_deploy_impl(
             if u.side == enemy
                 && u.is_combat_effective()
                 && !u.is_hq()
-                && !city_assigned.contains(&u.id)
+                && !pre_placed.contains(&u.id)
                 && u_ok(u)
             {
                 *m.entry(u.division.clone()).or_default() += 1;
@@ -799,7 +1054,7 @@ pub fn ai_deploy_impl(
     let line_counts: HashMap<String, usize> = {
         let mut m: HashMap<String, usize> = HashMap::new();
         for u in units.iter() {
-            if u.side == enemy && is_line_unit(u) && !city_assigned.contains(&u.id) && u_ok(u) {
+            if u.side == enemy && is_line_unit(u) && !pre_placed.contains(&u.id) && u_ok(u) {
                 *m.entry(u.division.clone()).or_default() += 1;
             }
         }
@@ -812,7 +1067,7 @@ pub fn ai_deploy_impl(
                 && u.is_combat_effective()
                 && (u.attack_range > 1 || u.attrs.has(Attrs::AA))
                 && !u.is_hq()
-                && !city_assigned.contains(&u.id)
+                && !pre_placed.contains(&u.id)
                 && u_ok(u)
             {
                 *m.entry(u.division.clone()).or_default() += 1;
@@ -889,39 +1144,18 @@ pub fn ai_deploy_impl(
     // pass-2 artillery anchor and pass-3 HQ leash.
     let mut front_line: Vec<HexCoord> = Vec::new();
     let mut div_placed: HashMap<String, Vec<HexCoord>> = HashMap::new();
-    let mut unit_order: Vec<usize> = units
+    let unit_order: Vec<usize> = units
         .iter()
         .enumerate()
         .filter(|(_, u)| {
             u.side == enemy
                 && is_line_unit(u)
-                && !city_assigned.contains(&u.id)
+                && !pre_placed.contains(&u.id)
                 && in_division(u)
                 && u_ok(u)
         })
         .map(|(i, _)| i)
         .collect();
-    // armor_reserve: move the division's armor to the TAIL of its roster
-    // slice — the deepest echelon takes the counter-punch troops.
-    if profile.armor_reserve {
-        let mut head: Vec<usize> = Vec::new();
-        let mut tail: Vec<usize> = Vec::new();
-        let mut last_div = String::new();
-        for &i in &unit_order {
-            let d = units[i].division.clone();
-            if d != last_div && !last_div.is_empty() {
-                head.append(&mut tail);
-            }
-            last_div = d;
-            if units[i].unit_type.is_armor() {
-                tail.push(i);
-            } else {
-                head.push(i);
-            }
-        }
-        head.append(&mut tail);
-        unit_order = head;
-    }
     let mut placed_in_div: HashMap<String, usize> = HashMap::new();
     for i in unit_order {
         let division = units[i].division.clone();
@@ -944,8 +1178,7 @@ pub fn ai_deploy_impl(
             })
             .unwrap_or((arc_min, arc_max));
         // Echelon: cumulative share cutoffs over the division's placement
-        // order (armor_reserve reordered armor to the tail → the deepest
-        // echelon takes the counter-punch troops). The LAST echelon's band
+        // order. The LAST echelon's band
         // has no upper bound (spill).
         let div_idx = placed_in_div.get(&division).copied().unwrap_or(0);
         *placed_in_div.entry(division.clone()).or_default() += 1;
@@ -1059,10 +1292,18 @@ pub fn ai_deploy_impl(
     // unit keeps its line spot. The old hex stays marked in `used` (the
     // line is already placed — nobody else needs it).
     if defending {
+        // The quota counts the SAME population the posts are drawn from —
+        // on a per-division call (allied contingents, headless splits)
+        // only the division's own line units, or every call would post a
+        // side-sized screen.
         let line_n = units
             .iter()
             .filter(|u| {
-                u.side == enemy && is_line_unit(u) && !city_assigned.contains(&u.id) && u_ok(u)
+                u.side == enemy
+                    && is_line_unit(u)
+                    && !pre_placed.contains(&u.id)
+                    && in_division(u)
+                    && u_ok(u)
             })
             .count();
         let quota = (line_n / OBSERVER_QUOTA_DIV).max(1).min(line_n);
@@ -1072,7 +1313,7 @@ pub fn ai_deploy_impl(
             .filter(|(_, u)| {
                 u.side == enemy
                     && is_line_unit(u)
-                    && !city_assigned.contains(&u.id)
+                    && !pre_placed.contains(&u.id)
                     && in_division(u)
                     && u_ok(u)
             })
@@ -1151,7 +1392,7 @@ pub fn ai_deploy_impl(
         u.side == enemy
             && u.is_combat_effective()
             && (u.attack_range > 1 || u.attrs.has(Attrs::AA))
-            && !city_assigned.contains(&u.id)
+            && !pre_placed.contains(&u.id)
             && in_division(u)
             && u_ok(u)
     }) {
@@ -1258,8 +1499,11 @@ pub fn ai_deploy_impl(
             .collect();
         if cands.is_empty() {
             // Degenerate zone (the support band falls beyond the zone):
-            // fall back to the sector's nearest ground — a gun must never
-            // stay OFFBOARD.
+            // fall back to the sector's nearest ground. The same filters run
+            // again over the whole zone, so a fully saturated sector can
+            // still come back empty — the gun then keeps the OFFBOARD
+            // sentinel and the caller leaves it off the map, which is the
+            // intended graceful outcome rather than a guarantee.
             cands = e_zone
                 .iter()
                 .filter(|h| !used.contains(&(h.q, h.r)))
@@ -1577,6 +1821,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         for u in &units {
             assert!(
@@ -1589,6 +1834,157 @@ mod tests {
         assert!(
             units.iter().any(|u| u.position.q == 9),
             "line should hug the east bank"
+        );
+    }
+
+    /// ENH-0157 origin-tied staging: each attacking division deploys only
+    /// on ITS source province's staging area; a division with an unmapped
+    /// source falls back to the whole zone.
+    #[test]
+    fn attacker_deploys_each_division_on_its_own_staging() {
+        let g = HexGrid::new(16, 8, Terrain::Plains);
+        let p_zone: Vec<HexCoord> = (0..8)
+            .flat_map(|r| [HexCoord::new(0, r), HexCoord::new(1, r)])
+            .collect();
+        // Attacker zone: block q 3..=7; staging splits it into a north
+        // segment (province 100) and a south segment (province 200).
+        let e_zone: Vec<HexCoord> = (3..=7)
+            .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let seg_n: Vec<HexCoord> = (3..=7)
+            .flat_map(|q| (0..=3).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let seg_s: Vec<HexCoord> = (3..=7)
+            .flat_map(|q| (4..=7).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let staging = vec![(100u32, seg_n.clone()), (200u32, seg_s.clone())];
+        let mut north = unit(1, UnitType::Infantry, Side::Attacker, 1);
+        north.division = "N. Div".to_string();
+        north.hoi4_province = Some(100);
+        let mut south = unit(2, UnitType::Infantry, Side::Attacker, 1);
+        south.division = "S. Div".to_string();
+        south.hoi4_province = Some(200);
+        let mut stray = unit(3, UnitType::Infantry, Side::Attacker, 1);
+        stray.division = "X. Div".to_string();
+        stray.hoi4_province = Some(999); // unmapped → the whole zone
+        let mut units = vec![north, south, stray];
+        assert!(ai_deploy_staged(
+            &g,
+            &mut units,
+            &staging,
+            &e_zone,
+            &p_zone,
+            Side::Attacker,
+            CombatTactic::Default,
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+        ));
+        assert!(
+            seg_n.contains(&units[0].position),
+            "N. Div must stage on its own segment, got {:?}",
+            units[0].position
+        );
+        assert!(
+            seg_s.contains(&units[1].position),
+            "S. Div must stage on its own segment, got {:?}",
+            units[1].position
+        );
+        assert!(
+            e_zone.contains(&units[2].position),
+            "the unmapped straggler keeps the whole zone"
+        );
+    }
+
+    /// ENH-0158 corridor cover: the defender's line mans the approach
+    /// corridor front-first — placements cluster on it, unlike the
+    /// band-only baseline.
+    #[test]
+    fn defender_line_covers_the_approach_corridor() {
+        let g = HexGrid::new(16, 8, Terrain::Plains);
+        // Attacker west, defender zone the east block; the corridor is a
+        // row through the middle of the defender zone.
+        let a_zone: Vec<HexCoord> = (0..=1)
+            .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let d_zone: Vec<HexCoord> = (4..=15)
+            .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let corridor: Vec<HexCoord> = (6..=10).map(|q| HexCoord::new(q, 4)).collect();
+        let units: Vec<BattalionUnit> = (0..6)
+            .map(|i| unit(i, UnitType::Infantry, Side::Defender, 1))
+            .collect();
+        let mut with = units.clone();
+        ai_deploy(
+            &g,
+            &mut with,
+            &d_zone,
+            &a_zone,
+            Side::Defender,
+            CombatTactic::Default,
+            &HashSet::new(),
+            None,
+            None,
+            Some(&corridor),
+        );
+        let on_corridor = with
+            .iter()
+            .filter(|u| corridor.contains(&u.position))
+            .count();
+        assert!(on_corridor >= 2, "a quota mans the corridor");
+        // Baseline without the corridor: the same six deploy elsewhere.
+        let mut without = units.clone();
+        ai_deploy(
+            &g,
+            &mut without,
+            &d_zone,
+            &a_zone,
+            Side::Defender,
+            CombatTactic::Default,
+            &HashSet::new(),
+            None,
+            None,
+            None,
+        );
+        let base_on = without
+            .iter()
+            .filter(|u| corridor.contains(&u.position))
+            .count();
+        assert!(
+            on_corridor > base_on,
+            "the corridor bias beats the band-only baseline ({on_corridor} vs {base_on})"
+        );
+    }
+
+    /// approach_corridor: routes from each staging centroid to every
+    /// anchor, ringed, clipped to the defender zone; script fallback goes
+    /// to the whole attacker zone's centroid; no anchors → empty.
+    #[test]
+    fn approach_corridor_routes_staging_to_anchors_inside_the_zone() {
+        let g = HexGrid::new(12, 8, Terrain::Plains);
+        let staging = vec![(9u32, vec![HexCoord::new(0, 4)])];
+        let a_zone = vec![HexCoord::new(0, 4)];
+        let d_zone: Vec<HexCoord> = (3..=11)
+            .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let anchors = vec![HexCoord::new(10, 4)];
+        let params = CombatParams::default();
+        let c = approach_corridor(&g, &staging, &a_zone, &d_zone, &anchors, &params);
+        assert!(!c.is_empty());
+        assert!(
+            c.iter().all(|h| d_zone.contains(h)),
+            "clipped to the defender zone"
+        );
+        assert!(c.contains(&HexCoord::new(10, 4)), "the anchor is covered");
+        assert!(c.contains(&HexCoord::new(6, 4)), "the route's middle row");
+        let fallback = approach_corridor(&g, &[], &a_zone, &d_zone, &anchors, &params);
+        assert!(
+            !fallback.is_empty(),
+            "script fallback via the zone centroid"
+        );
+        assert!(
+            approach_corridor(&g, &staging, &a_zone, &d_zone, &[], &params).is_empty(),
+            "no anchors → no corridor"
         );
     }
 
@@ -1613,6 +2009,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -1642,6 +2039,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -1678,6 +2076,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -1717,6 +2116,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -1769,6 +2169,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         // The six anchors must spread around the ring — the old easternmost
         // tie-break would leave every unit at (7,4) (rows = 1, cols = 1).
@@ -1810,6 +2211,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         assert!(
             units.iter().any(|u| u.position.q == 9),
@@ -1846,6 +2248,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         assert!(
             units.iter().all(|u| u.position.q < 12),
@@ -1880,6 +2283,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -1923,6 +2327,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         let cols: HashSet<i32> = units.iter().map(|u| u.position.q).collect();
         assert!(
@@ -1954,6 +2359,7 @@ mod tests {
             Side::Defender,
             CombatTactic::UrbanDefense,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -1990,6 +2396,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         let positions = units.iter().map(|u| u.position).collect::<Vec<_>>();
         assert!(
@@ -2022,6 +2429,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &pre,
+            None,
             None,
             None,
         );
@@ -2066,6 +2474,7 @@ mod tests {
             CombatTactic::Default,
             &HashSet::new(),
             Some("A Div"),
+            None,
             None,
         );
         for (i, u) in units.iter().enumerate() {
@@ -2120,6 +2529,7 @@ mod tests {
             &HashSet::new(),
             Some("A Div"),
             Some("FRA"),
+            None,
         );
         for (i, u) in units.iter().enumerate() {
             if u.tag == "GER" {
@@ -2161,6 +2571,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -2224,6 +2635,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         for i in [6usize, 7] {
             let div = units[i].division.clone();
@@ -2284,6 +2696,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         for name in ["Div 1", "Div 2", "Div 3"] {
             let pos: Vec<HexCoord> = units
@@ -2336,6 +2749,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -2394,6 +2808,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         for name in ["Div 1", "Div 2", "Div 3"] {
             let line: Vec<HexCoord> = units
@@ -2420,8 +2835,8 @@ mod tests {
     /// pass 3), most battalions must START the battle in command — the
     /// design bar is "not necessarily all in command range, but not far".
     /// This is
-    /// the metric the cohesion weights answer to; if it dips, tune
-    /// COHESION_FREE / COHESION_W / HQ_DEPLOY_LEASH, not this threshold.
+    /// the metric the HQ placement leash answers to; if it dips, tune
+    /// HQ_DEPLOY_LEASH, not this threshold.
     #[test]
     fn most_battalions_start_in_command() {
         let g = HexGrid::new(24, 14, Terrain::Plains);
@@ -2448,6 +2863,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -2504,6 +2920,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -2579,6 +2996,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         for d in 1..=6 {
             let name = format!("Div {d}");
@@ -2628,6 +3046,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         assert!(
             units2.iter().all(|u| u.position != BattalionUnit::OFFBOARD),
@@ -2667,6 +3086,7 @@ mod tests {
             None,
             Some(&order),
             false,
+            None,
         );
         let div2_rows: HashSet<i32> = units
             .iter()
@@ -2711,6 +3131,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         let front_rank: Vec<i32> = units.iter().map(|u| u.position.q).collect();
         let min_q = *front_rank.iter().min().unwrap();
@@ -2753,6 +3174,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         let qs: Vec<i32> = units.iter().map(|u| u.position.q).collect();
         let min_q = *qs.iter().min().unwrap();
@@ -2787,6 +3209,7 @@ mod tests {
             Side::Attacker,
             CombatTactic::Blitz,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -2838,6 +3261,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         let weak_in_city = units
             .iter()
@@ -2877,6 +3301,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         let front = |h: HexCoord| p_zone.iter().map(|p| h.distance(*p)).min().unwrap();
         let inf_f = front(units[0].position);
@@ -2914,6 +3339,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -2964,6 +3390,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         // The line's centre of mass along the front (the r axis).
         let line_rc = units[..8].iter().map(|u| u.position.r as f32).sum::<f32>() / 8.0;
@@ -3012,6 +3439,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         let line_rc = units[..8].iter().map(|u| u.position.r as f32).sum::<f32>() / 8.0;
         let max_off = [8usize, 9, 10]
@@ -3057,6 +3485,7 @@ mod tests {
             Side::Defender,
             CombatTactic::Default,
             &HashSet::new(),
+            None,
             None,
             None,
         );
@@ -3122,6 +3551,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         let on_slope = units.iter().filter(|u| u.position.q == 6).count();
         assert!(
@@ -3171,6 +3601,7 @@ mod tests {
             &HashSet::new(),
             None,
             None,
+            None,
         );
         // Quota = 8/8 = 1 post; the weakest unit stands ON the crest (q5),
         // the other seven hold the reverse slope (q6).
@@ -3191,6 +3622,62 @@ mod tests {
                 .map(|u| (u.name.clone(), u.position))
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// Per-division deploys (allied contingents, headless splits) must
+    /// count the observer quota against the DIVISION's line units, not
+    /// the whole side's — otherwise every divisional call posts a
+    /// side-sized screen on the exposed crests.
+    #[test]
+    fn crest_observer_quota_counts_the_division_only() {
+        let mut g = HexGrid::new(24, 8, Terrain::Plains);
+        for r in 0..8 {
+            g.cell_mut(HexCoord::new(5, r)).unwrap().elevation = 2;
+        }
+        let p_zone: Vec<HexCoord> = (0..8).map(|r| HexCoord::new(0, r)).collect();
+        let e_zone: Vec<HexCoord> = (0..8)
+            .flat_map(|r| (4..=18).map(move |q| HexCoord::new(q, r)))
+            .collect();
+        // Two divisions of 8 line units each: the whole-side quota would
+        // be 16/8 = 2; per division it is 8/8 = 1.
+        let mut units: Vec<BattalionUnit> = (1..=16)
+            .map(|i| {
+                let mut u = unit(i, UnitType::Infantry, Side::Defender, 1);
+                u.division = if i <= 8 { "A".into() } else { "B".into() };
+                u
+            })
+            .collect();
+        for div in ["A", "B"] {
+            ai_deploy_impl(
+                &g,
+                &mut units,
+                &e_zone,
+                &p_zone,
+                Side::Defender,
+                CombatTactic::Default,
+                &HashSet::new(),
+                Some(div),
+                None,
+                None,
+                false,
+                None,
+            );
+        }
+        for div in ["A", "B"] {
+            let posts = units
+                .iter()
+                .filter(|u| u.division == div && u.position.q == 5)
+                .count();
+            assert_eq!(
+                posts,
+                1,
+                "division {div} must post exactly 1 crest observer, got {posts}: {:?}",
+                units
+                    .iter()
+                    .map(|u| (u.name.clone(), u.position))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     /// The player's Auto Deploy (`only_undeployed = true`) fills
@@ -3224,6 +3711,7 @@ mod tests {
             None,
             None,
             true,
+            None,
         );
         assert_eq!(
             units[0].position, anchor,

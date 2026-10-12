@@ -1,9 +1,9 @@
 //! A* pathfinding with continuous movement time (§6.2/§6.5): costs are in
 //! **hours** — effective kilometres per hex (terrain × mobility class, the
 //! relief price of a surfaced hex, river crossing surcharge) divided by the
-//! mover's speed in km/h. ZOC delay is set to 0 in the shipped defaults (a
-//! movement-feel decision); lane soft-penalties and yield rules live in
-//! movement.rs.
+//! mover's speed in km/h. Enemy CONTROL (控制区, §6.5) scales the step by
+//! the pressure of the entered hex's covering units; lane soft-penalties
+//! and yield rules live in movement.rs.
 
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use crate::grid::{GridCell, HexGrid};
 use crate::hex::HexCoord;
 use crate::params::CombatParams;
 use crate::terrain::Terrain;
-use crate::unit::{BattalionUnit, MobilityClass, Side};
+use crate::unit::{BattalionUnit, MobilityClass, Side, UnitState};
 
 /// Motor-class units pay this multiple of the terrain's excess-over-baseline
 /// cost (§6.6): forest 1.5 km leg → 1.75 km motor, mountain
@@ -23,26 +23,48 @@ pub const MOTOR_TERRAIN_MULT: f32 = 1.5;
 /// kilometres for every mobility class — movement-only, no combat modifiers.
 pub const BRIDGE_MOVE_COST_KM: f32 = 1.0;
 
-/// Hexes projected as ZOC by all combat-effective units of `side` (§6.5).
-/// ZOC does not extend through impassable terrain.
-pub fn zoc_hexes(grid: &HexGrid, units: &[BattalionUnit], side: Side) -> Vec<HexCoord> {
-    let mut out = Vec::new();
-    for u in units
-        .iter()
-        .filter(|u| u.side == side && u.is_combat_effective())
-    {
-        for n in grid.passable_neighbors(u.position) {
-            out.push(n);
-        }
-    }
-    out.sort_by_key(|h| (h.q, h.r));
-    out.dedup();
-    out
+/// §6.5 控制区 (control zone): the hexes covered by `side`'s fighting
+/// units, each carrying the CONTROL PRESSURE that slows enemy movement —
+/// Σ `org_ratio × strength_ratio` over the covering units, so a spent
+/// battalion throttles far less than a fresh one. Only units that can
+/// hold ground project control: routing or ineffective units, HQs and
+/// indirect artillery (tube + rocket) are skipped — a rocket battery
+/// cannot close a line. Impassable terrain breaks the cover (only
+/// passable neighbours are projected).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ControlField {
+    /// `(hex, pressure)` sorted by `(q, r)` — binary-search lookup.
+    entries: Vec<(HexCoord, f32)>,
 }
 
-fn in_zoc(zoc: &[HexCoord], h: HexCoord) -> bool {
-    zoc.binary_search_by_key(&(h.q, h.r), |x| (x.q, x.r))
-        .is_ok()
+impl ControlField {
+    /// Total control pressure over `h`; 0.0 when the hex is uncovered.
+    pub fn pressure(&self, h: HexCoord) -> f32 {
+        self.entries
+            .binary_search_by_key(&(h.q, h.r), |&(x, _)| (x.q, x.r))
+            .map(|i| self.entries[i].1)
+            .unwrap_or(0.0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Build the control field `side`'s units project (§6.5).
+pub fn control_field(grid: &HexGrid, units: &[BattalionUnit], side: Side) -> ControlField {
+    let mut acc: HashMap<HexCoord, f32> = HashMap::new();
+    for u in units.iter().filter(|u| {
+        u.side == side && u.is_combat_effective() && !u.is_hq() && !u.is_indirect_artillery()
+    }) {
+        let pressure = u.org_ratio() * u.strength_ratio();
+        for n in grid.passable_neighbors(u.position) {
+            *acc.entry(n).or_insert(0.0) += pressure;
+        }
+    }
+    let mut entries: Vec<(HexCoord, f32)> = acc.into_iter().collect();
+    entries.sort_by_key(|&(h, _)| (h.q, h.r));
+    ControlField { entries }
 }
 
 /// §6.6 price of ENTERING `cell` for one mobility class — the single place
@@ -55,7 +77,14 @@ fn in_zoc(zoc: &[HexCoord], h: HexCoord) -> bool {
 /// River without a deck) carries no bonus — it prices like open river.
 /// Urban streets are roads by definition; every other hex pays the off-road
 /// surcharge, legs flat, motor amplified through its excess multiplier.
-fn enter_move_km(cell: &GridCell, class: MobilityClass, params: &CombatParams) -> f32 {
+/// `terrain_mult` is the mover's engineer terrain craft (§6.3/§6.6): it
+/// scales the off-road penalty only — road and street prices never move.
+fn enter_move_km(
+    cell: &GridCell,
+    class: MobilityClass,
+    params: &CombatParams,
+    terrain_mult: f32,
+) -> f32 {
     if cell.terrain == Terrain::River && cell.bridge {
         BRIDGE_MOVE_COST_KM
     } else if cell.has_road() && cell.terrain != Terrain::River {
@@ -63,7 +92,7 @@ fn enter_move_km(cell: &GridCell, class: MobilityClass, params: &CombatParams) -
     } else if cell.terrain == Terrain::Urban {
         cell.terrain.movement_cost_for(class)
     } else {
-        off_road_move_km(cell.terrain, class, params)
+        off_road_move_km(cell.terrain, class, params, terrain_mult)
     }
 }
 
@@ -77,29 +106,39 @@ fn road_move_km(cell: &GridCell, params: &CombatParams) -> f32 {
 
 /// §6.6 off-road: the terrain row plus the flat `off_road_surcharge_km` for
 /// legs; motor rides the same sum through its excess multiplier.
-fn off_road_move_km(terrain: Terrain, class: MobilityClass, params: &CombatParams) -> f32 {
+/// `terrain_mult` (engineer terrain craft, §6.3) scales the EXCESS over the
+/// 1 km baseline — the terrain penalty shrinks, the baseline kilometre
+/// itself never gets cheaper.
+fn off_road_move_km(
+    terrain: Terrain,
+    class: MobilityClass,
+    params: &CombatParams,
+    terrain_mult: f32,
+) -> f32 {
     let base = terrain.movement_cost() + params.off_road_surcharge_km;
     match class {
-        MobilityClass::Leg => base,
-        MobilityClass::Motor => 1.0 + (base - 1.0) * MOTOR_TERRAIN_MULT,
+        MobilityClass::Leg => 1.0 + (base - 1.0) * terrain_mult,
+        MobilityClass::Motor => 1.0 + (base - 1.0) * MOTOR_TERRAIN_MULT * terrain_mult,
     }
 }
 
 /// The hover card's generic LEG row for entering `cell` — lockstep with
-/// [`step_km`] through [`enter_move_km`].
+/// [`step_km`] through [`enter_move_km`] for an attachment-free mover
+/// (engineer terrain craft is per-battalion and never shown here).
 pub fn cell_move_km(cell: &GridCell, params: &CombatParams) -> f32 {
-    enter_move_km(cell, MobilityClass::Leg, params)
+    enter_move_km(cell, MobilityClass::Leg, params, 1.0)
 }
 
 /// Effective kilometres for `mover` to step from `from` into `to`: the
 /// entered hex's price (terrain × mobility class, road network §6.6), river
-/// surcharge, out-of-bounds leaving fee, ZOC delay (the legacy
-/// `zoc_*_ap_cost` params are now read as extra effective km — they delay
-/// fast units less and slow units more, which is the intended "迟滞").
+/// surcharge, out-of-bounds leaving fee, and the §6.5 CONTROL slowdown —
+/// entering a hex covered by the enemy's fighting units scales the step by
+/// `1 + control_slow_k × pressure`, pressure being the covering units'
+/// Σ org_ratio × strength_ratio.
 pub fn step_km(
     grid: &HexGrid,
     mover: &BattalionUnit,
-    enemy_zoc: &[HexCoord],
+    control: &ControlField,
     from: HexCoord,
     to: HexCoord,
     params: &CombatParams,
@@ -109,7 +148,7 @@ pub fn step_km(
         return None;
     }
     let class = mover.unit_type.mobility_class();
-    let mut cost = enter_move_km(cell, class, params);
+    let mut cost = enter_move_km(cell, class, params, mover.terrain_cost_mult);
     // §6.14: out-of-bounds land is passable at its terrain cost
     // ("界外陆地格行动力消耗与界内一致") but carries a hefty soft surcharge
     // so PLANNED routes (AI approaches, player standing orders) detour
@@ -123,17 +162,35 @@ pub fn step_km(
     // cell that merely touches a river on any side. Uniform for every
     // river: a wide band is a wider stretch of the same ford rule, not a
     // pricier one. A bridged edge (§4.2) waives the surcharge.
+    //
+    // Either endpoint may be the one marking the shared edge: the map
+    // generator writes the mirrored bits only for in-province↔in-province
+    // edges, so a step between the province and the §6.14 out-of-province
+    // ring carries the bit on the in-province side alone. Reading both
+    // directions keeps leaving and re-entering a border river at the same
+    // price.
     if let (Some(from_cell), Some(dir)) = (grid.cell(from), from.direction_to(to)) {
-        if from_cell.river_edges & dir.bit() != 0 && from_cell.bridge_edges & dir.bit() == 0 {
+        let back = dir.opposite();
+        let (to_river, to_bridge) = grid
+            .cell(to)
+            .map(|c| (c.river_edges, c.bridge_edges))
+            .unwrap_or((0, 0));
+        let marked = from_cell.river_edges & dir.bit() != 0 || to_river & back.bit() != 0;
+        let bridged = from_cell.bridge_edges & dir.bit() != 0 || to_bridge & back.bit() != 0;
+        if marked && !bridged {
             cost += params.river_edge_surcharge_km;
         }
     }
-    let from_zoc = in_zoc(enemy_zoc, from);
-    let to_zoc = in_zoc(enemy_zoc, to);
-    if from_zoc && to_zoc {
-        cost += params.zoc_to_zoc_ap_cost;
-    } else if to_zoc {
-        cost += params.zoc_entry_ap_cost;
+    // §6.5 control slowdown: entering a covered hex scales the step by the
+    // covering units' org × strength pressure — a fresh infantry battalion
+    // roughly halves the pace, a spent one barely dents it. A ROUT is
+    // exempt: a retreating unit is neither slowed nor covered (§6.8), so
+    // disengaging stays cheap and routs keep their BFS escape.
+    if mover.state != UnitState::Retreating {
+        let pressure = control.pressure(to);
+        if pressure > 0.0 {
+            cost *= 1.0 + params.control_slow_k * pressure;
+        }
     }
     Some(cost)
 }
@@ -142,12 +199,12 @@ pub fn step_km(
 pub fn step_hours(
     grid: &HexGrid,
     mover: &BattalionUnit,
-    enemy_zoc: &[HexCoord],
+    control: &ControlField,
     from: HexCoord,
     to: HexCoord,
     params: &CombatParams,
 ) -> Option<f32> {
-    Some(step_km(grid, mover, enemy_zoc, from, to, params)? / mover.speed_kmh.max(0.1))
+    Some(step_km(grid, mover, control, from, to, params)? / mover.speed_kmh.max(0.1))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -188,7 +245,7 @@ pub fn reachable_within(
     params: &CombatParams,
     hours_budget: f32,
 ) -> Vec<(HexCoord, f32)> {
-    let enemy_zoc = zoc_hexes(grid, units, mover.side.opponent());
+    let control = control_field(grid, units, mover.side.opponent());
     let occupied: Vec<HexCoord> = units
         .iter()
         .filter(|u| u.id != mover.id && u.is_combat_effective())
@@ -212,7 +269,7 @@ pub fn reachable_within(
             if occupied.contains(&next) {
                 continue;
             }
-            let Some(step) = step_hours(grid, mover, &enemy_zoc, pos, next, params) else {
+            let Some(step) = step_hours(grid, mover, &control, pos, next, params) else {
                 continue;
             };
             let next_cost = g + step;
@@ -236,6 +293,22 @@ pub fn reachable_within(
     out
 }
 
+/// A* heuristic for one step toward `target`: distance × the cheapest
+/// possible step. The cheapest step is the flat road price
+/// ([`CombatParams::road_base_km`]) — every `enter_move_km` branch starts
+/// from that baseline and surcharges only ever add to it, so a shorter
+/// estimate would make the search return non-optimal paths. `road_base_km`
+/// is a live tuning knob, so the baseline is read from the params instead
+/// of being hardcoded.
+fn heuristic_hours(
+    mover: &BattalionUnit,
+    from: HexCoord,
+    target: HexCoord,
+    params: &CombatParams,
+) -> f32 {
+    from.distance(target) as f32 * (params.road_base_km / mover.speed_kmh.max(0.1))
+}
+
 /// A* shortest path (terrain + ZOC costs). Returns (path without start,
 /// total cost in hours). Occupied hexes block routing — but the *target*
 /// itself may be occupied (the occupant may march away before we
@@ -257,7 +330,7 @@ pub fn find_path(
     if mover.position == target {
         return Some((Vec::new(), 0.0));
     }
-    let enemy_zoc = zoc_hexes(grid, units, mover.side.opponent());
+    let control = control_field(grid, units, mover.side.opponent());
     let blocked: Vec<HexCoord> = units
         .iter()
         .filter(|u| u.id != mover.id && u.is_combat_effective())
@@ -314,14 +387,16 @@ pub fn find_path(
             if blocked.contains(&next) && next != target {
                 continue;
             }
-            let Some(mut step) = step_hours(grid, mover, &enemy_zoc, pos, next, params) else {
+            let Some(mut step) = step_hours(grid, mover, &control, pos, next, params) else {
                 continue;
             };
             if next != target {
                 step += lane_penalty.get(&next).copied().unwrap_or(0.0) / mover.speed_kmh.max(0.1);
             }
-            // Admissible heuristic: distance × cheapest possible step.
-            let h = next.distance(target) as f32 * (1.0 / mover.speed_kmh.max(0.1));
+            // Admissible heuristic: distance × the cheapest possible step
+            // (`road_base_km` bounds every `enter_move_km` branch from
+            // below — terrain rows and surcharges only ever add to it).
+            let h = heuristic_hours(mover, next, target, params);
             let next_cost = g + step;
             if next_cost + 1e-6 < *dist.get(&next).unwrap_or(&f32::MAX) {
                 dist.insert(next, next_cost);
@@ -341,11 +416,16 @@ pub fn find_path(
 mod tests {
     use super::*;
     use crate::terrain::Terrain;
-    use crate::unit::UnitType;
+    use crate::unit::{Attrs, UnitType};
 
     /// 6 km/h unit: 1 plains km costs 1/6 h ≈ 0.1667.
     fn mk_unit(id: usize, side: Side, pos: HexCoord) -> BattalionUnit {
         BattalionUnit::new(id, format!("U{id}"), UnitType::Cavalry, side, pos)
+    }
+
+    /// No enemy cover on the test map — an empty §6.5 control field.
+    fn no_control() -> ControlField {
+        ControlField::default()
     }
 
     #[test]
@@ -394,24 +474,135 @@ mod tests {
     }
 
     #[test]
-    fn zoc_entry_adds_delay_km() {
-        // ZOC surcharges are zeroed in the shipped defaults (a movement-feel
-        // decision); this test enables them explicitly to cover the mechanism.
-        let p = CombatParams {
-            zoc_entry_ap_cost: 1.0,
-            ..Default::default()
-        };
+    fn control_pressure_scales_with_org_and_strength() {
+        // §6.5 控制区: a fresh battalion covers its neighbours with
+        // pressure = org_ratio × str_ratio = 1.0; a spent one throttles far
+        // less (both ratios halved → 0.25).
+        let g = HexGrid::new(10, 10, Terrain::Plains);
+        let mut enemy = mk_unit(1, Side::Defender, HexCoord::new(4, 2));
+        let field = control_field(&g, &[enemy.clone()], Side::Defender);
+        assert!((field.pressure(HexCoord::new(3, 2)) - 1.0).abs() < 1e-4);
+        assert_eq!(field.pressure(HexCoord::new(2, 2)), 0.0, "two hexes away");
+        enemy.org *= 0.5;
+        enemy.strength *= 0.5;
+        let field = control_field(&g, &[enemy], Side::Defender);
+        assert!((field.pressure(HexCoord::new(3, 2)) - 0.25).abs() < 1e-4);
+    }
+
+    #[test]
+    fn indirect_artillery_and_hqs_project_no_control() {
+        // Tube + rocket batteries cannot close a line, and an HQ is not a
+        // fighting unit: neither covers ground.
+        let g = HexGrid::new(10, 10, Terrain::Plains);
+        let gun = BattalionUnit::new(
+            1,
+            "G",
+            UnitType::ArtilleryBrigade,
+            Side::Defender,
+            HexCoord::new(4, 2),
+        );
+        let rockets = BattalionUnit::new(
+            2,
+            "R",
+            UnitType::RocketArtillery,
+            Side::Defender,
+            HexCoord::new(4, 4),
+        );
+        let mut hq = mk_unit(3, Side::Defender, HexCoord::new(4, 6));
+        hq.attrs |= Attrs::HQ;
+        let field = control_field(&g, &[gun, rockets, hq], Side::Defender);
+        assert!(field.is_empty(), "guns and HQs cover nothing");
+    }
+
+    #[test]
+    fn retreating_units_are_exempt_both_ways() {
+        // §6.8: a routing unit neither projects control nor suffers it —
+        // the rout escape keeps its BFS pricing.
+        let g = HexGrid::new(10, 10, Terrain::Plains);
+        let mut runner = mk_unit(1, Side::Defender, HexCoord::new(4, 2));
+        runner.state = UnitState::Retreating;
+        assert!(control_field(&g, &[runner], Side::Defender).is_empty());
+        let mut mover = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
+        mover.state = UnitState::Retreating;
+        let cover = control_field(
+            &g,
+            &[mk_unit(1, Side::Defender, HexCoord::new(4, 2))],
+            Side::Defender,
+        );
+        let p = CombatParams::default();
+        let open = step_km(
+            &g,
+            &mover,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
+        let covered = step_km(
+            &g,
+            &mover,
+            &cover,
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((open - covered).abs() < 1e-6, "a rout is never slowed");
+    }
+
+    #[test]
+    fn a_fresh_battalion_halves_the_pace_inside_its_cover() {
+        // Entering (3,2), covered at pressure 1.0 with k = 1: the 1.5 km
+        // off-road leg is scaled to 3.0 km. Stepping back OUT is priced
+        // normally — disengaging is never punished.
         let g = HexGrid::new(10, 10, Terrain::Plains);
         let mover = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
-        let enemy = mk_unit(1, Side::Defender, HexCoord::new(4, 2));
-        let units = vec![mover.clone(), enemy];
-        let reach = reachable_within(&g, &mover, &units, &p, 1.0);
-        // (3,2) is adjacent to the enemy -> inside ZOC: 1.5 off-road + 1.0 entry
+        let field = control_field(
+            &g,
+            &[mk_unit(1, Side::Defender, HexCoord::new(4, 2))],
+            Side::Defender,
+        );
+        let p = CombatParams::default();
+        let covered = step_km(
+            &g,
+            &mover,
+            &field,
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((covered - 3.0).abs() < 1e-4, "covered step {covered}");
+        let escape = step_km(
+            &g,
+            &mover,
+            &field,
+            HexCoord::new(3, 2),
+            HexCoord::new(2, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((escape - 1.5).abs() < 1e-4, "escape step {escape}");
+    }
+
+    #[test]
+    fn control_scaling_reaches_the_reachability_probe() {
+        // reachable_within pays the same control-scaled prices — the hover
+        // ring and the AI's one-hex probes cannot drift from the executor.
+        let g = HexGrid::new(10, 10, Terrain::Plains);
+        let mover = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
+        let units = vec![
+            mover.clone(),
+            mk_unit(1, Side::Defender, HexCoord::new(4, 2)),
+        ];
+        let reach = reachable_within(&g, &mover, &units, &CombatParams::default(), 1.0);
         let (_, c) = reach
             .iter()
             .find(|(h, _)| *h == HexCoord::new(3, 2))
             .unwrap();
-        assert!((*c - 2.5 / 6.0).abs() < 1e-4);
+        // 1.5 km off-road × (1 + 1.0) = 3.0 km at 6 km/h.
+        assert!((*c - 3.0 / 6.0).abs() < 1e-4, "cost {c}");
     }
 
     #[test]
@@ -455,7 +646,7 @@ mod tests {
         g.cell_mut(HexCoord::new(4, 2)).unwrap().river_edges = HexDirection::W.bit();
         let mover = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
         let p = CombatParams::default();
-        let zoc = [];
+        let zoc = ControlField::default();
         // Crossing the river edge: 1.5 plains off-road + 2.0 surcharge.
         let c = step_km(
             &g,
@@ -501,7 +692,7 @@ mod tests {
         let c = step_km(
             &g,
             &mover,
-            &[],
+            &no_control(),
             HexCoord::new(2, 2),
             HexCoord::new(3, 2),
             &CombatParams::default(),
@@ -513,7 +704,7 @@ mod tests {
     #[test]
     fn river_band_never_changes_the_ford_rows() {
         use crate::hex::HexDirection;
-        // Width bands are pure geometry (ENH-0135): a Medium/Large river
+        // Width bands are pure geometry: a Medium/Large river
         // is a WIDER strip of the same ford, never a pricier one — the
         // per-hex cost must not depend on the band.
         let mover = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
@@ -529,7 +720,7 @@ mod tests {
             let c = step_km(
                 &g,
                 &mover,
-                &[],
+                &no_control(),
                 HexCoord::new(2, 2),
                 HexCoord::new(3, 2),
                 &p,
@@ -542,7 +733,15 @@ mod tests {
         g2.cell_mut(HexCoord::new(3, 2)).unwrap().river_edges = HexDirection::E.bit();
         g2.cell_mut(HexCoord::new(4, 2)).unwrap().river_edges = HexDirection::W.bit();
         g2.cell_mut(HexCoord::new(3, 2)).unwrap().river_band = crate::terrain::RiverBand::Large;
-        let c = step_km(&g2, &mover, &[], HexCoord::new(3, 2), HexCoord::new(4, 2), &p).unwrap();
+        let c = step_km(
+            &g2,
+            &mover,
+            &no_control(),
+            HexCoord::new(3, 2),
+            HexCoord::new(4, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 3.5).abs() < 1e-4, "large-band edge {c}");
     }
 
@@ -574,10 +773,26 @@ mod tests {
                 cell.rail = true;
             }
             let leg = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
-            let c = step_km(&g, &leg, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+            let c = step_km(
+                &g,
+                &leg,
+                &no_control(),
+                HexCoord::new(2, 2),
+                HexCoord::new(3, 2),
+                &p,
+            )
+            .unwrap();
             assert!((c - 1.0).abs() < 1e-4, "{flag} on {terrain:?} leg {c}");
             let mot = mk_motor(1, Side::Attacker, HexCoord::new(2, 2));
-            let c = step_km(&g, &mot, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+            let c = step_km(
+                &g,
+                &mot,
+                &no_control(),
+                HexCoord::new(2, 2),
+                HexCoord::new(3, 2),
+                &p,
+            )
+            .unwrap();
             assert!((c - 1.0).abs() < 1e-4, "{flag} on {terrain:?} motor {c}");
         }
     }
@@ -599,10 +814,26 @@ mod tests {
             cell.elevation = elev;
             cell.road = true;
             let leg = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
-            let c = step_km(&g, &leg, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+            let c = step_km(
+                &g,
+                &leg,
+                &no_control(),
+                HexCoord::new(2, 2),
+                HexCoord::new(3, 2),
+                &p,
+            )
+            .unwrap();
             assert!((c - want).abs() < 1e-4, "{terrain:?} elev {elev} leg {c}");
             let mot = mk_motor(1, Side::Attacker, HexCoord::new(2, 2));
-            let c = step_km(&g, &mot, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+            let c = step_km(
+                &g,
+                &mot,
+                &no_control(),
+                HexCoord::new(2, 2),
+                HexCoord::new(3, 2),
+                &p,
+            )
+            .unwrap();
             assert!((c - want).abs() < 1e-4, "{terrain:?} elev {elev} motor {c}");
         }
     }
@@ -638,7 +869,7 @@ mod tests {
         let leg = mk_unit(0, Side::Attacker, HexCoord::new(2, 1));
         for q in 3..=9 {
             let to = HexCoord::new(q, 1);
-            let step = step_km(&g, &leg, &[], HexCoord::new(q - 1, 1), to, &p).unwrap();
+            let step = step_km(&g, &leg, &no_control(), HexCoord::new(q - 1, 1), to, &p).unwrap();
             let hover = cell_move_km(g.cell(to).unwrap(), &p);
             assert!(
                 (step - hover).abs() < 1e-4,
@@ -655,12 +886,28 @@ mod tests {
         let mot = mk_motor(0, Side::Attacker, HexCoord::new(2, 2));
         // Plains motor: 1 + (1.0+0.5−1)×1.5 = 1.75.
         let g = HexGrid::new(10, 10, Terrain::Plains);
-        let c = step_km(&g, &mot, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+        let c = step_km(
+            &g,
+            &mot,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 1.75).abs() < 1e-4, "plains motor {c}");
         // Mountain motor: 1 + (3.0+0.5−1)×1.5 = 4.75.
         let mut g = HexGrid::new(10, 10, Terrain::Plains);
         g.set_terrain(HexCoord::new(3, 2), Terrain::Mountain);
-        let c = step_km(&g, &mot, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+        let c = step_km(
+            &g,
+            &mot,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 4.75).abs() < 1e-4, "mountain motor {c}");
     }
 
@@ -672,11 +919,91 @@ mod tests {
         let mut g = HexGrid::new(10, 10, Terrain::Plains);
         g.set_terrain(HexCoord::new(3, 2), Terrain::Urban);
         let leg = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
-        let c = step_km(&g, &leg, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+        let c = step_km(
+            &g,
+            &leg,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 1.2).abs() < 1e-4, "urban leg {c}");
         let mot = mk_motor(1, Side::Attacker, HexCoord::new(2, 2));
-        let c = step_km(&g, &mot, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+        let c = step_km(
+            &g,
+            &mot,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 1.3).abs() < 1e-4, "urban motor {c}");
+    }
+
+    #[test]
+    fn engineer_host_shaves_the_off_road_penalty() {
+        // §6.3/§6.6 engineer terrain craft: the EXCESS over the 1 km
+        // baseline scales ×0.75 — forest leg 2.0 → 1.75, forest motor
+        // 2.5 → 2.125 — while the paved price over the same ground and
+        // an engineer-free mover never move.
+        let p = CombatParams::default();
+        let engineers = || crate::unit::SupportAttachment {
+            kind: crate::unit::SupportKind::Engineer,
+            name: "Eng".to_string(),
+            token: "engineer".to_string(),
+        };
+        let mut g = HexGrid::new(10, 10, Terrain::Plains);
+        g.set_terrain(HexCoord::new(3, 2), Terrain::Forest);
+        let mut leg = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
+        leg.attach(engineers());
+        let c = step_km(
+            &g,
+            &leg,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((c - 1.75).abs() < 1e-4, "forest leg with engineers {c}");
+        let mut mot = mk_motor(1, Side::Attacker, HexCoord::new(2, 2));
+        mot.attach(engineers());
+        let c = step_km(
+            &g,
+            &mot,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((c - 2.125).abs() < 1e-4, "forest motor with engineers {c}");
+        // Detach restores the full price.
+        mot.detach(0);
+        let c = step_km(
+            &g,
+            &mot,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((c - 2.5).abs() < 1e-4, "forest motor after detach {c}");
+        // A road over the same forest prices the pavement, engineers or not.
+        g.cell_mut(HexCoord::new(3, 2)).unwrap().road = true;
+        let c = step_km(
+            &g,
+            &leg,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((c - 1.0).abs() < 1e-4, "forest road with engineers {c}");
     }
 
     #[test]
@@ -686,10 +1013,26 @@ mod tests {
         g.set_terrain(HexCoord::new(3, 2), Terrain::River);
         g.cell_mut(HexCoord::new(3, 2)).unwrap().bridge = true;
         let leg = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
-        let c = step_km(&g, &leg, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+        let c = step_km(
+            &g,
+            &leg,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 1.0).abs() < 1e-4, "bridge leg {c}");
         let mot = mk_motor(1, Side::Attacker, HexCoord::new(2, 2));
-        let c = step_km(&g, &mot, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+        let c = step_km(
+            &g,
+            &mot,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 1.0).abs() < 1e-4, "bridge motor {c}");
     }
 
@@ -702,11 +1045,161 @@ mod tests {
         g.set_terrain(HexCoord::new(3, 2), Terrain::River);
         g.cell_mut(HexCoord::new(3, 2)).unwrap().road = true;
         let leg = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
-        let c = step_km(&g, &leg, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+        let c = step_km(
+            &g,
+            &leg,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 3.5).abs() < 1e-4, "ford leg {c}");
         let mot = mk_motor(1, Side::Attacker, HexCoord::new(2, 2));
-        let c = step_km(&g, &mot, &[], HexCoord::new(2, 2), HexCoord::new(3, 2), &p).unwrap();
+        let c = step_km(
+            &g,
+            &mot,
+            &no_control(),
+            HexCoord::new(2, 2),
+            HexCoord::new(3, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 4.75).abs() < 1e-4, "ford motor {c}");
+    }
+
+    #[test]
+    fn heuristic_stays_below_every_real_step() {
+        // The A* estimate must never exceed the cheapest step actually
+        // taken, whatever the terrain / mobility class / surcharge knobs
+        // say — otherwise the search can return a non-optimal path.
+        let mover = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
+        let mot = mk_motor(1, Side::Attacker, HexCoord::new(2, 2));
+        let mut params = CombatParams::default();
+        for base in [0.5f32, 1.0, 1.5] {
+            params.road_base_km = base;
+            for terrain in [
+                Terrain::Plains,
+                Terrain::Forest,
+                Terrain::Hills,
+                Terrain::Mountain,
+                Terrain::Marsh,
+                Terrain::Jungle,
+            ] {
+                for mover in [&mover, &mot] {
+                    let mut g = HexGrid::new(10, 10, Terrain::Plains);
+                    g.set_terrain(HexCoord::new(3, 2), terrain);
+                    let real = step_hours(
+                        &g,
+                        mover,
+                        &no_control(),
+                        HexCoord::new(2, 2),
+                        HexCoord::new(3, 2),
+                        &params,
+                    )
+                    .unwrap();
+                    let h =
+                        heuristic_hours(mover, HexCoord::new(2, 2), HexCoord::new(3, 2), &params);
+                    assert!(
+                        h <= real + 1e-6,
+                        "heuristic {h} above the real step {real} ({terrain:?}, base {base})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn heuristic_scales_with_the_road_baseline() {
+        // Tuning `road_base_km` down must move the estimate with it: the
+        // old hardcoded 1.0 would over-estimate and could prune the
+        // optimal path.
+        let mover = mk_unit(0, Side::Attacker, HexCoord::new(2, 2));
+        let mut params = CombatParams::default();
+        let full = heuristic_hours(&mover, HexCoord::new(2, 2), HexCoord::new(5, 2), &params);
+        params.road_base_km = 0.5;
+        let half = heuristic_hours(&mover, HexCoord::new(2, 2), HexCoord::new(5, 2), &params);
+        assert!((half - full * 0.5).abs() < 1e-6, "{half} vs {full}");
+    }
+
+    #[test]
+    fn border_river_charges_the_same_both_ways() {
+        use crate::hex::HexDirection;
+        // The generator writes `river_edges` only for in-province cells, so
+        // a border river between the province and the §6.14 out-of-province
+        // ring carries the bit on the province side alone. Leaving over it
+        // and stepping back in must cost the same.
+        //
+        // q ≥ 9 is the province; q ≤ 8 is the ring. The province cell marks
+        // the shared edge itself, the ring hex carries no bits.
+        let mut g = HexGrid::new(10, 10, Terrain::Plains);
+        for r in 0..10 {
+            for q in 0..9 {
+                g.cell_mut(HexCoord::new(q, r)).unwrap().out_of_bounds = true;
+            }
+        }
+        g.cell_mut(HexCoord::new(9, 2)).unwrap().river_edges = HexDirection::W.bit();
+        let mover = mk_unit(0, Side::Attacker, HexCoord::new(9, 2));
+        let p = CombatParams::default();
+        let zoc = ControlField::default();
+        // Ring-bound step: plains row + river surcharge + the out-of-bounds
+        // leaving fee.
+        let ring_bound = 1.5 + p.river_edge_surcharge_km + p.oob_step_penalty_km;
+        let leave = step_km(
+            &g,
+            &mover,
+            &zoc,
+            HexCoord::new(9, 2),
+            HexCoord::new(8, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((leave - ring_bound).abs() < 1e-4, "leave {leave}");
+        // Province-bound step: plains row + the same river surcharge, read
+        // from the ring side's lack of a mirrored bit (the fix).
+        let reenter = step_km(
+            &g,
+            &mover,
+            &zoc,
+            HexCoord::new(8, 2),
+            HexCoord::new(9, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((reenter - 3.5).abs() < 1e-4, "re-enter {reenter}");
+        // A ring hex that marks the shared edge itself (the mirrored
+        // layout) prices the same crossing the same way.
+        let mut mirrored = HexGrid::new(10, 10, Terrain::Plains);
+        for r in 0..10 {
+            for q in 0..9 {
+                mirrored
+                    .cell_mut(HexCoord::new(q, r))
+                    .unwrap()
+                    .out_of_bounds = true;
+            }
+        }
+        mirrored.cell_mut(HexCoord::new(8, 2)).unwrap().river_edges = HexDirection::E.bit();
+        let out = step_km(
+            &mirrored,
+            &mover,
+            &zoc,
+            HexCoord::new(9, 2),
+            HexCoord::new(8, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((out - ring_bound).abs() < 1e-4, "into ring {out}");
+        // …and the step back is charged from the ring side's own bit.
+        let back = step_km(
+            &mirrored,
+            &mover,
+            &zoc,
+            HexCoord::new(8, 2),
+            HexCoord::new(9, 2),
+            &p,
+        )
+        .unwrap();
+        assert!((back - 3.5).abs() < 1e-4, "out of ring {back}");
     }
 
     #[test]
@@ -718,12 +1211,28 @@ mod tests {
         g.cell_mut(HexCoord::new(3, 2)).unwrap().river_edges = HexDirection::E.bit();
         g.cell_mut(HexCoord::new(4, 2)).unwrap().river_edges = HexDirection::W.bit();
         // Control: unbridged crossing = 1.5 + 2.0.
-        let c = step_km(&g, &mover, &[], HexCoord::new(3, 2), HexCoord::new(4, 2), &p).unwrap();
+        let c = step_km(
+            &g,
+            &mover,
+            &no_control(),
+            HexCoord::new(3, 2),
+            HexCoord::new(4, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 3.5).abs() < 1e-4, "unbridged {c}");
         // Bridged edge: surcharge waived, only the off-road terrain row.
         g.cell_mut(HexCoord::new(3, 2)).unwrap().bridge_edges = HexDirection::E.bit();
         g.cell_mut(HexCoord::new(4, 2)).unwrap().bridge_edges = HexDirection::W.bit();
-        let c = step_km(&g, &mover, &[], HexCoord::new(3, 2), HexCoord::new(4, 2), &p).unwrap();
+        let c = step_km(
+            &g,
+            &mover,
+            &no_control(),
+            HexCoord::new(3, 2),
+            HexCoord::new(4, 2),
+            &p,
+        )
+        .unwrap();
         assert!((c - 1.5).abs() < 1e-4, "bridged {c}");
     }
 
@@ -834,7 +1343,7 @@ mod tests {
         let c = step_km(
             &g,
             &mover,
-            &[],
+            &no_control(),
             HexCoord::new(2, 2),
             HexCoord::new(3, 2),
             &p,

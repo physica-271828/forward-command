@@ -22,12 +22,23 @@
 //! armor       = max equipment armor
 //! piercing    = equipment-count weighted average
 //! hardness    = equipment-count weighted average
-//! speed_kmh   = battalion-type table (§6.1)
+//! speed_kmh   = battalion-type table (§6.1), slowed toward marching pace
+//!               in 20% tiers when the chassis's mobility equipment is
+//!               short (§5.3 mobility shortfall)
 //! ```
 //!
 //! Equipment is division-level in the save, so it is apportioned per
 //! battalion in proportion to the battalion's template `needs` (§5.3):
 //! `alloc_e = available_e × need_battalion_e / total_division_need_e`.
+//! Support companies draw from the same pool. The apportionment runs
+//! twice: a first pass over every subunit derives each battalion group's /
+//! support company's per-archetype fills and its field verdict — the
+//! limiting fill `min(division manpower ratio, scarcest archetype fill)`
+//! must reach the §5.3 field threshold (battalions 10%, support companies
+//! 20%) or the subunit does not field at all; the second pass
+//! re-apportions the pool over the survivors only, so the gear a dropped
+//! group would have drawn stays with the division (fills only rise, one
+//! pass converges).
 //!
 //! Tech modifier note: no tech-modifier table is part of the pre-extracted
 //! data (§5.4), and the researched tech level is already reflected by which
@@ -36,11 +47,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use tactical_core::{BattalionUnit, HexCoord, Side, UnitType};
+use tactical_core::{BattalionUnit, CombatParams, HexCoord, Side, UnitType};
 
 use crate::mapping::{
     canonical_template_key, fallback_equipment_archetype, fallback_equipment_target,
-    map_support_kind, UnitNaming,
+    map_support_kind, mobility_equipment_archetype, support_kind, UnitNaming,
 };
 use crate::model::{BattalionInfo, CountryData, DivisionData, EquipmentDesign, LeaderData, SaveGame};
 use crate::tables::{
@@ -51,6 +62,25 @@ use crate::tables::{
 /// §5.3 degradation factor: at 0% equipment fill a battalion still fights at
 /// 50% of its equipment-derived stats (people fight, not gear).
 pub const DEFAULT_DEGRADATION_FACTOR: f32 = 0.5;
+
+/// §5.3 field threshold for line battalion groups: the group's limiting
+/// fill — min(division manpower ratio, scarcest per-archetype equipment
+/// fill) — must reach 10%, or the whole group does not field (no
+/// near-empty ghosts feeding vision, flag capture or encirclement).
+pub const MIN_BATTALION_FIELD_RATIO: f32 = 0.1;
+
+/// §5.3 field threshold for support companies: the same limiting fill as
+/// [`MIN_BATTALION_FIELD_RATIO`], with the bar at 20% — a company that
+/// cannot muster a fifth of its gear never attaches.
+pub const MIN_COMPANY_FIELD_RATIO: f32 = 0.2;
+
+/// §5.3 mobility shortfall: marching pace in km/h — the floor a motorized
+/// battalion falls back toward as its mobility equipment runs out.
+const FOOT_SPEED_KMH: f32 = 4.0;
+
+/// Tolerance for the speed-tier ceil: an exact 20% ratio (0.2 × 5 = 1 in
+/// reals, 1.0000…01 in f32) must not jump a tier.
+const SPEED_TIER_EPSILON: f32 = 1e-4;
 
 /// One equipment variant a division holds: (equipment-table key, piece
 /// count, registry design id when the save references the per-design id
@@ -324,9 +354,12 @@ fn apply_leader(
 /// `army_<family>_(attack|defence)_factor` and bare `<family>_(attack|
 /// defence)_factor` keys (British `defence`, as in vanilla) → the type maps
 /// keyed by the FAMILY name (so `army_armor_attack_factor` and
-/// `cavalry_attack_factor` land under "armor" / "cavalry").
+/// `cavalry_attack_factor` land under "armor" / "cavalry"). The vanilla
+/// `modifier_army_sub_unit_<family>_*` spelling (ascari/irregulars/militias
+/// officer traits) strips to the same family names.
 ///
-/// Deliberately ignored: every other key (speed/org/supply/morale factors);
+/// Deliberately ignored: every other key (speed/org/supply/morale factors —
+/// the sub-unit spelling's `*_speed_factor` / `*_max_org_factor` included);
 /// skill-GRANTING trait fields (`attack_skill = 1`, `attack_skill_factor`)
 /// — they live at the trait's top level, the extractor never reads them,
 /// and their grants are already baked into the save's serialized skill
@@ -339,7 +372,10 @@ fn accumulate_trait_key(out: &mut LeaderBonus, key: &str, value: f32) {
         "defence" => out.defense += value,
         "breakthrough_factor" => out.breakthrough += value,
         _ => {
-            let stripped = key.strip_prefix("army_").unwrap_or(key);
+            let stripped = key
+                .strip_prefix("modifier_army_sub_unit_")
+                .or_else(|| key.strip_prefix("army_"))
+                .unwrap_or(key);
             if let Some(family) = stripped.strip_suffix("_attack_factor") {
                 *out.type_attack.entry(family.to_string()).or_default() += value;
             } else if let Some(family) = stripped.strip_suffix("_defence_factor") {
@@ -376,22 +412,24 @@ pub fn division_maxima(
         .iter()
         .map(|info| Subunit::resolve(info, unit_templates))
         .collect();
+    // Support companies resolve through the SAME path as the assembled
+    // attachments (`Subunit::resolve`, §5.3): a token missing from the table
+    // falls back to its type's canonical template rather than to zero, so the
+    // divisor and the battalion numbers can never disagree about what the
+    // company is worth.
+    let support_subunits: Vec<Subunit> = division
+        .support_companies
+        .iter()
+        .map(|info| Subunit::resolve(info, unit_templates))
+        .collect();
     let (battalion_count, org_sum) = subunits.iter().fold((0usize, 0.0f32), |(n, s), x| {
         (n + x.info.count, s + x.max_org * x.info.count as f32)
     });
-    // Support companies DO count in the org mean, at their table org value
-    // (unknown tokens resolve to 0 — graceful fallback, §5.3).
+    // Support companies DO count in the org mean, at their resolved org.
     let (support_count, support_org) =
-        division
-            .support_companies
-            .iter()
-            .fold((0usize, 0.0f32), |(n, s), sc| {
-                let org = unit_templates
-                    .get(&sc.token)
-                    .map(|t| t.max_organisation)
-                    .unwrap_or(0.0);
-                (n + sc.count, s + org * sc.count as f32)
-            });
+        support_subunits.iter().fold((0usize, 0.0f32), |(n, s), x| {
+            (n + x.info.count, s + x.max_org * x.info.count as f32)
+        });
     let total_count = battalion_count + support_count;
     let mean_org = if total_count > 0 {
         (org_sum + support_org) / total_count as f32
@@ -401,25 +439,70 @@ pub fn division_maxima(
     let max_org = mean_org * (1.0 + doctrine_org_factor) * (1.0 + country.factor) + country.flat;
     let max_str = subunits
         .iter()
+        .chain(&support_subunits)
         .map(|x| x.max_strength * x.info.count as f32)
-        .sum::<f32>()
-        + division
-            .support_companies
-            .iter()
-            .map(|sc| {
-                unit_templates
-                    .get(&sc.token)
-                    .map(|t| t.max_strength)
-                    .unwrap_or(0.0)
-                    * sc.count as f32
-            })
-            .sum::<f32>();
+        .sum::<f32>();
     (max_org, max_str)
 }
 
 /// Org/strength fallbacks when the unit template table has no entry.
 const FALLBACK_MAX_ORG: f32 = 30.0;
 const FALLBACK_MAX_STRENGTH: f32 = 25.0;
+
+/// §6.7 strategic logistics constants (vanilla defines):
+/// `SUPPLY_ORG_MAX_CAP` — max-org factor at zero supply.
+const SUPPLY_ORG_CAP_ZERO: f32 = 0.35;
+/// §6.7 zero-supply attack / defense penalties (spec ruling).
+const SUPPLY_ATTACK_ZERO: f32 = 0.25;
+const SUPPLY_DEFENSE_ZERO: f32 = 0.35;
+/// `OUT_OF_SUPPLY_SPEED` — speed reduction at zero supply.
+const SUPPLY_SPEED_ZERO: f32 = 0.8;
+/// `FUEL_PENALTY_START_RATIO` — fuel penalties ramp in below this reserve ratio.
+const FUEL_PENALTY_START_RATIO: f32 = 0.25;
+/// `OUT_OF_FUEL_EQUIPMENT_MULT` — fuel-burning equipment stats at zero fuel.
+const FUEL_EQUIPMENT_MULT_ZERO: f32 = 0.1;
+/// `OUT_OF_FUEL_SPEED_MULT` — fuel-burning battalion speed at zero fuel.
+const FUEL_SPEED_MULT_ZERO: f32 = 0.4;
+/// `ARMY_FUEL_COST_MULT` / `FUEL_CAPACITY_DEFAULT_HOURS` — the reserve
+/// capacity model: a division carries this many hours of its hourly draw.
+const ARMY_FUEL_COST_MULT: f32 = 0.5;
+const FUEL_CAPACITY_HOURS: f32 = 96.0;
+
+/// §6.7 supply storage ratio: save `army_current_supply_ratio` over
+/// `max_supply`, clamped; missing fields (legacy saves, synthetic fixtures)
+/// read as fully supplied.
+fn supply_ratio(division: &DivisionData) -> f32 {
+    match (division.supply_current, division.supply_max) {
+        (Some(cur), Some(max)) if max > 0.0 => (cur / max).clamp(0.0, 1.0),
+        _ => 1.0,
+    }
+}
+
+/// §6.7 fuel reserve ratio: the save's `fuel` over the reserve capacity
+/// (hourly draw × FUEL_CAPACITY_HOURS). The draw sums the on-hand
+/// equipment's `fuel_consumption` with ARMY_FUEL_COST_MULT applied,
+/// HOI4-shaped. No reserve field — or no fuel draw at all (leg divisions)
+/// — reads as full. Designer capacity modules (expanded fuel tanks) are
+/// not modelled: rare picks read slightly richer than reality.
+fn fuel_ratio(division: &DivisionData, equipment_stats: &EquipmentTable) -> f32 {
+    let Some(fuel) = division.fuel else { return 1.0 };
+    let draw: f32 = division
+        .equipment
+        .iter()
+        .map(|(key, count)| {
+            equipment_stats
+                .resolve(key)
+                .map(|eq| eq.fuel_consumption)
+                .unwrap_or(0.0)
+                * count
+        })
+        .sum::<f32>()
+        * ARMY_FUEL_COST_MULT;
+    if draw <= 0.0 {
+        return 1.0;
+    }
+    (fuel / (draw * FUEL_CAPACITY_HOURS)).clamp(0.0, 1.0)
+}
 
 /// Expand a division's battalions and support companies into individual
 /// [`BattalionUnit`]s ("1. Inf", "2. Inf", ...) with §5.3 stats baked in.
@@ -479,7 +562,8 @@ pub fn create_tactical_units(
 /// variant (tank chassis with module picks) computes its attack triple and
 /// armor/hardness bases from the design (§5.3 designer path); anything else
 /// keeps the static equipment-row values. Lookup failures (unknown module
-/// tokens, modded content) append to `warnings` for the caller to log.
+/// tokens, modded content) and support companies outside the kind table
+/// append to `warnings` for the caller to log.
 #[allow(clippy::too_many_arguments)]
 pub fn create_tactical_units_named(
     division: &DivisionData,
@@ -498,11 +582,30 @@ pub fn create_tactical_units_named(
 ) -> Vec<BattalionUnit> {
     let factors = doctrines.map(DoctrineTable::factors).unwrap_or_default();
 
+    // §6.7 strategic logistics: the division's supply storage level and
+    // fuel reserve fold into the stat block below — a starved division
+    // fights at a reduced org cap / attack / defense / speed, and dry
+    // fuel-burning gear contributes a tenth of its stats.
+    let supply = supply_ratio(division);
+    let fuel = fuel_ratio(division, equipment_stats);
+    let t_supply = 1.0 - supply;
+    let t_fuel = (1.0 - fuel / FUEL_PENALTY_START_RATIO).max(0.0);
+    let org_supply_factor = 1.0 - (1.0 - SUPPLY_ORG_CAP_ZERO) * t_supply;
+    let speed_supply_factor = 1.0 - SUPPLY_SPEED_ZERO * t_supply;
+    let fuel_stat_factor = 1.0 - (1.0 - FUEL_EQUIPMENT_MULT_ZERO) * t_fuel;
+    let fuel_speed_factor = 1.0 - (1.0 - FUEL_SPEED_MULT_ZERO) * t_fuel;
+
     // 1. Resolve every LINE battalion group's template: needs + base
     //    org/strength. Support companies do NOT resolve into map units —
-    //    they attach to battalions afterwards.
+    //    they attach to battalions afterwards — but their equipment needs
+    //    join the division pool like any line group (§5.3).
     let subunits: Vec<Subunit> = division
         .battalions
+        .iter()
+        .map(|info| Subunit::resolve(info, unit_templates))
+        .collect();
+    let support_subunits: Vec<Subunit> = division
+        .support_companies
         .iter()
         .map(|info| Subunit::resolve(info, unit_templates))
         .collect();
@@ -522,8 +625,15 @@ pub fn create_tactical_units_named(
     let (div_max_org, div_max_str) =
         division_maxima(division, unit_templates, country, factors.organisation);
     let org_ratio = if division.organization > 1.0 || division.strength > 1.0 {
-        if div_max_org > 0.0 {
-            (division.organization / div_max_org).clamp(0.0, 1.0)
+        // §6.7: the supply cap shrinks the CEILING only — current org mirrors
+        // the save. HOI4 already capped the division's org pool in-game
+        // (SUPPLY_ORG_MAX_CAP), so its absolute org reads against the capped
+        // max; dividing by the uncapped base would double-dip the cap
+        // (org 15 of capped 21 → 25% instead of the in-game 71%). Transient
+        // over-cap org (freshly cut supply) clamps to full at the cap.
+        let effective_max = div_max_org * org_supply_factor;
+        if effective_max > 0.0 {
+            (division.organization / effective_max).clamp(0.0, 1.0)
         } else {
             (division.organization > 1.0) as u8 as f32
         }
@@ -540,24 +650,25 @@ pub fn create_tactical_units_named(
         division.strength.clamp(0.0, 1.0)
     };
 
-    // 2. Division-level equipment requirement per archetype (§5.3).
+    // 2. Division-level equipment requirement per archetype (§5.3) — line
+    //    battalions AND support companies share the one pool.
     let mut total_need: HashMap<&str, f32> = HashMap::new();
-    for s in &subunits {
-        for (archetype, need) in &s.needs {
-            *total_need.entry(archetype.as_str()).or_insert(0.0) += need * s.info.count as f32;
-        }
-    }
+    sum_needs(&mut total_need, subunits.iter().chain(&support_subunits));
 
     // 3. Available equipment per archetype, keeping the actual variant keys:
     //    a division holding `infantry_equipment_0` must get THAT variant's
     //    stats, not the archetype's latest one (§5.3 Σ over equipment types).
     //    Unknown equipment keys (not in the table at all) are ignored
-    //    gracefully (§5.3 fallback rule).
+    //    gracefully (§5.3 fallback rule) — and logged once per division so
+    //    modded content surfaces instead of silently vanishing.
     //    The 1.19 id-reference form (division.equipment_ids + the root
     //    registry) is preferred when present: each entry carries its design
     //    id, so two same-token variants with different module picks stay
     //    distinct. The token map alone (legacy saves, synthetic fixtures)
     //    runs the same path with no design attached.
+    // Design-lookup warnings dedup per division (a 5-battalion division
+    // shares its designs — the same unknown module must not log 5×).
+    let mut warned: HashSet<String> = HashSet::new();
     let mut available: HashMap<String, VariantStock> = HashMap::new();
     if !division.equipment_ids.is_empty() && !designs.is_empty() {
         for (id, count) in &division.equipment_ids {
@@ -569,6 +680,14 @@ pub fn create_tactical_units_named(
                     .entry(archetype)
                     .or_default()
                     .push((design.token.as_str(), *count, Some(*id)));
+            } else {
+                let w = format!(
+                    "unknown equipment design token `{}` (stock ignored)",
+                    design.token
+                );
+                if warned.insert(w.clone()) {
+                    warnings.push(w);
+                }
             }
         }
     } else {
@@ -578,21 +697,78 @@ pub fn create_tactical_units_named(
                     .entry(archetype)
                     .or_default()
                     .push((key.as_str(), *count, None));
+            } else {
+                let w = format!("unknown equipment key `{key}` (stock ignored)");
+                if warned.insert(w.clone()) {
+                    warnings.push(w);
+                }
             }
         }
     }
 
-    // 3b. Division-level equipment fill (§5.3/§6.13): the synthetic HQ asks
+    // 3b. Field thresholds (§5.3): a battalion group / support company
+    //     fields only when its limiting fill — min(division manpower ratio,
+    //     scarcest per-archetype equipment fill) — clears its class bar.
+    //     Below the bar the subunit does not exist tactically at all.
+    let line_fields: Vec<bool> = subunits
+        .iter()
+        .map(|s| {
+            str_ratio.min(min_archetype_fill(s, &total_need, &available))
+                >= MIN_BATTALION_FIELD_RATIO
+        })
+        .collect();
+    let company_fields: Vec<bool> = support_subunits
+        .iter()
+        .map(|s| {
+            str_ratio.min(min_archetype_fill(s, &total_need, &available)) >= MIN_COMPANY_FIELD_RATIO
+        })
+        .collect();
+
+    // 3c. Second apportionment pass over the survivors only: the gear a
+    //     dropped group would have drawn stays with the division, so every
+    //     survivor's share rises (fills only rise — one pass converges).
+    let mut survivor_need: HashMap<&str, f32> = HashMap::new();
+    sum_needs(
+        &mut survivor_need,
+        subunits
+            .iter()
+            .zip(&line_fields)
+            .filter(|(_, fields)| **fields)
+            .map(|(s, _)| s),
+    );
+    sum_needs(
+        &mut survivor_need,
+        support_subunits
+            .iter()
+            .zip(&company_fields)
+            .filter(|(_, fields)| **fields)
+            .map(|(s, _)| s),
+    );
+    let total_need = survivor_need;
+
+    // 3d. Division-level equipment fill (§5.3/§6.13): the synthetic HQ asks
     //     for no equipment of its own, so its strength rides the DIVISION's
     //     own fill — Σ min(stock, need) / Σ need over the archetypes the
-    //     line battalions request, the same shape as the per-battalion
-    //     clamp. A division with no equipment to its name fields a
-    //     0-strength HQ: a hollow division gets no free command unit.
-    let div_equipment_fill = if total_need.is_empty() {
+    //     SURVIVING line battalions request, the same shape as the
+    //     per-battalion clamp. A division whose battalions all fell below
+    //     the field threshold fills 0: a hollow division gets no free
+    //     command unit.
+    let mut line_need: HashMap<&str, f32> = HashMap::new();
+    sum_needs(
+        &mut line_need,
+        subunits
+            .iter()
+            .zip(&line_fields)
+            .filter(|(_, fields)| **fields)
+            .map(|(s, _)| s),
+    );
+    let div_equipment_fill = if subunits.is_empty() {
         1.0
+    } else if line_need.is_empty() {
+        0.0
     } else {
-        let need: f32 = total_need.values().sum();
-        let have: f32 = total_need
+        let need: f32 = line_need.values().sum();
+        let have: f32 = line_need
             .iter()
             .map(|(archetype, n)| {
                 available
@@ -612,20 +788,28 @@ pub fn create_tactical_units_named(
     // The division commander's army-wide bonuses stack into
     // the same multipliers; his per-type trait bonuses add per battalion
     // below (the battalion's leader_groups ∩ the trait-family maps).
-    let attack_mult = 1.0 + factors.attack + combat.attack + leader.attack;
-    let defense_mult = 1.0 + factors.defense + combat.defense + leader.defense;
-    let breakthrough_mult = 1.0 + factors.breakthrough + combat.breakthrough + leader.breakthrough;
+    // §6.7 supply penalties multiply the stacked totals (a starved
+    // division's bonuses starve with it).
+    let attack_mult = (1.0 + factors.attack + combat.attack + leader.attack)
+        * (1.0 - SUPPLY_ATTACK_ZERO * t_supply);
+    let defense_mult = (1.0 + factors.defense + combat.defense + leader.defense)
+        * (1.0 - SUPPLY_DEFENSE_ZERO * t_supply);
+    let breakthrough_mult = (1.0 + factors.breakthrough + combat.breakthrough + leader.breakthrough)
+        * (1.0 - SUPPLY_DEFENSE_ZERO * t_supply);
     let org_mult = 1.0 + factors.organisation;
     let exp_attack = experience_attack_factor(division.experience);
 
     let mut units = Vec::new();
     let mut next_id = start_id;
     let mut numbering: HashMap<UnitType, usize> = HashMap::new();
-    // Design-lookup warnings dedup per division (a 5-battalion division
-    // shares its designs — the same unknown module must not log 5×).
-    let mut warned: HashSet<String> = HashSet::new();
 
-    for s in &subunits {
+    for (s, &fields) in subunits.iter().zip(&line_fields) {
+        // Below the field threshold the whole group stays home — it never
+        // enters the units vec, so no ghost can feed vision, flag capture
+        // or encirclement (§5.3).
+        if !fields {
+            continue;
+        }
         // Per-type leader trait bonuses of this subunit's
         // families (a family with no trait entry contributes 0).
         let leader_attack: f32 = s
@@ -646,6 +830,7 @@ pub fn create_tactical_units_named(
                 &available,
                 designs,
                 design_tables,
+                fuel_stat_factor,
                 warnings,
                 &mut warned,
             );
@@ -699,14 +884,16 @@ pub fn create_tactical_units_named(
             // promoted to the tactical per-type baseline, the same values
             // `BattalionUnit::new` uses on the demo path.
             if s.max_org <= 0.0 {
-                unit.max_org = unit.unit_type.base_org();
+                unit.max_org = unit.unit_type.base_org() * org_supply_factor;
                 unit.max_strength = unit.unit_type.base_strength();
             } else {
                 // Country org modifiers ride on top of the
                 // doctrine factor, HOI4-shaped: base × doctrine ×
-                // (1 + factor) + flat.
-                unit.max_org =
-                    (s.max_org * org_mult * (1.0 + country.factor) + country.flat).max(1.0);
+                // (1 + factor) + flat. §6.7 supply caps the total
+                // (SUPPLY_ORG_MAX_CAP at zero storage).
+                unit.max_org = ((s.max_org * org_mult * (1.0 + country.factor) + country.flat)
+                    * org_supply_factor)
+                    .max(1.0);
                 unit.max_strength = s.max_strength.max(0.0);
             }
             unit.org = unit.max_org * org_ratio;
@@ -724,8 +911,23 @@ pub fn create_tactical_units_named(
             unit.piercing = stats.piercing.max(0.0);
             unit.hardness = stats.hardness.clamp(0.0, 1.0);
 
-            // §6.8: entrenchment layers, capped at 3.
-            unit.entrenchment = entrench_layers(division.entrenchment);
+            // §5.3 mobility shortfall: short of the chassis's mobility
+            // equipment (trucks / halftracks / tank chassis), the battalion
+            // slows toward marching pace in 20% tiers; none left, the crews
+            // march. Foot and horse-towed units never slow.
+            // §6.7 stacks its two speed penalties on top: starved divisions
+            // crawl (OUT_OF_SUPPLY_SPEED), dry fuel-burners drop to 40%.
+            unit.speed_kmh = mobility_adjusted_speed(unit.speed_kmh, stats.mobility_fill)
+                * speed_supply_factor
+                * if stats.uses_fuel { fuel_speed_factor } else { 1.0 };
+
+            // §6.7 logistics state for the detail panel (and any future
+            // in-battle supply model).
+            unit.supply = supply;
+            unit.fuel = fuel;
+
+            // §6.8: entrenchment layers, capped at the params ceiling.
+            unit.entrenchment = entrench_layers(division.entrenchment, &CombatParams::default());
 
             units.push(unit);
         }
@@ -733,20 +935,63 @@ pub fn create_tactical_units_named(
 
     // Support companies do NOT become map units — they ride with
     // the division's battalions as attachments (round-robin spread so no
-    // single battalion collects them all).
+    // single battalion collects them all). A company below its field
+    // threshold never attaches; with no surviving battalion there is no
+    // host left to ride with. A surviving ENTRY attaches one attachment
+    // per `count` (§5.3: the equipment pool charges need × count, so a
+    // 3-battery regimental entry fields three attachments; extra copies
+    // stack on the same host when the wrap comes around).
     if !units.is_empty() {
-        let mut atts: Vec<tactical_core::SupportAttachment> = division
-            .support_companies
-            .iter()
-            .map(|info| tactical_core::SupportAttachment {
-                kind: map_support_kind(&info.token),
-                name: naming.support_tag(map_support_kind(&info.token)),
-            })
-            .collect();
+        let mut atts: Vec<tactical_core::SupportAttachment> = Vec::new();
+        for (info, fields) in division.support_companies.iter().zip(&company_fields) {
+            if !fields {
+                continue;
+            }
+            let kind = map_support_kind(&info.token);
+            // A token outside the support-kind table (modded content)
+            // attaches as the no-bonus placeholder — logged once per
+            // division so new vanilla companies surface instead of
+            // silently riding as MPs (§5.3 fallback rule).
+            if support_kind(&info.token).is_none() {
+                let w = format!(
+                    "unknown support company token `{}` (attached as MP)",
+                    info.token
+                );
+                if warned.insert(w.clone()) {
+                    warnings.push(w);
+                }
+            }
+            for _ in 0..info.count {
+                atts.push(tactical_core::SupportAttachment {
+                    kind,
+                    name: naming.support_name(&info.token, kind),
+                    token: info.token.clone(),
+                });
+            }
+        }
         let n = units.len();
         for (i, att) in atts.drain(..).enumerate() {
             units[i % n].attach(att);
         }
+    }
+
+    // A division whose battalions ALL fell below the field threshold still
+    // fields its HQ (§6.13) — at 0 strength via the fill rule below, so the
+    // hollow division gets no combat-effective command unit.
+    // (`synthesize_hqs` discovers divisions from their surviving
+    // battalions; with none, seed the HQ here.)
+    if units.is_empty() && !subunits.is_empty() {
+        let mut hq =
+            BattalionUnit::new(next_id, "HQ", UnitType::Headquarters, side, HexCoord::ZERO);
+        next_id += 1;
+        hq.division = division.name.clone();
+        hq.soft_attack = tactical_core::command::HQ_SOFT_ATTACK;
+        hq.hard_attack = tactical_core::command::HQ_HARD_ATTACK;
+        hq.defense = tactical_core::command::HQ_DEFENSE;
+        hq.breakthrough = tactical_core::command::HQ_BREAKTHROUGH;
+        hq.supply = supply;
+        hq.fuel = fuel;
+        units.push(hq);
     }
 
     // Synthesize the division HQ (§6.13) — fragile command unit
@@ -764,9 +1009,12 @@ pub fn create_tactical_units_named(
         // HOI4 division), so it rides the DIVISION's fill instead — the
         // same min(manpower, equipment) clamp every line battalion gets
         // (§5.3). A division stripped of equipment must not field a fully
-        // combat-effective HQ while its real battalions sit at 0.
+        // combat-effective HQ while its real battalions never take the
+        // field at all.
         hq.strength = hq.max_strength * str_ratio.min(div_equipment_fill);
-        hq.entrenchment = entrench_layers(division.entrenchment);
+        hq.entrenchment = entrench_layers(division.entrenchment, &CombatParams::default());
+        hq.supply = supply;
+        hq.fuel = fuel;
         // The HQ belongs to the division's roster entry like its
         // battalions (its damage routing stays as-is — the damage bases
         // deliberately exclude HQ org).
@@ -868,9 +1116,73 @@ impl<'a> Subunit<'a> {
     }
 }
 
+/// Sum one group set's per-battalion needs (× group count) into a shared
+/// archetype pool (§5.3 division-level demand).
+fn sum_needs<'a: 'b, 'b>(
+    pool: &mut HashMap<&'b str, f32>,
+    groups: impl Iterator<Item = &'b Subunit<'a>>,
+) {
+    for s in groups {
+        for (archetype, need) in &s.needs {
+            *pool.entry(archetype.as_str()).or_insert(0.0) += need * s.info.count as f32;
+        }
+    }
+}
+
+/// One archetype's fill for the field verdict: the division's stock
+/// apportioned by need share — `min(1, stock / total division need)` (a
+/// surplus beyond the division's total demand caps at full, §5.3). The
+/// same math [`BattalionStats::compute`] bakes, without the per-variant
+/// stat pass.
+fn archetype_fill(
+    archetype: &str,
+    total_need: &HashMap<&str, f32>,
+    available: &HashMap<String, VariantStock>,
+) -> f32 {
+    let total = total_need.get(archetype).copied().unwrap_or(0.0);
+    if total <= 0.0 {
+        return 1.0;
+    }
+    let stock: f32 = available
+        .get(archetype)
+        .map(|v| v.iter().map(|(_, c, _)| *c).sum())
+        .unwrap_or(0.0);
+    (stock / total).clamp(0.0, 1.0)
+}
+
+/// A subunit group's limiting fill: its scarcest archetype — a battalion
+/// or support company fields only as real as its worst-stocked gear (§5.3).
+fn min_archetype_fill(
+    s: &Subunit,
+    total_need: &HashMap<&str, f32>,
+    available: &HashMap<String, VariantStock>,
+) -> f32 {
+    s.needs
+        .iter()
+        .map(|(archetype, _)| archetype_fill(archetype, total_need, available))
+        .fold(1.0, f32::min)
+}
+
+/// §5.3 mobility-shortfall ladder: 20% fill tiers between marching pace
+/// and the chassis base speed — half the trucks, 60% of the motorized
+/// bonus; none left, the crews march (foot speed). Bases at or below
+/// marching pace (foot, horse-towed) never change.
+fn mobility_adjusted_speed(base: f32, fill: f32) -> f32 {
+    if base <= FOOT_SPEED_KMH {
+        return base;
+    }
+    let tier = if fill > 0.0 {
+        (fill * 5.0 - SPEED_TIER_EPSILON).ceil().clamp(1.0, 5.0) / 5.0
+    } else {
+        0.0
+    };
+    FOOT_SPEED_KMH + (base - FOOT_SPEED_KMH) * tier
+}
+
 /// Equipment-derived per-battalion stats before doctrine factors (§5.3).
-/// (No speed here: unit speed comes solely from the chassis/type table,
-/// unit.rs — equipment max_speed is intentionally not consulted.)
+/// (No speed stat here: the chassis/type table in unit.rs sets the base —
+/// equipment max_speed is intentionally not consulted; `mobility_fill`
+/// carries the §5.3 mobility shortfall the caller scales that base by.)
 struct BattalionStats {
     soft_attack: f32,
     hard_attack: f32,
@@ -885,6 +1197,16 @@ struct BattalionStats {
     /// 0..=1; 1.0 when the battalion has no needs). The str bar's
     /// equipment side — HOI4's yellow bar is min(manpower, equipment).
     equipment_ratio: f32,
+    /// Fill of the chassis's mobility archetype (trucks / halftracks /
+    /// tank chassis) — the §5.3 mobility-shortfall input; falls back to
+    /// the scarcest per-archetype fill when the template never lists that
+    /// archetype, and stays 1.0 for foot / horse-towed classes (no
+    /// mobility equipment to be short of).
+    mobility_fill: f32,
+    /// §6.7: the battalion actually drew fuel-burning equipment (tank
+    /// chassis, trucks, self-propelled guns) — the fuel speed penalty's
+    /// gate; leg formations are immune.
+    uses_fuel: bool,
 }
 
 impl BattalionStats {
@@ -896,6 +1218,7 @@ impl BattalionStats {
         available: &HashMap<String, VariantStock>,
         designs: &HashMap<u64, EquipmentDesign>,
         design_tables: &DesignTables,
+        fuel_stat_factor: f32,
         warnings: &mut Vec<String>,
         warned: &mut HashSet<String>,
     ) -> Self {
@@ -907,9 +1230,13 @@ impl BattalionStats {
         let mut piercing_weighted = 0.0;
         let mut hardness_weighted = 0.0;
         let mut weight_sum = 0.0;
+        let mut uses_fuel = false;
 
         let mut need_sum = 0.0;
         let mut alloc_sum = 0.0;
+        // Per-archetype fills feed the §5.3 field verdict and the mobility
+        // shortfall.
+        let mut archetype_fills: Vec<(&str, f32)> = Vec::new();
 
         for (archetype, need) in &s.needs {
             need_sum += need;
@@ -917,80 +1244,118 @@ impl BattalionStats {
             // variant by variant (§5.3: stats come from the equipment the
             // division actually holds).
             let total = total_need.get(archetype.as_str()).copied().unwrap_or(0.0);
-            if total <= 0.0 {
-                continue;
+            let mut arch_alloc = 0.0;
+            if total > 0.0 {
+                if let Some(variants) = available.get(archetype) {
+                    // Surplus equipment cannot be used: when the division holds MORE
+                    // of an archetype than the line battalions need, each battalion
+                    // is capped at its own requirement (the rest stays in the depot).
+                    let arch_available: f32 = variants.iter().map(|(_, c, _)| *c).sum();
+                    let cap_scale = if arch_available > total && arch_available > 0.0 {
+                        total / arch_available
+                    } else {
+                        1.0
+                    };
+                    for (key, count, design_id) in variants {
+                        let alloc = count * need / total * cap_scale;
+                        arch_alloc += alloc;
+                        // Equipment missing from the stats table contributes nothing
+                        // (graceful fallback, §5.3).
+                        let Some(eq) = equipment_stats.resolve(key) else {
+                            continue;
+                        };
+                        // Battalion-level normalization: HOI4's equipment stat is
+                        // the BATTALION-LEVEL value at a full complement — divide
+                        // the piece count by the per-battalion need (100 rifles →
+                        // ×1, not ×100); without it the save-path values read 100×
+                        // the HOI4/script scale.
+                        let fill = if *need > 0.0 { alloc / need } else { 0.0 };
+                        // Designer path (§5.3): a save design's own module picks and
+                        // upgrade levels compute the attack triple, the
+                        // armor/hardness bases AND the defense/breakthrough
+                        // pair — tank chassis rows carry 0 for all of them
+                        // by construction (the gun, turret and armor are
+                        // module picks), so the static row would read 0.
+                        // Designs that don't resolve (chassis token missing
+                        // from the table) fall back to the static row
+                        // untouched.
+                        let designed = design_id
+                            .and_then(|id| designs.get(&id))
+                            .and_then(|d| {
+                                let mut local = Vec::new();
+                                let out = design_stats(d, equipment_stats, design_tables, &mut local);
+                                for w in local {
+                                    if warned.insert(w.clone()) {
+                                        warnings.push(w);
+                                    }
+                                }
+                                out
+                            });
+                        let (soft_v, hard_v, pierce_v, armor_v, hardness_v, def_v, brk_v) =
+                            match designed {
+                                Some(ds) => (
+                                    ds.soft_attack,
+                                    ds.hard_attack,
+                                    ds.piercing,
+                                    ds.armor,
+                                    ds.hardness,
+                                    ds.defense,
+                                    ds.breakthrough,
+                                ),
+                                None => (
+                                    eq.soft_attack,
+                                    eq.hard_attack,
+                                    eq.piercing,
+                                    eq.armor,
+                                    eq.hardness,
+                                    eq.defense,
+                                    eq.breakthrough,
+                                ),
+                            };
+                        // §6.7: fuel-burning rows fight at
+                        // OUT_OF_FUEL_EQUIPMENT_MULT when the division's
+                        // reserve is dry (fuel_stat_factor < 1). Weighted
+                        // averages keep their weights — only the dry rows'
+                        // values shrink.
+                        let fuel_scale = if eq.fuel_consumption > 0.0 {
+                            uses_fuel = true;
+                            fuel_stat_factor
+                        } else {
+                            1.0
+                        };
+                        soft += soft_v * fill * fuel_scale;
+                        hard += hard_v * fill * fuel_scale;
+                        defense += def_v * fill * fuel_scale;
+                        breakthrough += brk_v * fill * fuel_scale;
+                        armor = armor.max(armor_v * fuel_scale);
+                        piercing_weighted += pierce_v * fuel_scale * alloc;
+                        hardness_weighted += hardness_v * fuel_scale * alloc;
+                        weight_sum += alloc;
+                    }
+                }
             }
-            let Some(variants) = available.get(archetype) else {
-                continue;
-            };
-            // Surplus equipment cannot be used: when the division holds MORE
-            // of an archetype than the line battalions need, each battalion
-            // is capped at its own requirement (the rest stays in the depot).
-            let arch_available: f32 = variants.iter().map(|(_, c, _)| *c).sum();
-            let cap_scale = if arch_available > total && arch_available > 0.0 {
-                total / arch_available
-            } else {
-                1.0
-            };
-            for (key, count, design_id) in variants {
-                let alloc = count * need / total * cap_scale;
-                alloc_sum += alloc;
-                // Equipment missing from the stats table contributes nothing
-                // (graceful fallback, §5.3).
-                let Some(eq) = equipment_stats.resolve(key) else {
-                    continue;
-                };
-                // Battalion-level normalization: HOI4's equipment stat is
-                // the BATTALION-LEVEL value at a full complement — divide
-                // the piece count by the per-battalion need (100 rifles →
-                // ×1, not ×100); without it the save-path values read 100×
-                // the HOI4/script scale.
-                let fill = if *need > 0.0 { alloc / need } else { 0.0 };
-                // Designer path (§5.3): a save design's own module picks and
-                // upgrade levels compute the attack triple and the
-                // armor/hardness bases — tank chassis rows carry no attack
-                // stats (the gun is a module), so the static row would read
-                // 0. Designs that don't resolve (chassis token missing from
-                // the table) fall back to the static row untouched.
-                // defense/breakthrough keep the static row values either way.
-                let designed = design_id
-                    .and_then(|id| designs.get(&id))
-                    .and_then(|d| {
-                        let mut local = Vec::new();
-                        let out = design_stats(d, equipment_stats, design_tables, &mut local);
-                        for w in local {
-                            if warned.insert(w.clone()) {
-                                warnings.push(w);
-                            }
-                        }
-                        out
-                    });
-                let (soft_v, hard_v, pierce_v, armor_v, hardness_v) = match designed {
-                    Some(ds) => (
-                        ds.soft_attack,
-                        ds.hard_attack,
-                        ds.piercing,
-                        ds.armor,
-                        ds.hardness,
-                    ),
-                    None => (
-                        eq.soft_attack,
-                        eq.hard_attack,
-                        eq.piercing,
-                        eq.armor,
-                        eq.hardness,
-                    ),
-                };
-                soft += soft_v * fill;
-                hard += hard_v * fill;
-                defense += eq.defense * fill;
-                breakthrough += eq.breakthrough * fill;
-                armor = armor.max(armor_v);
-                piercing_weighted += pierce_v * alloc;
-                hardness_weighted += hardness_v * alloc;
-                weight_sum += alloc;
-            }
+            alloc_sum += arch_alloc;
+            // A need entry the division cannot stock at all fills 0 — the
+            // field verdict reads exactly this scarcest-case ratio.
+            archetype_fills.push((
+                archetype.as_str(),
+                if *need > 0.0 {
+                    (arch_alloc / *need).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                },
+            ));
         }
+
+        let min_archetype_fill = archetype_fills.iter().map(|(_, f)| *f).fold(1.0, f32::min);
+        let mobility_fill = match mobility_equipment_archetype(s.info.chassis, s.info.unit_type) {
+            None => 1.0,
+            Some(mobility) => archetype_fills
+                .iter()
+                .find(|(archetype, _)| *archetype == mobility)
+                .map(|(_, f)| *f)
+                .unwrap_or(min_archetype_fill),
+        };
 
         let equipment_ratio = if need_sum > 0.0 {
             (alloc_sum / need_sum).clamp(0.0, 1.0)
@@ -1018,20 +1383,20 @@ impl BattalionStats {
             },
             degradation,
             equipment_ratio,
+            mobility_fill,
+            uses_fuel,
         }
     }
 }
 
-/// §6.8: entrenchment capped at 3 layers. Save values ≤ 1.0 are treated as a
-/// ratio of the cap; larger values as an absolute layer count.
-fn entrench_layers(save_entrenchment: f32) -> u8 {
+/// §6.8: entrenchment capped at `params.entrench_max_layers` layers. Save
+/// values ≤ 1.0 are treated as a ratio of the cap; larger values as an
+/// absolute layer count.
+fn entrench_layers(save_entrenchment: f32, params: &CombatParams) -> u8 {
+    let cap = params.entrench_max_layers as f32;
     let e = save_entrenchment;
-    let layers = if e <= 1.0 {
-        (e * 3.0).round()
-    } else {
-        e.round()
-    };
-    layers.clamp(0.0, 3.0) as u8
+    let layers = if e <= 1.0 { e * cap } else { e };
+    layers.round().clamp(0.0, cap) as u8
 }
 
 #[cfg(test)]
@@ -1319,6 +1684,9 @@ countries = {
             tactical_core::SupportKind::Engineer
         );
         assert_eq!(units[0].support[0].name, "ENG");
+        // The HOI4 company token rides along — the named-company effect
+        // rows (§6.3) key on it.
+        assert_eq!(units[0].support[0].token, "engineer");
         assert!(units[1].support.is_empty());
     }
 
@@ -1353,10 +1721,18 @@ countries = {
 
         // Division with a tank battalion → armored-car HQ (fixed armored
         // car, never a tank — §6.13).
-        let save = DIVISION_SAVE.replace(
-            "infantry = { x = 1 y = 0 }",
-            "light_armor = { x = 1 y = 0 }",
-        );
+        let save = DIVISION_SAVE
+            .replace(
+                "infantry = { x = 1 y = 0 }",
+                "light_armor = { x = 1 y = 0 }",
+            )
+            // The tank battalion must actually field: without chassis
+            // stock it falls below the field threshold and the HQ would
+            // read the surviving composition as foot.
+            .replace(
+                "infantry_equipment_0 = 210",
+                "infantry_equipment_0 = 210\n                    light_tank_chassis_0 = 60",
+            );
         let div = parse_first_division(&save);
         let units = create_tactical_units(
             &div,
@@ -1394,10 +1770,12 @@ countries = {
             0,
         );
         let inf = &units[0];
-        // total need = 200 (line only) → alloc = 105 × 100/200 = 52.5 → fill 0.525.
-        // ratio = 0.525 → multiplier = 1 - 0.475 × 0.5 = 0.7625 → 3 × 0.525 × 0.7625 ≈ 1.20.
+        // total need = 210 (2 line + the engineer's 10 — support companies
+        // draw from the same pool, §5.3) → alloc = 105 × 100/210 = 50 →
+        // fill 0.5. ratio = 0.5 → multiplier = 1 - 0.5 × 0.5 = 0.75 →
+        // 3 × 0.5 × 0.75 ≈ 1.125.
         assert!(
-            (inf.soft_attack - 1.201).abs() < 1e-2,
+            (inf.soft_attack - 1.125).abs() < 1e-2,
             "soft={}",
             inf.soft_attack
         );
@@ -1575,10 +1953,29 @@ countries = {
 
     #[test]
     fn entrenchment_maps_to_layers() {
-        assert_eq!(entrench_layers(0.0), 0);
-        assert_eq!(entrench_layers(1.0), 3); // ratio of cap
-        assert_eq!(entrench_layers(2.0), 2); // absolute layers
-        assert_eq!(entrench_layers(9.0), 3); // capped (§6.8)
+        let p = CombatParams::default();
+        assert_eq!(entrench_layers(0.0, &p), 0);
+        // ≤ 1.0 is a ratio of the cap, larger values an absolute count.
+        assert_eq!(entrench_layers(1.0, &p), 3);
+        assert_eq!(entrench_layers(2.0, &p), 2);
+        assert_eq!(entrench_layers(9.0, &p), 3);
+        // The cap is the tuning param, not a literal: a save that fields
+        // entrenchment 5 must land on the configured ceiling, and the ratio
+        // form scales with it.
+        let low = CombatParams {
+            entrench_max_layers: 2,
+            ..CombatParams::default()
+        };
+        assert_eq!(entrench_layers(5.0, &low), 2);
+        assert_eq!(entrench_layers(1.0, &low), 2);
+        let single = CombatParams {
+            entrench_max_layers: 1,
+            ..CombatParams::default()
+        };
+        // 0.4 × 1 layer rounds to 0; the rest clamp to the single layer.
+        assert_eq!(entrench_layers(0.4, &single), 0);
+        assert_eq!(entrench_layers(0.6, &single), 1);
+        assert_eq!(entrench_layers(7.0, &single), 1);
     }
 
     /// End-to-end against the REAL pre-extracted tables (§5.4).
@@ -1595,8 +1992,8 @@ countries = {
         let dt = DoctrineTable::load(data_dir.join("doctrine_bonuses.json")).unwrap();
 
         assert!(eq.len() >= 250, "equipment entries: {}", eq.len());
-        assert_eq!(ut.line_battalions.len(), 68);
-        assert_eq!(ut.support_companies.len(), 89);
+        assert_eq!(ut.line_battalions.len(), 56);
+        assert_eq!(ut.support_companies.len(), 67);
         assert!(
             dt.tree_count() >= 100,
             "doctrine trees: {}",
@@ -1694,6 +2091,487 @@ countries = {
         );
         // No Recon unit deploys — the company rides with the first
         // battalion (asserted above).
+    }
+
+    /// Coverage pin (§5.4): EVERY equipment archetype any unit template
+    /// asks for must resolve against the real equipment table — a missing
+    /// row silently zero-fills the subunit's stats at assembly.
+    #[test]
+    fn every_template_need_resolves_in_the_equipment_table() {
+        let data_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("data");
+        let eq = EquipmentTable::load(data_dir.join("equipment_stats.json")).unwrap();
+        let ut = UnitTemplateTable::load(data_dir.join("unit_templates.json")).unwrap();
+        for (bucket, templates) in [
+            ("line", &ut.line_battalions),
+            ("support", &ut.support_companies),
+        ] {
+            for (token, template) in templates {
+                for need in template.needs.keys() {
+                    assert!(
+                        eq.resolve(need).is_some(),
+                        "{bucket} template `{token}` needs `{need}`, missing from equipment_stats.json"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The support-kind table against the REAL support bucket (§5.3/§5.4):
+    /// every extracted company token maps to its registered kind. A token
+    /// in the bucket but absent from the expectation table fails — new
+    /// vanilla companies must be registered explicitly, not silently
+    /// absorbed by the MilitaryPolice fallback.
+    #[test]
+    fn support_bucket_tokens_match_the_kind_table() {
+        use tactical_core::SupportKind as K;
+        let data_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("data");
+        let ut = UnitTemplateTable::load(data_dir.join("unit_templates.json")).unwrap();
+        let expected: &[(&str, K)] = &[
+            ("artillery", K::Artillery),
+            ("rocket_artillery", K::Artillery),
+            ("super_heavy_artillery", K::Artillery),
+            ("self_propelled_super_heavy_artillery", K::Artillery),
+            ("super_heavy_sp_artillery_brigade", K::Artillery),
+            ("fire_support", K::Artillery),
+            ("mot_fire_support", K::Artillery),
+            ("field_guns", K::Artillery),
+            ("rocket_battery", K::Artillery),
+            ("anti_tank", K::AntiTank),
+            ("anti_tank_battery", K::AntiTank),
+            ("super_heavy_tank_destroyer_brigade", K::AntiTank),
+            ("light_tank_destroyer_support", K::AntiTank),
+            ("medium_tank_destroyer_support", K::AntiTank),
+            ("heavy_tank_destroyer_support", K::AntiTank),
+            ("modern_tank_destroyer_support", K::AntiTank),
+            ("anti_air", K::AntiAir),
+            ("anti_air_battery", K::AntiAir),
+            ("super_heavy_sp_anti_air_brigade", K::AntiAir),
+            ("light_sp_anti_air_support", K::AntiAir),
+            ("medium_sp_anti_air_support", K::AntiAir),
+            ("heavy_sp_anti_air_support", K::AntiAir),
+            ("modern_sp_anti_air_support", K::AntiAir),
+            ("engineer", K::Engineer),
+            ("pioneer_support", K::Engineer),
+            ("jungle_pioneers_support", K::Engineer),
+            ("assault_engineer", K::Engineer),
+            ("armored_engineer", K::Engineer),
+            ("hq_engineer", K::Engineer),
+            ("recon", K::Recon),
+            ("mot_recon", K::Recon),
+            ("armored_car_recon", K::Recon),
+            ("light_tank_recon", K::Recon),
+            ("airborne_light_armor", K::Recon),
+            ("rangers_support", K::Recon),
+            ("northern_territory_recon_support", K::Recon),
+            ("long_range_patrol_support", K::Recon),
+            ("helicopter_recon", K::Recon),
+            ("hq_recon", K::Recon),
+            ("field_hospital", K::FieldHospital),
+            ("helicopter_field_hospital", K::FieldHospital),
+            ("hq_field_hospital", K::FieldHospital),
+            ("signal_company", K::Signal),
+            ("armored_signal", K::Signal),
+            ("hq_signal", K::Signal),
+            ("hq_naval_liaison", K::Signal),
+            ("hq_air_liaison", K::Signal),
+            ("maintenance_company", K::Maintenance),
+            ("armored_maintenance", K::Maintenance),
+            ("hq_maintenance", K::Maintenance),
+            ("logistics_company", K::Logistics),
+            ("winter_logistics_support", K::Logistics),
+            ("helicopter_transport", K::Logistics),
+            ("hq_logistics", K::Logistics),
+            ("military_police", K::MilitaryPolice),
+            ("motorized_military_police", K::MilitaryPolice),
+            ("hq_military_police", K::MilitaryPolice),
+            // No modelled vanilla effect — the no-bonus kind plus their
+            // own display name (§5.3).
+            ("light_flame_tank", K::MilitaryPolice),
+            ("medium_flame_tank", K::MilitaryPolice),
+            ("heavy_flame_tank", K::MilitaryPolice),
+            ("super_heavy_armor", K::MilitaryPolice),
+            ("land_cruiser", K::MilitaryPolice),
+            ("helicopter_brigade", K::MilitaryPolice),
+            ("blackshirt_assault_battalion", K::MilitaryPolice),
+            ("sturmtruppe_battalion", K::MilitaryPolice),
+            ("hq_support_company", K::MilitaryPolice),
+            ("hq_specops", K::MilitaryPolice),
+        ];
+        let table: HashMap<&str, K> = expected.iter().copied().collect();
+        assert_eq!(
+            table.len(),
+            expected.len(),
+            "duplicate token in the expectation table"
+        );
+        for token in ut.support_companies.keys() {
+            let Some(&kind) = table.get(token.as_str()) else {
+                panic!("support token `{token}` is not registered in the expectation table");
+            };
+            assert_eq!(map_support_kind(token), kind, "token `{token}`");
+            assert!(
+                support_kind(token).is_some(),
+                "token `{token}` fell out of the table"
+            );
+        }
+        for token in table.keys() {
+            assert!(
+                ut.support_companies.contains_key(*token),
+                "expectation-table token `{token}` is no longer in the support bucket"
+            );
+        }
+    }
+
+    /// Miniature table carrying the HQ-formation / special-company tokens
+    /// (simplified needs — the assembly semantics under test do not depend
+    /// on the vanilla quantities).
+    fn hq_tables() -> (EquipmentTable, UnitTemplateTable) {
+        let ut = UnitTemplateTable::from_str(
+            r#"{
+            "line_battalions": {
+                "infantry": {"max_strength": 25, "max_organisation": 60,
+                    "needs": {"infantry_equipment": 100}},
+                "hq_infantry": {"max_strength": 15, "max_organisation": 60,
+                    "needs": {"infantry_equipment": 60}}
+            },
+            "support_companies": {
+                "hq_support_company": {"max_strength": 1, "max_organisation": 30,
+                    "needs": {"infantry_equipment": 20}},
+                "hq_recon": {"max_strength": 1, "max_organisation": 30,
+                    "needs": {"infantry_equipment": 20, "support_equipment": 10}},
+                "light_flame_tank": {"max_strength": 2, "max_organisation": 20,
+                    "needs": {"support_equipment": 10}},
+                "fire_support": {"max_strength": 1, "max_organisation": 20,
+                    "needs": {"infantry_equipment": 30, "support_equipment": 5}},
+                "engineer": {"max_strength": 2, "max_organisation": 20,
+                    "needs": {"infantry_equipment": 10, "support_equipment": 30}}
+            }
+        }"#,
+        )
+        .unwrap();
+        (
+            EquipmentTable::from_str(tests_helpers::MINI_EQUIPMENT_JSON).unwrap(),
+            ut,
+        )
+    }
+
+    #[test]
+    fn army_hq_division_fields_its_battalions_and_companies() {
+        // An army-HQ division (nameless template, id-referenced) assembles
+        // like any other: hq_infantry battalions on the map, the hq_*
+        // companies attached under their real kinds, and the §6.13
+        // synthesized HQ on top (no exemption — the synthesized HQ IS the
+        // general's command post).
+        let (eq, ut) = hq_tables();
+        let save = r#"
+division_templates = {
+    division_template = {
+        id = { id = 9 type = 52 }
+        localization_key = "ARMY_HQ_TEMPLATE_NAME"
+        is_army_hq = yes
+        regiments = { hq_infantry = { x = 0 y = 0 } hq_infantry = { x = 0 y = 1 } }
+        support = { hq_support_company = { x = 0 y = 0 } hq_recon = { x = 0 y = 1 } }
+    }
+}
+countries = {
+    JAP = {
+        units = {
+            division = {
+                id = { id = 7523 type = 51 }
+                division_template_id = { id = 9 type = 52 }
+                location = 3473
+                organization = 1.0
+                strength = 1.0
+                equipment = {
+                    infantry_equipment_0 = 400
+                    support_equipment_1 = 20
+                }
+            }
+        }
+    }
+}
+"#;
+        let parsed = SaveParser::parse_save_from_str(save).unwrap();
+        let div = &parsed.countries["JAP"].divisions[0];
+        assert!(div.is_army_hq);
+        let mut warnings = Vec::new();
+        let units = create_tactical_units_named(
+            div,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+            &UnitNaming::default(),
+            &HashMap::new(),
+            &DesignTables::default(),
+            &mut warnings,
+        );
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        // 2 hq_infantry battalions + 1 synthesized HQ.
+        assert_eq!(units.len(), 3);
+        assert!(units
+            .iter()
+            .take(2)
+            .all(|u| u.unit_type == UnitType::Infantry));
+        assert!(units[2].is_hq());
+        // hq_recon rides as Recon (sight bonus live), hq_support_company as
+        // the no-bonus kind under its own display name.
+        let kinds: Vec<tactical_core::SupportKind> = units
+            .iter()
+            .flat_map(|u| u.support.iter().map(|a| a.kind))
+            .collect();
+        assert!(kinds.contains(&tactical_core::SupportKind::Recon));
+        let staff = units
+            .iter()
+            .flat_map(|u| u.support.iter())
+            .find(|a| a.kind == tactical_core::SupportKind::MilitaryPolice)
+            .unwrap();
+        assert_eq!(staff.name, "HQ Staff");
+        // The recon attachment's sight bonus reaches its host.
+        let host = units
+            .iter()
+            .find(|u| {
+                u.support
+                    .iter()
+                    .any(|a| a.kind == tactical_core::SupportKind::Recon)
+            })
+            .unwrap();
+        assert_eq!(host.sight_range, 3); // infantry base 2 + recon +1
+
+        // Without support_equipment the hq_recon company (needs 10) stays
+        // below its field threshold and never attaches; the staff company
+        // (rifles only) still rides.
+        let mut stripped = div.clone();
+        stripped.equipment = [("infantry_equipment_0".to_string(), 400.0)]
+            .into_iter()
+            .collect();
+        let units = create_tactical_units_named(
+            &stripped,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+            &UnitNaming::default(),
+            &HashMap::new(),
+            &DesignTables::default(),
+            &mut Vec::new(),
+        );
+        let kinds: Vec<tactical_core::SupportKind> = units
+            .iter()
+            .flat_map(|u| u.support.iter().map(|a| a.kind))
+            .collect();
+        assert_eq!(kinds, [tactical_core::SupportKind::MilitaryPolice]);
+    }
+
+    #[test]
+    fn no_effect_company_keeps_its_display_name() {
+        // The companies whose vanilla effect FC does not model attach with
+        // the no-bonus kind but display their own name, not "MP".
+        let (eq, ut) = hq_tables();
+        let save = r#"
+countries = {
+    GER = {
+        division_template = {
+            "Flame-Division" = {
+                regiments = { infantry = { x = 0 y = 0 } infantry = { x = 1 y = 0 } }
+                support = { engineer = { x = 0 y = 0 } light_flame_tank = { x = 0 y = 1 } }
+            }
+        }
+        units = {
+            division = {
+                id = 1
+                division_template = "Flame-Division"
+                location = 6334
+                organization = 1.0
+                strength = 1.0
+                equipment = {
+                    infantry_equipment_0 = 400
+                    support_equipment_1 = 60
+                }
+            }
+        }
+    }
+}
+"#;
+        let div = parse_first_division(save);
+        let mut warnings = Vec::new();
+        let units = create_tactical_units_named(
+            &div,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+            &UnitNaming::default(),
+            &HashMap::new(),
+            &DesignTables::default(),
+            &mut warnings,
+        );
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        let names: Vec<(&str, tactical_core::SupportKind)> = units
+            .iter()
+            .flat_map(|u| u.support.iter().map(|a| (a.name.as_str(), a.kind)))
+            .collect();
+        assert!(names.contains(&("ENG", tactical_core::SupportKind::Engineer)));
+        assert!(names.contains(&("L. Flame", tactical_core::SupportKind::MilitaryPolice)));
+        // The UnitNaming override path (localized pass) wins over the
+        // default English label; an unlisted token falls back to its kind.
+        let mut naming = UnitNaming::default();
+        naming.set_support_name("light_flame_tank", "喷火连".to_string());
+        assert_eq!(
+            naming.support_name(
+                "light_flame_tank",
+                tactical_core::SupportKind::MilitaryPolice
+            ),
+            "喷火连"
+        );
+        assert_eq!(
+            naming.support_name("engineer", tactical_core::SupportKind::Engineer),
+            "ENG"
+        );
+    }
+
+    #[test]
+    fn unknown_support_token_attaches_as_mp_and_warns_once() {
+        // Modded content outside the kind table still attaches (no-bonus
+        // placeholder), logged once per division no matter how many
+        // template groups repeat the token.
+        let (eq, ut) = hq_tables();
+        let save = r#"
+countries = {
+    GER = {
+        division_template = {
+            "Modded-Division" = {
+                regiments = { infantry = { x = 0 y = 0 } infantry = { x = 1 y = 0 } }
+                support = { modded_raygun_company = { x = 0 y = 0 } }
+                regimental_support = { modded_raygun_company = { x = 0 y = 0 } }
+            }
+        }
+        units = {
+            division = {
+                id = 1
+                division_template = "Modded-Division"
+                location = 6334
+                organization = 1.0
+                strength = 1.0
+                equipment = {
+                    infantry_equipment_0 = 600
+                    support_equipment_1 = 60
+                }
+            }
+        }
+    }
+}
+"#;
+        let div = parse_first_division(save);
+        // Both template groups merged into the company's support list.
+        assert_eq!(div.support_companies.len(), 2);
+        let mut warnings = Vec::new();
+        let units = create_tactical_units_named(
+            &div,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+            &UnitNaming::default(),
+            &HashMap::new(),
+            &DesignTables::default(),
+            &mut warnings,
+        );
+        assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+        assert!(warnings[0].contains("modded_raygun_company"));
+        let atts: Vec<&tactical_core::SupportAttachment> =
+            units.iter().flat_map(|u| u.support.iter()).collect();
+        assert_eq!(atts.len(), 2);
+        assert!(atts
+            .iter()
+            .all(|a| a.kind == tactical_core::SupportKind::MilitaryPolice && a.name == "MP"));
+    }
+
+    #[test]
+    fn regimental_support_companies_attach_with_their_kind() {
+        // The regimental column's companies attach exactly like the
+        // divisional support column (§5.3): fire_support reads as
+        // Artillery, one attachment per entry COUNT — a 2-regiment
+        // entry fields two attachments, round-robin over the hosts.
+        let (eq, ut) = hq_tables();
+        let save = r#"
+countries = {
+    GER = {
+        division_template = {
+            "Gun-Division" = {
+                regiments = { infantry = { x = 0 y = 0 } infantry = { x = 1 y = 0 } }
+                regimental_support = { fire_support = { x = 0 y = 0 } fire_support = { x = 1 y = 0 } }
+            }
+        }
+        units = {
+            division = {
+                id = 1
+                division_template = "Gun-Division"
+                location = 6334
+                organization = 1.0
+                strength = 1.0
+                equipment = {
+                    infantry_equipment_0 = 400
+                    support_equipment_1 = 20
+                }
+            }
+        }
+    }
+}
+"#;
+        let div = parse_first_division(save);
+        assert_eq!(div.support_companies.len(), 1);
+        assert_eq!(div.support_companies[0].count, 2);
+        let units = create_tactical_units(
+            &div,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+        );
+        let atts: Vec<&tactical_core::SupportAttachment> =
+            units.iter().flat_map(|u| u.support.iter()).collect();
+        assert_eq!(atts.len(), 2, "one attachment per count");
+        assert!(atts
+            .iter()
+            .all(|a| a.kind == tactical_core::SupportKind::Artillery));
+        assert!(atts.iter().all(|a| a.name == "ART"));
+        // Round-robin: one attachment on each of the two battalions.
+        let infs: Vec<_> = units
+            .iter()
+            .filter(|u| u.unit_type == UnitType::Infantry)
+            .collect();
+        assert_eq!(infs.len(), 2);
+        assert!(infs.iter().all(|u| u.support.len() == 1));
     }
 
     /// The variant-family chassis rows synthesized by the extractor
@@ -1932,6 +2810,106 @@ countries = {
         assert!(tank.strength > 0.0);
     }
 
+    /// §5.3 designer path against the REAL data tables: chassis rows carry
+    /// defense 0 / breakthrough 0 by construction — the values live in the
+    /// module picks (one-man turret +7 breakthrough, riveted armor +2/+2),
+    /// so a designer battalion must field defense 2 / breakthrough 9, not
+    /// the bare chassis zeros.
+    #[test]
+    fn real_data_designer_tank_defense_breakthrough() {
+        let data_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("data");
+        let eq = EquipmentTable::load(data_dir.join("equipment_stats.json")).unwrap();
+        let ut = UnitTemplateTable::load(data_dir.join("unit_templates.json")).unwrap();
+        let design_tables = DesignTables::load(&data_dir);
+        let save = r#"
+equipments = {
+    light_tank_chassis_1 = {
+        id = { id = 2200 type = 70 }
+        name = "Test Tank"
+        is_frame = no
+        modules = {
+            main_armament_slot = tank_heavy_machine_gun
+            engine_type_slot = tank_gasoline_engine
+            turret_type_slot = tank_light_one_man_tank_turret
+            suspension_type_slot = tank_bogie_suspension
+            armor_type_slot = tank_riveted_armor
+        }
+        upgrades = {
+            upgrades = {
+                { tank_nsb_engine_upgrade 0 }
+                { tank_nsb_armor_upgrade 0 }
+            }
+        }
+    }
+}
+division_templates = {
+    division_template = {
+        id = { id = 7 type = 47 }
+        name = "Panzer-Division"
+        regiments = {
+            light_armor = { x = 0 y = 0 }
+        }
+    }
+}
+countries = {
+    GER = {
+        units = {
+            division = {
+                id = 1
+                division_template_id = { id = 7 type = 47 }
+                location = 6334
+                organization = 0.9
+                strength = 0.95
+                equipment = {
+                    equipment = { id = { id = 2200 type = 70 } amount = 60 }
+                }
+            }
+        }
+    }
+}
+"#;
+        let parsed = SaveParser::parse_save_from_str(save).unwrap();
+        let div = &parsed.countries["GER"].divisions[0];
+        let mut warnings = Vec::new();
+        let units = create_tactical_units_named(
+            div,
+            Side::Attacker,
+            &eq,
+            &ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+            &UnitNaming::default(),
+            &parsed.designs,
+            &design_tables,
+            &mut warnings,
+        );
+        assert_eq!(warnings, Vec::<String>::new());
+        let tank = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::LightArmor)
+            .unwrap();
+        // 60 held of 60 needed → fill 1.0, degradation 1.0: the module
+        // adds land verbatim (chassis rows are 0 by design).
+        assert!(
+            (tank.defense - 2.0).abs() < 1e-3,
+            "defense={}",
+            tank.defense
+        );
+        assert!(
+            (tank.breakthrough - 9.0).abs() < 1e-3,
+            "breakthrough={}",
+            tank.breakthrough
+        );
+    }
+
     /// Designer-path degradation: a design whose registry entry carries no
     /// modules block computes to the bare chassis (attack 0, real
     /// armor/hardness); an unknown module token warns and counts 0 while
@@ -2057,6 +3035,26 @@ countries = {{
         let (max_org, max_str) = division_maxima(&div, &ut, CountryOrgModifier::default(), 0.0);
         assert!((max_org - 46.667).abs() < 1e-2, "max_org={}", max_org);
         assert!((max_str - 52.0).abs() < 1e-3, "max_str={}", max_str);
+    }
+
+    #[test]
+    fn division_maxima_resolves_unknown_support_tokens_like_the_subunit_path() {
+        // An unknown (modded) support token resolves through `Subunit::resolve`
+        // (§5.3) for the assembled attachments AND for the org/str divisor:
+        // the type's canonical template, never a bare zero. Two different
+        // answers here read a modded division's absolute org ratio high.
+        let (_eq, ut) = mini_tables();
+        let text = DIVISION_SAVE.replace(
+            "engineer = { x = 0 y = 0 }",
+            "modded_support = { x = 0 y = 0 }",
+        );
+        let div = parse_first_division(&text);
+        assert_eq!(div.support_companies[0].token, "modded_support");
+        let (max_org, max_str) = division_maxima(&div, &ut, CountryOrgModifier::default(), 0.0);
+        // The token falls back to Infantry → canonical "infantry" (60/25):
+        // divisor (2×60 + 60)/3 = 60, str 2×25 + 25 = 75.
+        assert!((max_org - 60.0).abs() < 1e-3, "max_org={}", max_org);
+        assert!((max_str - 75.0).abs() < 1e-3, "max_str={}", max_str);
     }
 
     #[test]
@@ -2300,10 +3298,13 @@ countries = {
     }
 
     #[test]
-    fn zero_equipment_division_spawns_at_zero_strength() {
-        // Edge case: min(manpower, 0) = 0 — a save division
-        // with no resolvable equipment arrives at str 0 (HOI4's bar reads
-        // the same); normalize_broken_state retires it.
+    fn zero_equipment_division_fields_only_its_hq() {
+        // Edge case: a save division with no resolvable equipment falls
+        // below the field threshold on every archetype — its battalions do
+        // not spawn at all (no zero-strength ghosts feeding vision, flags
+        // or encirclement). The HQ still fields (§6.13) at 0 strength — a
+        // hollow division gets no combat-effective command unit — and
+        // normalize_broken_state retires it.
         let (eq, ut) = mini_tables();
         let save = r#"
 countries = {
@@ -2337,12 +3338,10 @@ countries = {
             &LeaderBonus::default(),
             0,
         );
-        assert_eq!(units[0].strength, 0.0, "str={}", units[0].strength);
-        // §6.13: the synthetic HQ rides the same division-level fill — a
-        // hollow division gets no free combat-effective command unit out of
-        // it (an equipment-stripped division must not gain a free armed
-        // unit just by having one battalion in its template).
-        let hq = units.iter().find(|u| u.is_hq()).expect("HQ synthesized");
+        // No line battalion survives; the 0-strength HQ is the only unit.
+        assert_eq!(units.len(), 1, "units={}", units.len());
+        assert!(units.iter().all(|u| u.is_hq()));
+        let hq = &units[0];
         assert_eq!(hq.strength, 0.0, "hq str={}", hq.strength);
         assert!(!hq.is_combat_effective());
     }
@@ -2501,6 +3500,35 @@ countries = {
         assert!(b.type_attack.is_empty());
     }
 
+    /// Vanilla's other per-type spelling: `ascari_officer` & co. carry
+    /// `modifier_army_sub_unit_<family>_*` keys — they must strip to the
+    /// same family names as `army_<family>_*`, while the family's
+    /// speed/org keys stay deliberately unmodelled.
+    #[test]
+    fn sub_unit_modifier_keys_strip_to_the_family_name() {
+        let mut b = LeaderBonus::default();
+        accumulate_trait_key(
+            &mut b,
+            "modifier_army_sub_unit_infantry_defence_factor",
+            0.05,
+        );
+        accumulate_trait_key(
+            &mut b,
+            "modifier_army_sub_unit_irregular_infantry_attack_factor",
+            0.05,
+        );
+        accumulate_trait_key(&mut b, "modifier_army_sub_unit_cavalry_speed_factor", 0.05);
+        accumulate_trait_key(
+            &mut b,
+            "modifier_army_sub_unit_militia_max_org_factor",
+            0.05,
+        );
+        assert!((b.type_defense["infantry"] - 0.05).abs() < 1e-6);
+        assert!((b.type_attack["irregular_infantry"] - 0.05).abs() < 1e-6);
+        assert_eq!(b.type_defense.len(), 1);
+        assert_eq!(b.type_attack.len(), 1);
+    }
+
     #[test]
     fn leader_type_bonus_applies_per_battalion_family() {
         // The armor trait bonus lands on the tank (group
@@ -2626,5 +3654,652 @@ countries = {
             cav.soft_attack
         );
         assert!((cav.defense - 24.0).abs() < 1e-2, "def={}", cav.defense);
+    }
+
+    /// Tables for the field-threshold / mobility tests: motorized and
+    /// mechanized join the infantry on the line side, recon on the support
+    /// side (needs mirror the real `unit_templates.json` entries).
+    fn mobility_tables() -> (EquipmentTable, UnitTemplateTable) {
+        let eq = EquipmentTable::from_str(
+            r#"{
+                "infantry_equipment_0": {"archetype": "infantry_equipment", "year": 1918,
+                    "soft_attack": 3.0, "hard_attack": 0.5, "defense": 20.0, "breakthrough": 2.0,
+                    "armor": 0.0, "piercing": 1.0, "hardness": 0.0, "max_speed": 4.0},
+                "motorized_equipment_1": {"archetype": "motorized_equipment", "year": 1936,
+                    "soft_attack": 0.0, "hard_attack": 0.0, "defense": 4.0, "breakthrough": 1.0,
+                    "armor": 0.0, "piercing": 1.0, "hardness": 0.0, "max_speed": 12.0},
+                "mechanized_equipment_1": {"archetype": "mechanized_equipment", "year": 1936,
+                    "soft_attack": 0.0, "hard_attack": 0.0, "defense": 4.0, "breakthrough": 1.0,
+                    "armor": 1.0, "piercing": 1.0, "hardness": 0.1, "max_speed": 10.0},
+                "support_equipment_1": {"archetype": "support_equipment", "year": 1936,
+                    "soft_attack": 1.0, "hard_attack": 0.0, "defense": 5.0, "breakthrough": 1.0,
+                    "armor": 2.0, "piercing": 5.0, "hardness": 0.2, "max_speed": 4.0}
+            }"#,
+        )
+        .unwrap();
+        let ut = UnitTemplateTable::from_str(
+            r#"{
+                "line_battalions": {
+                    "infantry": {"max_strength": 25, "max_organisation": 60,
+                        "needs": {"infantry_equipment": 100}},
+                    "motorized": {"max_strength": 25, "max_organisation": 60,
+                        "needs": {"infantry_equipment": 100, "motorized_equipment": 35}},
+                    "mechanized": {"max_strength": 25, "max_organisation": 60,
+                        "needs": {"infantry_equipment": 100, "mechanized_equipment": 40}}
+                },
+                "support_companies": {
+                    "recon": {"max_strength": 2, "max_organisation": 20,
+                        "needs": {"infantry_equipment": 40, "support_equipment": 10}}
+                }
+            }"#,
+        )
+        .unwrap();
+        (eq, ut)
+    }
+
+    /// One-division save skeleton for the threshold/mobility tests:
+    /// ratio-form org/strength 1.0, caller picks the regiments, support
+    /// block and equipment lines.
+    fn field_test_save(regiments: &str, support: &str, equipment: &str) -> String {
+        format!(
+            r#"
+countries = {{
+    GER = {{
+        division_template = {{
+            "Field-Test" = {{
+                regiments = {{ {regiments} }}
+                {support}
+            }}
+        }}
+        units = {{
+            division = {{
+                id = 1
+                division_template = "Field-Test"
+                organization = 1.0
+                strength = 1.0
+                equipment = {{ {equipment} }}
+            }}
+        }}
+    }}
+}}
+"#
+        )
+    }
+
+    fn assemble_field_test(
+        save: &str,
+        eq: &EquipmentTable,
+        ut: &UnitTemplateTable,
+    ) -> Vec<BattalionUnit> {
+        let div = parse_first_division(save);
+        create_tactical_units(
+            &div,
+            Side::Attacker,
+            eq,
+            ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+        )
+    }
+
+    #[test]
+    fn battalion_below_field_threshold_does_not_spawn() {
+        let (eq, ut) = mobility_tables();
+        // Motorized battalion, rifles full, trucks at 5% (1.75 of 35):
+        // below the 10% bar → the battalion does not field; the HQ still
+        // fields, at 0 strength (§6.13).
+        let save = field_test_save(
+            "motorized = { x = 0 y = 0 }",
+            "",
+            "infantry_equipment_0 = 100 motorized_equipment_1 = 1.75",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        assert_eq!(units.len(), 1, "units={}", units.len());
+        assert!(units.iter().all(|u| u.is_hq()));
+        assert_eq!(units[0].strength, 0.0, "hq str={}", units[0].strength);
+        assert!(!units[0].is_combat_effective());
+
+        // Trucks at exactly 10% (3.5 of 35) — the bar is inclusive → the
+        // battalion fields.
+        let save = field_test_save(
+            "motorized = { x = 0 y = 0 }",
+            "",
+            "infantry_equipment_0 = 100 motorized_equipment_1 = 3.5",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let mot = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::Motorized)
+            .expect("motorized battalion fields at 10% trucks");
+        assert!(mot.strength > 0.0);
+    }
+
+    #[test]
+    fn support_company_below_field_threshold_does_not_attach() {
+        let (eq, ut) = mobility_tables();
+        // Recon needs 40 rifles + 10 support equipment: rifles full,
+        // support stock 1 of 10 (10%) → below the 20% bar → never attaches.
+        let save = field_test_save(
+            "infantry = { x = 0 y = 0 }",
+            "support = { recon = { x = 0 y = 0 } }",
+            "infantry_equipment_0 = 140 support_equipment_1 = 1",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let inf = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::Infantry)
+            .expect("infantry fields");
+        assert!(inf.support.is_empty(), "recon must not attach at 10%");
+
+        // Two pieces (exactly 20%) — the bar is inclusive → attaches.
+        let save = field_test_save(
+            "infantry = { x = 0 y = 0 }",
+            "support = { recon = { x = 0 y = 0 } }",
+            "infantry_equipment_0 = 140 support_equipment_1 = 2",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let inf = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::Infantry)
+            .expect("infantry fields");
+        assert_eq!(inf.support.len(), 1);
+        assert_eq!(inf.support[0].kind, tactical_core::SupportKind::Recon);
+    }
+
+    #[test]
+    fn support_company_entry_attaches_one_attachment_per_count() {
+        // §5.3: the equipment pool charges need × count, so a 3-copy
+        // company entry (repeated save keys) fields THREE attachments —
+        // round-robin spreads them across the battalions.
+        let (eq, ut) = mobility_tables();
+        let save = field_test_save(
+            "infantry = { x = 0 y = 0 } infantry = { x = 1 y = 0 } infantry = { x = 2 y = 0 }",
+            "support = { recon = { x = 0 y = 0 } recon = { x = 1 y = 0 } recon = { x = 2 y = 0 } }",
+            "infantry_equipment_0 = 420 support_equipment_1 = 30",
+        );
+        let div = parse_first_division(&save);
+        assert_eq!(div.support_companies.len(), 1, "one entry, count 3");
+        assert_eq!(div.support_companies[0].count, 3);
+        let units = assemble_field_test(&save, &eq, &ut);
+        let infs: Vec<_> = units
+            .iter()
+            .filter(|u| u.unit_type == UnitType::Infantry)
+            .collect();
+        assert_eq!(infs.len(), 3);
+        for u in &infs {
+            assert_eq!(u.support.len(), 1, "{} rides one recon", u.name);
+            assert_eq!(u.support[0].kind, tactical_core::SupportKind::Recon);
+            assert_eq!(u.support[0].token, "recon");
+        }
+    }
+
+    #[test]
+    fn support_count_wraps_round_robin_over_fewer_battalions() {
+        // More copies than hosts: the wrap stacks the extras on the first
+        // battalion (attach() allows repeated kinds on one host).
+        let (eq, ut) = mobility_tables();
+        let save = field_test_save(
+            "infantry = { x = 0 y = 0 } infantry = { x = 1 y = 0 }",
+            "support = { recon = { x = 0 y = 0 } recon = { x = 1 y = 0 } recon = { x = 2 y = 0 } }",
+            "infantry_equipment_0 = 320 support_equipment_1 = 30",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let infs: Vec<_> = units
+            .iter()
+            .filter(|u| u.unit_type == UnitType::Infantry)
+            .collect();
+        assert_eq!(infs.len(), 2);
+        assert_eq!(infs[0].support.len(), 2, "first host collects the wrap");
+        assert_eq!(infs[1].support.len(), 1);
+    }
+
+    #[test]
+    fn no_surviving_battalion_means_no_attachments() {
+        // The attach loop guards on an empty host vec: a division whose
+        // line groups all fall below the field threshold keeps NO company
+        // — the surviving recon entry has nothing to ride with (§5.3).
+        let (eq, _) = mobility_tables();
+        // This company's needs touch only support equipment, so it clears
+        // its 20% bar while the rifle-starved infantry does not field.
+        let ut = UnitTemplateTable::from_str(
+            r#"{
+                "line_battalions": {
+                    "infantry": {"max_strength": 25, "max_organisation": 60,
+                        "needs": {"infantry_equipment": 100}}
+                },
+                "support_companies": {
+                    "recon": {"max_strength": 2, "max_organisation": 20,
+                        "needs": {"support_equipment": 10}}
+                }
+            }"#,
+        )
+        .unwrap();
+        let save = field_test_save(
+            "infantry = { x = 0 y = 0 }",
+            "support = { recon = { x = 0 y = 0 } }",
+            "infantry_equipment_0 = 9 support_equipment_1 = 10",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        assert_eq!(units.len(), 1, "only the hollow HQ fields");
+        assert!(units.iter().all(|u| u.is_hq()));
+        assert!(
+            units.iter().all(|u| u.support.is_empty()),
+            "no host → no attachments"
+        );
+    }
+
+    #[test]
+    fn mobility_fill_falls_back_when_the_template_lacks_the_mobility_archetype() {
+        // A motorized template whose needs list no trucks at all (modded
+        // or minimal content): the mobility shortfall reads the group's
+        // scarcest per-archetype fill instead of pretending full stock —
+        // half rifles → 4 + 8 × 0.6 = 8.8 km/h, the same tier a
+        // half-trucked battalion pays (§5.3).
+        let (eq, _) = mobility_tables();
+        let ut = UnitTemplateTable::from_str(
+            r#"{
+                "line_battalions": {
+                    "motorized": {"max_strength": 25, "max_organisation": 60,
+                        "needs": {"infantry_equipment": 100}}
+                },
+                "support_companies": {}
+            }"#,
+        )
+        .unwrap();
+        let save = field_test_save(
+            "motorized = { x = 0 y = 0 }",
+            "",
+            "infantry_equipment_0 = 50",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let mot = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::Motorized)
+            .expect("half rifles: motorized fields");
+        assert!((mot.speed_kmh - 8.8).abs() < 1e-3, "v={}", mot.speed_kmh);
+    }
+
+    #[test]
+    fn infantry_at_the_field_threshold_edge() {
+        let (eq, ut) = mobility_tables();
+        // 9% rifles → no battalion; 10% → fields (inclusive bar).
+        let save = field_test_save("infantry = { x = 0 y = 0 }", "", "infantry_equipment_0 = 9");
+        let units = assemble_field_test(&save, &eq, &ut);
+        assert!(
+            units.iter().all(|u| u.is_hq()),
+            "9% rifles: units={}",
+            units.len()
+        );
+
+        let save = field_test_save(
+            "infantry = { x = 0 y = 0 }",
+            "",
+            "infantry_equipment_0 = 10",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let inf = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::Infantry)
+            .expect("10% rifles: battalion fields");
+        // Strength = 25 × min(1.0 manpower, 0.1 fill) = 2.5; foot speed is
+        // untouched by the mobility ladder (no mobility equipment).
+        assert!((inf.strength - 2.5).abs() < 1e-2, "str={}", inf.strength);
+        assert!((inf.speed_kmh - 4.0).abs() < 1e-3, "v={}", inf.speed_kmh);
+    }
+
+    #[test]
+    fn low_manpower_division_does_not_field_battalions() {
+        let (eq, ut) = mobility_tables();
+        // Equipment full, manpower at 5%: min(manpower, fill) = 0.05 < 0.1
+        // → no battalion fields; the HQ fields at 0 strength.
+        let save = field_test_save(
+            "infantry = { x = 0 y = 0 }",
+            "",
+            "infantry_equipment_0 = 100",
+        )
+        .replace("strength = 1.0", "strength = 0.05");
+        let units = assemble_field_test(&save, &eq, &ut);
+        assert!(units.iter().all(|u| u.is_hq()), "units={}", units.len());
+        let hq = units.iter().find(|u| u.is_hq()).expect("HQ fields");
+        assert_eq!(hq.strength, 0.0, "hq str={}", hq.strength);
+    }
+
+    #[test]
+    fn dropped_groups_release_their_equipment_share() {
+        let (eq, ut) = mobility_tables();
+        // Infantry + motorized, no trucks: the motorized group drops and
+        // its rifle share flows back — the infantry fills 100 of 100 (not
+        // 100 of 200), doubling its strength.
+        let save = field_test_save(
+            "infantry = { x = 0 y = 0 } motorized = { x = 1 y = 0 }",
+            "",
+            "infantry_equipment_0 = 100",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        assert!(
+            !units.iter().any(|u| u.unit_type == UnitType::Motorized),
+            "no trucks: motorized must not field"
+        );
+        let inf = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::Infantry)
+            .expect("infantry fields on the redistributed share");
+        assert!((inf.strength - 25.0).abs() < 1e-2, "str={}", inf.strength);
+        assert!(
+            (inf.soft_attack - 3.0).abs() < 1e-2,
+            "soft={}",
+            inf.soft_attack
+        );
+    }
+
+    #[test]
+    fn mobility_shortfall_slows_motorized_battalions_in_tiers() {
+        // The ladder itself: 20% fill tiers between marching pace (4) and
+        // the chassis base; 0% fill = the crews march; foot and towed
+        // bases never change.
+        assert!((mobility_adjusted_speed(12.0, 1.0) - 12.0).abs() < 1e-3);
+        assert!((mobility_adjusted_speed(12.0, 0.5) - 8.8).abs() < 1e-3);
+        assert!((mobility_adjusted_speed(12.0, 0.2) - 5.6).abs() < 1e-3);
+        assert!((mobility_adjusted_speed(12.0, 0.21) - 7.2).abs() < 1e-3);
+        assert!((mobility_adjusted_speed(12.0, 0.0) - 4.0).abs() < 1e-3);
+        assert!((mobility_adjusted_speed(4.0, 0.0) - 4.0).abs() < 1e-3);
+        assert!((mobility_adjusted_speed(3.0, 0.5) - 3.0).abs() < 1e-3);
+        assert!((mobility_adjusted_speed(10.0, 0.5) - 7.6).abs() < 1e-3);
+
+        // End to end: a motorized battalion at half trucks drives at
+        // 4 + 8 × 0.6 = 8.8 km/h...
+        let (eq, ut) = mobility_tables();
+        let save = field_test_save(
+            "motorized = { x = 0 y = 0 }",
+            "",
+            "infantry_equipment_0 = 100 motorized_equipment_1 = 17.5",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let mot = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::Motorized)
+            .expect("half trucks: motorized fields");
+        assert!((mot.speed_kmh - 8.8).abs() < 1e-3, "v={}", mot.speed_kmh);
+
+        // ...a mechanized one at half APCs at 4 + 6 × 0.6 = 7.6...
+        let save = field_test_save(
+            "mechanized = { x = 0 y = 0 }",
+            "",
+            "infantry_equipment_0 = 100 mechanized_equipment_1 = 20",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let mech = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::Mechanized)
+            .expect("half APCs: mechanized fields");
+        assert!((mech.speed_kmh - 7.6).abs() < 1e-3, "v={}", mech.speed_kmh);
+
+        // ...full trucks keep the full 12 km/h...
+        let save = field_test_save(
+            "motorized = { x = 0 y = 0 }",
+            "",
+            "infantry_equipment_0 = 100 motorized_equipment_1 = 35",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let mot = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::Motorized)
+            .unwrap();
+        assert!((mot.speed_kmh - 12.0).abs() < 1e-3, "v={}", mot.speed_kmh);
+
+        // ...and towed guns march at 3 km/h regardless of fill.
+        let (eq2, ut2) = mini_tables();
+        let save = field_test_save(
+            "artillery_brigade = { x = 0 y = 0 }",
+            "",
+            "infantry_equipment_0 = 2.4",
+        );
+        let units = assemble_field_test(&save, &eq2, &ut2);
+        let arty = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::ArtilleryBrigade)
+            .expect("20% guns: towed artillery fields");
+        assert!((arty.speed_kmh - 3.0).abs() < 1e-3, "v={}", arty.speed_kmh);
+
+        // A tank battalion slows by its chassis stock — the weight class
+        // maps to the type's `*_tank_chassis` archetype (30 of 60 → tier
+        // 0.6 → 4 + 8 × 0.6 = 8.8).
+        let save = field_test_save(
+            "light_armor = { x = 0 y = 0 }",
+            "",
+            "light_tank_chassis_0 = 30",
+        );
+        let units = assemble_field_test(&save, &eq2, &ut2);
+        let tank = units
+            .iter()
+            .find(|u| u.unit_type == UnitType::LightArmor)
+            .expect("half chassis: armor fields");
+        assert!((tank.speed_kmh - 8.8).abs() < 1e-3, "v={}", tank.speed_kmh);
+    }
+
+    #[test]
+    fn hq_fill_counts_only_surviving_battalions() {
+        let (eq, ut) = mobility_tables();
+        // Motorized dropped (no trucks), infantry at full stock: the HQ
+        // fill reads the survivor's needs only → full-strength HQ.
+        let save = field_test_save(
+            "infantry = { x = 0 y = 0 } motorized = { x = 1 y = 0 }",
+            "",
+            "infantry_equipment_0 = 100",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let hq = units.iter().find(|u| u.is_hq()).expect("HQ fields");
+        assert!((hq.strength - 3.0).abs() < 1e-2, "hq str={}", hq.strength);
+
+        // Same division, rifles at half: the survivor fills 50 of 100 →
+        // HQ at half (not the 50/200 the dropped motorized would have
+        // implied).
+        let save = field_test_save(
+            "infantry = { x = 0 y = 0 } motorized = { x = 1 y = 0 }",
+            "",
+            "infantry_equipment_0 = 50",
+        );
+        let units = assemble_field_test(&save, &eq, &ut);
+        let hq = units.iter().find(|u| u.is_hq()).expect("HQ fields");
+        assert!((hq.strength - 1.5).abs() < 1e-2, "hq str={}", hq.strength);
+    }
+
+    /// §6.7 fixture: one infantry battalion, supply storage at `ratio` of
+    /// `max_supply` (108), no fuel-burning gear.
+    fn supply_test_save(ratio: f32) -> String {
+        format!(
+            r#"
+countries = {{
+    GER = {{
+        division_template = {{
+            "Test-Division" = {{
+                regiments = {{ infantry = {{ x = 0 y = 0 }} }}
+            }}
+        }}
+        units = {{
+            division = {{
+                id = 1
+                division_template = "Test-Division"
+                organization = 1.0
+                strength = 1.0
+                max_supply = 108
+                army_current_supply_ratio = {ratio}
+                equipment = {{ infantry_equipment_0 = 100 }}
+            }}
+        }}
+    }}
+}}
+"#
+        )
+    }
+
+    /// §6.7 fixture: one tank + one infantry battalion sharing a division;
+    /// fuel reserve at `fuel` (capacity = 60 tanks × 4.0 × 0.5 × 96 h).
+    fn fuel_test_save(fuel: f32) -> String {
+        format!(
+            r#"
+countries = {{
+    GER = {{
+        division_template = {{
+            "Test-Division" = {{
+                regiments = {{
+                    light_armor = {{ x = 0 y = 0 }}
+                    infantry = {{ x = 1 y = 0 }}
+                }}
+            }}
+        }}
+        units = {{
+            division = {{
+                id = 1
+                division_template = "Test-Division"
+                organization = 1.0
+                strength = 1.0
+                fuel = {fuel}
+                equipment = {{
+                    light_tank_chassis_0 = 60
+                    infantry_equipment_0 = 100
+                }}
+            }}
+        }}
+    }}
+}}
+"#
+        )
+    }
+
+    fn assemble_plain(div: &crate::DivisionData, eq: &EquipmentTable, ut: &UnitTemplateTable) -> Vec<BattalionUnit> {
+        create_tactical_units(
+            div,
+            Side::Attacker,
+            eq,
+            ut,
+            None,
+            CountryOrgModifier::default(),
+            CountryCombatModifier::default(),
+            &LeaderBonus::default(),
+            0,
+        )
+    }
+
+    fn pick_unit(units: &[BattalionUnit], ty: UnitType) -> &BattalionUnit {
+        units.iter().find(|u| u.unit_type == ty).unwrap()
+    }
+
+    #[test]
+    fn supply_storage_scales_org_attack_defense_and_speed() {
+        let (eq, ut) = mini_tables();
+        let full = assemble_plain(&parse_first_division(&supply_test_save(108.0)), &eq, &ut);
+        let dry = assemble_plain(&parse_first_division(&supply_test_save(0.0)), &eq, &ut);
+        let (full, dry) = (&full[0], &dry[0]);
+        assert!((full.supply - 1.0).abs() < 1e-6);
+        assert!((dry.supply - 0.0).abs() < 1e-6);
+        // Zero points (§6.7): max org ×0.35, attack −25%, defense −35%,
+        // speed ×0.2; org follows the cap at the same storage ratio.
+        assert!((dry.max_org / full.max_org - 0.35).abs() < 1e-4);
+        assert!((dry.org / full.org - 0.35).abs() < 1e-4);
+        assert!((dry.soft_attack / full.soft_attack - 0.75).abs() < 1e-4);
+        assert!((dry.hard_attack / full.hard_attack - 0.75).abs() < 1e-4);
+        assert!((dry.defense / full.defense - 0.65).abs() < 1e-4);
+        assert!((dry.breakthrough / full.breakthrough - 0.65).abs() < 1e-4);
+        assert!((dry.speed_kmh / full.speed_kmh - 0.2).abs() < 1e-4);
+        // Strength is manpower/equipment — supply does not touch it.
+        assert!((dry.strength - full.strength).abs() < 1e-6);
+        // Half storage ramps linearly (t = 0.5): attack ×0.875, org ×0.675.
+        let half = assemble_plain(&parse_first_division(&supply_test_save(54.0)), &eq, &ut);
+        assert!((half[0].soft_attack / full.soft_attack - 0.875).abs() < 1e-4);
+        assert!((half[0].max_org / full.max_org - 0.675).abs() < 1e-4);
+    }
+
+    #[test]
+    fn supply_cap_shrinks_only_the_org_ceiling() {
+        let (eq, ut) = mini_tables();
+        // Absolute-form org/str (1.19 saves): base max 60, storage-driven
+        // cap 21. Current org mirrors the save's absolute 15 on both sides.
+        let save = |storage: f32| {
+            format!(
+                r#"
+countries = {{
+    GER = {{
+        division_template = {{
+            "Test-Division" = {{
+                regiments = {{ infantry = {{ x = 0 y = 0 }} }}
+            }}
+        }}
+        units = {{
+            division = {{
+                id = 1
+                division_template = "Test-Division"
+                organization = 15
+                strength = 25
+                max_supply = 108
+                army_current_supply_ratio = {storage}
+                equipment = {{ infantry_equipment_0 = 100 }}
+            }}
+        }}
+    }}
+}}
+"#
+            )
+        };
+        let full = assemble_plain(&parse_first_division(&save(108.0)), &eq, &ut);
+        let dry = assemble_plain(&parse_first_division(&save(0.0)), &eq, &ut);
+        let (full, dry) = (&full[0], &dry[0]);
+        assert!((full.max_org - 60.0).abs() < 1e-3, "{}", full.max_org);
+        assert!((dry.max_org - 21.0).abs() < 1e-3, "{}", dry.max_org);
+        assert!((full.org - 15.0).abs() < 1e-3, "{}", full.org);
+        assert!((dry.org - 15.0).abs() < 1e-3, "{}", dry.org);
+    }
+
+    #[test]
+    fn dry_fuel_burns_only_fuel_equipment_stats() {
+        let (eq, ut) = mini_tables();
+        // Capacity: 60 × 4.0 × 0.5 × 96 = 11520 — a full reserve reads 1.0.
+        let full = assemble_plain(&parse_first_division(&fuel_test_save(11520.0)), &eq, &ut);
+        let dry = assemble_plain(&parse_first_division(&fuel_test_save(0.0)), &eq, &ut);
+        let pick = pick_unit;
+        let (tank_f, tank_d) = (pick(&full, UnitType::LightArmor), pick(&dry, UnitType::LightArmor));
+        let (inf_f, inf_d) = (pick(&full, UnitType::Infantry), pick(&dry, UnitType::Infantry));
+        assert!((tank_d.fuel - 0.0).abs() < 1e-6);
+        // Fuel rows at zero reserve: stats ×0.1, speed ×0.4.
+        assert!((tank_d.soft_attack / tank_f.soft_attack - 0.1).abs() < 1e-4);
+        assert!((tank_d.hard_attack / tank_f.hard_attack - 0.1).abs() < 1e-4);
+        assert!((tank_d.defense / tank_f.defense - 0.1).abs() < 1e-4);
+        assert!((tank_d.breakthrough / tank_f.breakthrough - 0.1).abs() < 1e-4);
+        assert!((tank_d.armor / tank_f.armor - 0.1).abs() < 1e-4);
+        assert!((tank_d.hardness / tank_f.hardness - 0.1).abs() < 1e-4);
+        assert!((tank_d.speed_kmh / tank_f.speed_kmh - 0.4).abs() < 1e-4);
+        // The leg infantry sharing the division is untouched.
+        assert!((inf_d.soft_attack - inf_f.soft_attack).abs() < 1e-6);
+        assert!((inf_d.speed_kmh - inf_f.speed_kmh).abs() < 1e-6);
+        // The division HQ mirrors the logistics state for the panel.
+        let hq = dry.iter().find(|u| u.is_hq()).unwrap();
+        assert!((hq.fuel - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fuel_penalty_ramps_in_below_quarter_reserve() {
+        let (eq, ut) = mini_tables();
+        let full = assemble_plain(&parse_first_division(&fuel_test_save(11520.0)), &eq, &ut);
+        let soft_full = full[0].soft_attack;
+        let speed_full = full[0].speed_kmh;
+        // 12.5% reserve → t = 0.5: stats ×0.55, speed ×0.7.
+        let half = assemble_plain(&parse_first_division(&fuel_test_save(1440.0)), &eq, &ut);
+        assert!((half[0].soft_attack / soft_full - 0.55).abs() < 1e-4);
+        assert!((half[0].speed_kmh / speed_full - 0.7).abs() < 1e-4);
+        // Exactly at the 25% threshold the penalty has not started.
+        let edge = assemble_plain(&parse_first_division(&fuel_test_save(2880.0)), &eq, &ut);
+        assert!((edge[0].soft_attack - soft_full).abs() < 1e-4);
+    }
+
+    #[test]
+    fn missing_logistics_fields_read_as_full() {
+        let (eq, ut) = mini_tables();
+        let units = assemble_plain(&parse_first_division(DIVISION_SAVE), &eq, &ut);
+        assert!(units
+            .iter()
+            .all(|u| (u.supply - 1.0).abs() < 1e-6 && (u.fuel - 1.0).abs() < 1e-6));
     }
 }

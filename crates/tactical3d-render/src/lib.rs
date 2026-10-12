@@ -84,6 +84,10 @@ impl Plugin for Tactical3dPlugin {
                     board::sync_zone_border,
                     board::sync_ally_sector_overlay,
                     board::sync_flag_zones,
+                    // §6.1 seals are pure cosmetics too (turn-driven, no
+                    // gameplay state): skip the rebuild pass while
+                    // minimized with the other render-only systems.
+                    board::sync_sound_markers.run_if(crate::gate::gate_open),
                     // Pure cosmetics: they only need to run on frames that
                     // actually render (the gate's ~10 fps idle heartbeat
                     // keeps the pulse/ants stepping).

@@ -15,7 +15,11 @@
 //!   terrain. City clusters are the whole urban set (Warsaw 32, Berlin 62).
 //! - Progress 0..=`flag_progress_cap`: attacker:defender unit-count ratio
 //!   inside the zone > `flag_capture_ratio` → +1 per turn; <
-//!   `flag_decay_ratio` → −1; in between → contested, unchanged.
+//!   `flag_decay_ratio` → −1; in between → contested, unchanged. An EMPTY
+//!   zone (no effective unit of either side) never moves the value at any
+//!   progress — marching off must not bleed a captured key point; a flag
+//!   is given back only by a defender force clearing the same decay bar
+//!   (defender share above 2/3).
 //! - Victory trigger (end of turn): city = the single flag full; field =
 //!   ALL three full at the same time. On trigger the ATTACKER WINS
 //!   IMMEDIATELY: every defender battalion's org
@@ -141,14 +145,6 @@ impl FlagState {
                 .all(|f| f.progress >= params.flag_progress_cap),
         }
     }
-
-    /// Highest per-flag progress fraction (0.0..=1.0) — the UI warning tier.
-    pub fn max_progress_ratio(&self, params: &CombatParams) -> f32 {
-        self.flags
-            .iter()
-            .map(|f| f.progress as f32 / params.flag_progress_cap as f32)
-            .fold(0.0, f32::max)
-    }
 }
 
 /// What one end-of-turn [`FlagState::tick`] produced.
@@ -166,6 +162,12 @@ pub struct FlagTick {
 /// inside the zone > `flag_capture_ratio` → +1; < `flag_decay_ratio` → −1;
 /// in between → contested, unchanged. HQs and non-combat-effective units
 /// (broken, retreating, off-board) count for nothing.
+///
+/// An EMPTY zone — no effective unit of either side inside it — is not a
+/// push by anyone: the value stays where it stands at every progress
+/// level. Marching off must not bleed a captured key point, and a flag is
+/// only given back by a defender force that clears the same decay bar
+/// (ratio < `flag_decay_ratio`, i.e. a defender share above 2/3).
 pub fn update_flag_progress(
     flag: &mut FlagZone,
     grid: &HexGrid,
@@ -183,13 +185,14 @@ pub fn update_flag_progress(
             Side::Defender => def += 1,
         }
     }
-    // The designer rule operates on the raw ratio; guard the division.
+    // Nobody in the zone: no side is pressing the point, so nothing moves.
+    if atk == 0 && def == 0 {
+        return;
+    }
+    // The designer rule operates on the raw ratio; the empty zone is gone,
+    // so a defenderless zone is a pure attacker hold (ratio ∞ → +1).
     let ratio = if def == 0 {
-        if atk == 0 {
-            0.0
-        } else {
-            f32::INFINITY
-        }
+        f32::INFINITY
     } else {
         atk as f32 / def as f32
     };
@@ -437,14 +440,23 @@ fn sample_field_anchors(
         .unwrap();
     chosen.push(first);
     while chosen.len() < need {
-        let next = band
+        // Key the tie-break with precomputed draws: taking them inside the
+        // comparator would silently make the anchors depend on how often
+        // `max_by_key` happens to call it (its once-per-element contract is
+        // an implementation detail, not a promise).
+        let candidates: Vec<(HexCoord, i32, u64)> = band
             .iter()
             .copied()
             .filter(|cell| chosen.iter().all(|c| cell.distance(*c) >= min_sep))
-            .max_by_key(|cell| {
+            .map(|cell| {
                 let md = chosen.iter().map(|c| cell.distance(*c)).min().unwrap_or(0);
-                (md, rng.next_u64())
-            });
+                (cell, md, rng.next_u64())
+            })
+            .collect();
+        let next = candidates
+            .into_iter()
+            .max_by_key(|(_, md, jitter)| (*md, *jitter))
+            .map(|(cell, _, _)| cell);
         chosen.push(next?); // None = no further well-separated anchor
     }
     Some(chosen)
@@ -558,6 +570,29 @@ mod tests {
     }
 
     #[test]
+    fn field_anchors_are_reproducible_and_consume_the_rng_the_same_way() {
+        // The tie-break jitter is one precomputed draw per surviving
+        // candidate: the same seed must give the same anchors *and* leave
+        // the generator on the same state. Draws taken inside the
+        // comparator would make both depend on how often `max_by_key`
+        // calls it.
+        let g = HexGrid::new(40, 40, Terrain::Plains);
+        let az: Vec<HexCoord> = (0..40).map(|r| HexCoord::new(0, r)).collect();
+        let dz = big_defender_zone();
+        let params = CombatParams::default();
+        let mut ra = XorShift64::new(7);
+        let mut rb = XorShift64::new(7);
+        let fa = derive_flag_state(&g, &az, &dz, &[], &params, &mut ra).unwrap();
+        let fb = derive_flag_state(&g, &az, &dz, &[], &params, &mut rb).unwrap();
+        assert_eq!(fa.flags.len(), 3);
+        assert_eq!(
+            fa.flags.iter().map(|f| f.anchor).collect::<Vec<_>>(),
+            fb.flags.iter().map(|f| f.anchor).collect::<Vec<_>>()
+        );
+        assert_eq!(ra.next_u64(), rb.next_u64(), "RNG streams diverged");
+    }
+
+    #[test]
     fn script_anchors_take_priority_over_fallback() {
         let g = HexGrid::new(40, 40, Terrain::Plains);
         let az: Vec<HexCoord> = (0..40).map(|r| HexCoord::new(0, r)).collect();
@@ -653,6 +688,78 @@ mod tests {
         units.push(broken);
         update_flag_progress(&mut flag, &g, &units, &params);
         assert_eq!(flag.progress, 0);
+    }
+
+    #[test]
+    fn an_empty_zone_never_moves_the_value() {
+        let g = grid_with_city();
+        let params = CombatParams::default();
+        let mut flag = FlagZone::new(HexCoord::new(32, 7), big_defender_zone());
+        // Full, mid and zero: nobody effective is in the zone, nothing
+        // moves. The uniform 0/0 rule — an absent attacker must not bleed a
+        // captured point, and with no defender there is no push either.
+        for progress in [params.flag_progress_cap, 5, 0] {
+            flag.progress = progress;
+            update_flag_progress(&mut flag, &g, &[], &params);
+            assert_eq!(flag.progress, progress);
+        }
+        // Units that count for nothing leave the zone empty: a broken
+        // attacker and an HQ defender still move nothing.
+        let mut broken = unit(0, Side::Attacker, HexCoord::new(30, 5));
+        broken.org = 0.0;
+        let mut hq = unit(1, Side::Defender, HexCoord::new(31, 5));
+        hq.attrs |= crate::unit::Attrs::HQ;
+        flag.progress = 5;
+        update_flag_progress(&mut flag, &g, &[broken, hq], &params);
+        assert_eq!(flag.progress, 5);
+        // An attacker-only zone is NOT empty: it keeps pressing (ratio ∞),
+        // capped at the top.
+        let atk = vec![unit(0, Side::Attacker, HexCoord::new(30, 5))];
+        update_flag_progress(&mut flag, &g, &atk, &params);
+        assert_eq!(flag.progress, 6);
+        flag.progress = params.flag_progress_cap;
+        update_flag_progress(&mut flag, &g, &atk, &params);
+        assert_eq!(flag.progress, params.flag_progress_cap);
+    }
+
+    #[test]
+    fn only_a_defender_push_rolls_a_captured_flag_back() {
+        let g = grid_with_city();
+        let params = CombatParams::default();
+        let mut flag = FlagZone::new(HexCoord::new(32, 7), big_defender_zone());
+        flag.progress = params.flag_progress_cap;
+        // A defender walks into the empty zone — a 100% defender share
+        // clears the 2/3 bar, the flag starts coming back.
+        let mut units = vec![unit(0, Side::Defender, HexCoord::new(30, 5))];
+        update_flag_progress(&mut flag, &g, &units, &params);
+        assert_eq!(flag.progress, params.flag_progress_cap - 1);
+        // 3 attackers vs 2 defenders (defender share 2/5) — contested, held.
+        flag.progress = params.flag_progress_cap;
+        units = vec![
+            unit(0, Side::Attacker, HexCoord::new(30, 5)),
+            unit(1, Side::Attacker, HexCoord::new(31, 5)),
+            unit(2, Side::Attacker, HexCoord::new(32, 5)),
+            unit(3, Side::Defender, HexCoord::new(33, 5)),
+            unit(4, Side::Defender, HexCoord::new(34, 5)),
+        ];
+        update_flag_progress(&mut flag, &g, &units, &params);
+        assert_eq!(flag.progress, params.flag_progress_cap);
+        // Exactly the bar: 2 vs 4 (defender share 2/3, ratio 0.5) — held,
+        // "above 2/3" is strict.
+        units = vec![
+            unit(0, Side::Attacker, HexCoord::new(30, 5)),
+            unit(1, Side::Attacker, HexCoord::new(31, 5)),
+            unit(3, Side::Defender, HexCoord::new(33, 5)),
+            unit(4, Side::Defender, HexCoord::new(34, 5)),
+            unit(5, Side::Defender, HexCoord::new(30, 6)),
+            unit(6, Side::Defender, HexCoord::new(31, 6)),
+        ];
+        update_flag_progress(&mut flag, &g, &units, &params);
+        assert_eq!(flag.progress, params.flag_progress_cap);
+        // One attacker fewer — the share tips past 2/3 and it rolls back.
+        units.remove(1);
+        update_flag_progress(&mut flag, &g, &units, &params);
+        assert_eq!(flag.progress, params.flag_progress_cap - 1);
     }
 
     #[test]

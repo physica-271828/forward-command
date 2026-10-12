@@ -367,8 +367,8 @@ mod tests {
     /// front of the player at precisely the wrong moment.
     #[test]
     fn shipping_locales_carry_the_notice_keys() {
-        for lang in [Language::English, Language::SimpChinese] {
-            let loc = Locale::load(lang);
+        for lang in Language::ALL {
+            let loc = Locale::load(*lang);
             let text = notice_text(&loc, &Verdict::ProgramStale, "0.3.2-beta.3", Some("0.3.3"))
                 .expect("program-stale notice");
             assert!(

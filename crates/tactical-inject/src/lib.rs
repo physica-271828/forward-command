@@ -50,8 +50,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_OEM_3, VK_RETURN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, IsWindowVisible, PostMessageW, SendMessageTimeoutW, SetForegroundWindow,
-    SMTO_ABORTIFHUNG, WM_CHAR, WM_GETTEXT, WM_KEYDOWN, WM_KEYUP,
+    EnumWindows, GetForegroundWindow, IsWindowVisible, PostMessageW, SendMessageTimeoutW,
+    SetForegroundWindow, SMTO_ABORTIFHUNG, WM_CHAR, WM_GETTEXT, WM_KEYDOWN, WM_KEYUP,
 };
 
 /// Default HOI4 window title *prefix* used to locate the game (DESIGN.md
@@ -100,6 +100,12 @@ const LOG_TAIL_BYTES: u64 = 8192;
 /// Settle time after `SetForegroundWindow` before sending keys (legacy
 /// foreground fallback, DESIGN.md §3.2 pseudocode step 2).
 const FOREGROUND_SETTLE: Duration = Duration::from_millis(100);
+
+/// Foreground verification (legacy fallback chain): after
+/// `SetForegroundWindow` the lock may still veto silently, so poll
+/// `GetForegroundWindow` a few times before trusting the focus.
+const FOCUS_VERIFY_RETRIES: u32 = 8;
+const FOCUS_VERIFY_POLL: Duration = Duration::from_millis(100);
 
 /// Time given to HOI4 to execute the batch before the console is closed
 /// (legacy foreground fallback, DESIGN.md §3.2 pseudocode step 3).
@@ -249,6 +255,21 @@ impl Injector {
             hoi4_window_title_prefix: hoi4_window_title_prefix.into(),
             batch_file_path,
             log_path: None,
+            backend: InjectBackend::default(),
+        }
+    }
+
+    /// Creates an injector for an explicit HOI4 user directory, keeping the
+    /// fixed batch-file name — for menu/live-level injections, where the
+    /// user directory comes from the application settings instead of the
+    /// built-in default location (which assumes the English
+    /// `%USERPROFILE%\Documents` and fails where Documents is redirected
+    /// (OneDrive) or localized, e.g. Turkish `Belgeler`).
+    pub fn for_user_dir(user_dir: PathBuf, log_path: Option<PathBuf>) -> Self {
+        Self {
+            hoi4_window_title_prefix: DEFAULT_HOI4_WINDOW_TITLE_PREFIX.to_string(),
+            batch_file_path: user_dir.join(BATCH_FILE_NAME),
+            log_path,
             backend: InjectBackend::default(),
         }
     }
@@ -529,10 +550,31 @@ impl Injector {
             match action {
                 InjectAction::FocusHoi4 => {
                     let hwnd = self.find_hoi4_window().ok_or(InjectError::WindowNotFound)?;
-                    // SAFETY: `hwnd` is a non-null window handle returned by
-                    // the EnumWindows search above; SetForegroundWindow is
-                    // safe to call with any valid top-level window handle.
-                    if !unsafe { SetForegroundWindow(hwnd) }.as_bool() {
+                    // The foreground lock can silently veto
+                    // SetForegroundWindow for a background process (the
+                    // menu-side raise path logs exactly that), so the
+                    // boolean alone is no proof: retry on a short cadence
+                    // and require the foreground to ACTUALLY be ours
+                    // before any SendInput keystroke leaves the process —
+                    // otherwise the batch text lands in a stranger's
+                    // window.
+                    let mut focused = false;
+                    for _ in 0..FOCUS_VERIFY_RETRIES {
+                        // SAFETY: `hwnd` is a non-null window handle
+                        // returned by the EnumWindows search above;
+                        // SetForegroundWindow/GetForegroundWindow are safe
+                        // to call with any valid top-level window handle.
+                        unsafe {
+                            let _ = SetForegroundWindow(hwnd);
+                        }
+                        thread::sleep(FOCUS_VERIFY_POLL);
+                        // SAFETY: trivially safe getter.
+                        if unsafe { GetForegroundWindow() } == hwnd {
+                            focused = true;
+                            break;
+                        }
+                    }
+                    if !focused {
                         return Err(InjectError::FocusFailed);
                     }
                 }
@@ -1067,6 +1109,24 @@ mod tests {
     }
 
     #[test]
+    fn foreground_chain_refuses_when_no_window_matches() {
+        // The legacy chain's first action must locate the game window; with
+        // no match it fails BEFORE any SendInput keystroke can leave the
+        // process (a stranger's foreground window must never receive the
+        // batch text). The verify-then-type rule behind FocusFailed needs a
+        // real desktop, so only the no-window arm is pinned headlessly.
+        let injector = Injector::with_config(
+            "FC no such window 9Z8Q7",
+            std::env::temp_dir().join("tac_inject_test_nowin.txt"),
+        );
+        let err = injector.inject_foreground(None).unwrap_err();
+        assert!(
+            matches!(err, InjectError::WindowNotFound),
+            "no matching window must stop the chain: {err}"
+        );
+    }
+
+    #[test]
     fn run_command_uses_bare_file_name() {
         let injector = test_injector("runcmd");
         // The console `run` command resolves user-dir-relative paths only, so
@@ -1140,6 +1200,18 @@ mod tests {
             shown.contains(&missing.display().to_string()),
             "error must name the failing path: {shown}"
         );
+    }
+
+    #[test]
+    fn for_user_dir_keeps_the_fixed_batch_name() {
+        // Menu/live-level injections share one fixed-name batch file (the
+        // stale-file sweeper only removes per-process `tac_inject_<pid>.txt`
+        // leftovers), so an explicit user dir must not switch the name.
+        let dir = PathBuf::from(r"C:\HOI4\user");
+        let log = dir.join("logs").join("game.log");
+        let inj = Injector::for_user_dir(dir.clone(), Some(log.clone()));
+        assert_eq!(inj.batch_file_path, dir.join("tac_inject.txt"));
+        assert_eq!(inj.log_path, Some(log));
     }
 
     #[test]

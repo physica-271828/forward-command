@@ -34,7 +34,7 @@
 //! context popup is open the thread can only finish once the user dismisses
 //! it — Drop waits briefly, then detaches.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Once};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -82,6 +82,9 @@ struct TrayCtx {
     /// Current live-listen state (menu side writes it; the popup label
     /// follows, so the item always shows the ACTION it performs).
     listen_on: Arc<AtomicBool>,
+    /// The current tooltip text — needed to re-add the icon after an
+    /// Explorer restart (TaskbarCreated), when the shell has dropped it.
+    tip: std::sync::Mutex<String>,
     /// NUL-terminated UTF-16 for the native popup items.
     show_label: Vec<u16>,
     exit_label: Vec<u16>,
@@ -89,6 +92,11 @@ struct TrayCtx {
     listen_on_label: Vec<u16>,
     listen_off_label: Vec<u16>,
 }
+
+/// Explorer's "taskbar (re)created" broadcast, registered once per process
+/// in [`register_class`]. The shell drops every notification-area icon on
+/// an Explorer restart; the WndProc re-adds ours when this arrives.
+static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
 /// Handle to a live tray icon (Drop removes it). Holds the atomics the menu
 /// polls; the Win32 machinery all lives on the dedicated thread. The window
@@ -287,6 +295,7 @@ fn tray_setup(
             exit,
             listen_toggle,
             listen_on,
+            tip: std::sync::Mutex::new(tip.to_string()),
             show_label: wide(show_label),
             exit_label: wide(exit_label),
             listen_on_label: wide(listen_on_label),
@@ -338,6 +347,11 @@ fn register_class() {
             lpszClassName: PCWSTR(wide(TRAY_CLASS).as_ptr()),
         };
         let _ = RegisterClassW(&wc);
+        // Explorer restart broadcast — the icon must be re-added then.
+        TASKBAR_CREATED.store(
+            RegisterWindowMessageW(PCWSTR(wide("TaskbarCreated").as_ptr())),
+            Ordering::SeqCst,
+        );
     });
 }
 
@@ -418,6 +432,11 @@ unsafe extern "system" fn wnd_proc(
         WM_TRAY_TIP => {
             // New tooltip: a leaked Box<String> posted by TrayIcon::set_tip.
             let s = Box::from_raw(wparam.0 as *mut String);
+            if let Some(ctx) = user_data(hwnd) {
+                if let Ok(mut tip) = ctx.tip.lock() {
+                    *tip = s.as_str().to_string();
+                }
+            }
             update_tip(hwnd, s.as_str());
             LRESULT(0)
         }
@@ -448,6 +467,17 @@ unsafe extern "system" fn wnd_proc(
                 let _ = Box::from_raw(ptr as *mut TrayCtx);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        // Explorer restarted (or is starting): the shell dropped every
+        // notification icon — re-add ours with the current tip.
+        m if m != 0 && m == TASKBAR_CREATED.load(Ordering::SeqCst) => {
+            if let Some(ctx) = user_data(hwnd) {
+                let tip = ctx.tip.lock().map(|t| t.clone()).unwrap_or_default();
+                if let Some(nid) = build_nid(hwnd, &tip) {
+                    let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+                }
+            }
+            LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
@@ -556,6 +586,7 @@ mod tests {
             exit: Arc::new(AtomicBool::new(false)),
             listen_toggle: Arc::new(AtomicBool::new(false)),
             listen_on: Arc::new(AtomicBool::new(false)),
+            tip: std::sync::Mutex::new(String::new()),
             show_label: wide("Show"),
             exit_label: wide("Exit"),
             listen_on_label: wide("Listen on"),
@@ -592,6 +623,7 @@ mod tests {
                 exit: Arc::new(AtomicBool::new(false)),
                 listen_toggle: Arc::new(AtomicBool::new(false)),
                 listen_on: Arc::new(AtomicBool::new(on)),
+                tip: std::sync::Mutex::new(String::new()),
                 show_label: wide("Show"),
                 exit_label: wide("Exit"),
                 listen_on_label: wide("Enable"),
@@ -675,5 +707,18 @@ mod tests {
         let after =
             unsafe { PostMessageW(HWND(tray_hwnd as *mut _), WM_NULL, WPARAM(0), LPARAM(0)) };
         assert!(after.is_err(), "tray window must be gone after drop");
+    }
+
+    /// Explorer-restart recovery: registering the tray window class must
+    /// also register the shell's "TaskbarCreated" broadcast id, or the
+    /// WndProc arm that re-adds the icon can never fire.
+    #[test]
+    fn register_class_registers_taskbar_created_message() {
+        register_class();
+        assert_ne!(
+            TASKBAR_CREATED.load(Ordering::SeqCst),
+            0,
+            "RegisterWindowMessageW(TaskbarCreated) must succeed"
+        );
     }
 }

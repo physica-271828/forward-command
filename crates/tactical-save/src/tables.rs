@@ -76,6 +76,9 @@ pub struct EquipmentStats {
     pub reliability: f32,
     #[serde(default)]
     pub supply_use: f32,
+    /// Hourly fuel draw per item (§6.7 fuel-ratio input); 0 for leg gear.
+    #[serde(default)]
+    pub fuel_consumption: f32,
     #[serde(default)]
     pub build_cost: f32,
 }
@@ -342,9 +345,10 @@ impl DesignTables {
 pub const MULTIPLY_ON_CHASSIS_BASE: bool = false;
 
 /// Computed combat stats of one save equipment design (§5.3 designer
-/// path): the five fields the battalion assembly takes from the design
-/// (attack triple + armor/hardness bases); defense/breakthrough keep the
-/// static equipment row values.
+/// path): the fields the battalion assembly takes from the design
+/// (attack triple + armor/hardness bases + defense/breakthrough — the
+/// chassis rows carry 0 for the whole family by construction, the values
+/// live in the turret/armor module picks and upgrade levels).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct DesignStats {
     pub soft_attack: f32,
@@ -352,6 +356,8 @@ pub struct DesignStats {
     pub piercing: f32,
     pub armor: f32,
     pub hardness: f32,
+    pub defense: f32,
+    pub breakthrough: f32,
 }
 
 /// Compute a design's combat stats from the save's module picks and upgrade
@@ -363,8 +369,9 @@ pub struct DesignStats {
 /// ```
 ///
 /// (`MULTIPLY_ON_CHASSIS_BASE = true` multiplies the chassis base alone,
-/// then adds.) Tank chassis rows carry no attack stats — the whole attack
-/// triple comes from module adds. Unknown module/upgrade tokens (modded
+/// then adds.) Tank chassis rows carry no attack/defense stats — the whole
+/// attack triple and the defense/breakthrough pair come from module adds
+/// and upgrade levels. Unknown module/upgrade tokens (modded
 /// content) push a warning and contribute 0; the design still resolves.
 /// Only a design whose chassis token is missing from the equipment table
 /// returns `None` — the caller then falls back to the static equipment row
@@ -413,6 +420,8 @@ pub fn design_stats(
         piercing: combine(chassis.piercing, add.ap_attack, mult.ap_attack),
         armor: combine(chassis.armor, add.armor_value, mult.armor_value),
         hardness: combine(chassis.hardness, add.hardness, mult.hardness),
+        defense: combine(chassis.defense, add.defense, mult.defense),
+        breakthrough: combine(chassis.breakthrough, add.breakthrough, mult.breakthrough),
     })
 }
 
@@ -845,7 +854,8 @@ pub(crate) mod tests_helpers {
             "armor": 2.0, "piercing": 5.0, "hardness": 0.2, "max_speed": 4.0},
         "light_tank_chassis_0": {"archetype": "light_tank_chassis", "year": 1934,
             "soft_attack": 10.0, "hard_attack": 8.0, "defense": 5.0, "breakthrough": 20.0,
-            "armor": 10.0, "piercing": 15.0, "hardness": 0.4, "max_speed": 8.0}
+            "armor": 10.0, "piercing": 15.0, "hardness": 0.4, "max_speed": 8.0,
+            "fuel_consumption": 4.0}
     }"#;
 
     pub(crate) const MINI_UNIT_TEMPLATES_JSON: &str = r#"{
@@ -1080,7 +1090,6 @@ mod tests {
         EquipmentDesign {
             token: token.to_string(),
             name: Some("Test".to_string()),
-            is_frame: false,
             modules: modules
                 .iter()
                 .map(|(s, m)| (s.to_string(), m.to_string()))

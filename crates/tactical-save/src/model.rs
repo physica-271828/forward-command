@@ -27,6 +27,10 @@ pub struct SaveGame {
     /// both sides' division ids, tactic ids and participating tags. 1.19.2
     /// serializes these even though wars are not replayed.
     pub land_combats: Vec<LandCombatData>,
+    /// Ongoing border wars (`combat = { border_war_combat = { ... } }`):
+    /// a separate combat system serialized next to `land_combat`, with no
+    /// land battle record of its own (DESIGN.md §10.7).
+    pub border_war_combats: Vec<BorderWarCombatData>,
     /// States carrying `tac_pick=1` in their `variables` block: the
     /// state-target entry decision marks the picked battle state with this
     /// variable; the post-tac_start snapshot locates the player's pick here.
@@ -74,8 +78,6 @@ pub struct EquipmentDesign {
     /// Design name (`name = "Type 95 Ha-Go"`); frames and plain equipment
     /// carry none.
     pub name: Option<String>,
-    /// `is_frame = yes`: the base chassis/airframe/hull entry itself.
-    pub is_frame: bool,
     /// Designer module picks: slot token → module token
     /// (`main_armament_slot = tank_heavy_machine_gun`).
     pub modules: HashMap<String, String>,
@@ -136,6 +138,38 @@ pub struct LandCombatData {
     pub location: u32,
     pub attacker: LandCombatSideData,
     pub defender: LandCombatSideData,
+}
+
+/// One side of an ongoing border war (`border_war_combat.attacker` /
+/// `.defender`). Border wars are their own combat system: the sides never
+/// share a province — each stays in its own contested state and the
+/// conflict resolves as an attrition contest, so every side carries its
+/// own country tag and state/province on top of the division list.
+#[derive(Debug, Clone, Default)]
+pub struct BorderWarCombatSideData {
+    /// Participating division ids.
+    pub unit_ids: Vec<u64>,
+    /// HOI4 combat tactic id (same table as land combats).
+    pub tactic: Option<u32>,
+    /// Participating country tags (`log.combat_side_data.tags`).
+    pub tags: Vec<String>,
+    /// The side's country (`tag = "JAP"`).
+    pub tag: Option<String>,
+    /// The side's contested state (`state = N`).
+    pub state: Option<u32>,
+    /// The side's contested province (`province = N`) — where its
+    /// divisions stand while the conflict runs.
+    pub province: Option<u32>,
+}
+
+/// An ongoing border war combat (`combat = { border_war_combat = { ... } }`),
+/// serialized next to `land_combat` inside the same root `combat` block.
+#[derive(Debug, Clone, Default)]
+pub struct BorderWarCombatData {
+    /// The combat's location province (the defender's side province).
+    pub location: u32,
+    pub attacker: BorderWarCombatSideData,
+    pub defender: BorderWarCombatSideData,
 }
 
 /// Vanilla 1.19.2 `common/combat_tactics.txt` definition order, 1-based —
@@ -213,8 +247,12 @@ pub struct TemplateData {
     /// `division_names_group` tag (real saves; e.g. `GER_Inf_01`) — the
     /// names-group a division of this template draws its auto name from.
     pub division_names_group: Option<String>,
+    /// `is_army_hq = yes`: the template is an army headquarters formation
+    /// (1.19; most carry `localization_key=` instead of `name=`).
+    pub is_army_hq: bool,
     /// Line regiments expanded to (type, count) pairs.
     pub battalions: Vec<BattalionInfo>,
+    /// Support companies resolved from the division template's support.
     pub support_companies: Vec<BattalionInfo>,
 }
 
@@ -279,8 +317,13 @@ pub struct DivisionData {
     pub strength: f32,
     pub experience: f32,
     pub entrenchment: f32,
-    /// Strategic supply ratio if recorded in the save (§6.7 input).
-    pub supply_status: Option<f32>,
+    /// Strategic supply storage level and capacity
+    /// (`army_current_supply_ratio` / `max_supply` in the save) and the fuel
+    /// reserve (`fuel`) — §6.7 inputs. None for legacy saves and synthetic
+    /// fixtures → downstream treats them as fully supplied / fueled.
+    pub supply_current: Option<f32>,
+    pub supply_max: Option<f32>,
+    pub fuel: Option<f32>,
     /// Actual equipment on hand: equipment key → count (§5.2).
     pub equipment: HashMap<String, f32>,
     /// The same on-hand equipment in the save's 1.19 id-reference form:
@@ -291,8 +334,12 @@ pub struct DivisionData {
     pub equipment_ids: Vec<(u64, f32)>,
     /// Line battalions resolved from the division template's regiments.
     pub battalions: Vec<BattalionInfo>,
-    /// Support companies resolved from the division template's support.
+    /// Support companies resolved from the division template's support
+    /// (divisional column and regimental column merged).
     pub support_companies: Vec<BattalionInfo>,
+    /// The division's template is an army headquarters formation (§5.3) —
+    /// pass-through flag; HQ divisions assemble and field like any other.
+    pub is_army_hq: bool,
 }
 
 /// One subunit entry of a template: `count` battalions of one type.

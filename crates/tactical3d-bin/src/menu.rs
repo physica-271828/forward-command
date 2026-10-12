@@ -46,12 +46,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::scenario::{with_generator, ForceChoice, MapChoice, Scenario, TACTICS};
 use crate::settings::{
     detect_hoi4_settings_txt, force_text_saves, list_saves, read_save_as_binary, AppSettings,
-    TextSaveFix,
+    CheckLevel, TextSaveFix,
 };
 
 /// Entry point (default, no CLI args): run the menu until Exit Game.
 pub fn menu_loop() {
-    let mut settings = AppSettings::load();
+    let (mut settings, settings_warning) = crate::settings::load_for_menu();
     // Sweep stale per-process injection batch files
     // (`tac_inject_<pid>.txt`) left behind by battle instances — one small
     // file per battle used to linger in the HOI4 user dir forever. The
@@ -70,7 +70,7 @@ pub fn menu_loop() {
             Err(e) => battle_log(&format!("[menu] stale batch sweep failed: {e}")),
         }
     }
-    menu_app(&mut settings);
+    menu_app(&mut settings, settings_warning);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +191,12 @@ struct BattleChildren {
     /// UI requested showing the window back from the tray (the
     /// multi-battle picker must not sit unseen while the menu is hidden).
     pending_show: bool,
+    /// The menu window's HWND as of the last tray poll — handed to the
+    /// injector so a foreground-fallback batch can hand focus BACK to the
+    /// menu (DESIGN §3.2 step 4). None before the window has a handle.
+    /// Stored as `isize` (not `HWND`) so background worker closures can
+    /// capture it: a raw pointer is not `Send`.
+    menu_hwnd: Option<isize>,
     /// Tooltip state currently applied to the tray icon (change-only update).
     tip_state: TrayTipState,
     /// Raise retries after a restore: the first
@@ -401,7 +407,7 @@ fn backdrop_state(
 // ---------------------------------------------------------------------------
 // The menu app itself
 
-fn menu_app(settings: &mut AppSettings) {
+fn menu_app(settings: &mut AppSettings, settings_warning: Option<String>) {
     let (state, vp_label, backdrop_info) = backdrop_state(settings);
     // UI language from settings.json (DESIGN §15): loaded once here; the
     // Settings page's language selector rebuilds the resource on switch.
@@ -478,7 +484,9 @@ fn menu_app(settings: &mut AppSettings) {
     // LANGUAGE PICKER first (interface language = the very first
     // choice); confirming it lands on the Settings page so the player
     // confirms the auto-detected HOI4 paths.
-    let first_run = !crate::settings::settings_file_exists();
+    // A corrupt file was set aside — the player HAS configured this install
+    // once already, so the first-run language picker would be wrong.
+    let first_run = !crate::settings::settings_file_exists() && settings_warning.is_none();
     app.insert_resource(MenuState {
         page: if first_run {
             Page::FirstRunLanguage
@@ -486,7 +494,7 @@ fn menu_app(settings: &mut AppSettings) {
             Page::Main
         },
         settings: settings.clone(),
-        status: String::new(),
+        status: settings_warning.unwrap_or_default(),
         live_listen: false,
         first_run,
         confirm_exit: false,
@@ -505,6 +513,8 @@ fn menu_app(settings: &mut AppSettings) {
         pending_start: None,
         pick_dialog: None,
         abort_slot: None,
+        scan_slot: None,
+        published: None,
         pick_anchor: CenterAnchor::default(),
     });
     app.insert_resource(LocaleRes(loc));
@@ -670,6 +680,9 @@ fn spawn_battle(args: &[String], label: String, loc: &LocaleRes) -> Result<Battl
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| loc.trf("error.spawn_failed", &[("error", &e.to_string())]))?;
+    // Lifetime guard: the child joins the kill-on-close job, so an
+    // abnormal menu death never leaves an orphan driving HOI4's console.
+    crate::jobguard::guard_child(&child);
     // Drain stderr on a reader thread — the pipe buffer must never fill
     // while the child runs (a blocked write = an un-reapable "frozen"
     // battle). The tail is kept (capped) for the reaper's error report.
@@ -782,9 +795,16 @@ fn reap_battle_children(
     let hwnd: Option<HWND> = winit_windows
         .as_ref()
         .and_then(|winit| menu_window_hwnd(winit, &primary));
+    // Keep the injector's restore-focus handle current: a foreground
+    // fallback injection hands the screen back to OUR window (DESIGN §3.2
+    // step 4), which needs the handle the tray/raise path already computes.
+    children.menu_hwnd = hwnd.map(|h| h.0 as isize);
     // Resident tray: install ONCE at startup, keep until exit.
     if children.tray.is_none() && !children.tray_failed {
-        let installed = hwnd.is_some_and(|h| {
+        // No Win32 handle yet = the window simply isn't ready — retry on
+        // a later frame; only a REAL shell refusal (hwnd present, install
+        // refused) latches the pre-tray fallback for the session.
+        if let Some(h) = hwnd {
             let tray = crate::tray::TrayIcon::install(
                 h.0 as isize,
                 &loc.tr("menu.tray.tip_idle"),
@@ -793,13 +813,10 @@ fn reap_battle_children(
                 &loc.tr("menu.tray.listen_on"),
                 &loc.tr("menu.tray.listen_off"),
             );
-            if let Some(t) = tray {
-                children.tray = Some(t);
+            match tray {
+                Some(t) => children.tray = Some(t),
+                None => children.tray_failed = true,
             }
-            children.tray.is_some()
-        });
-        if !installed {
-            children.tray_failed = true;
         }
     }
     let alive = children.alive();
@@ -1252,6 +1269,15 @@ struct LiveListen {
     /// quiet-state pick injects `event tac_quiet.1 <tag>`. Drained for the
     /// status line (the kind selects the completion text).
     abort_slot: Option<(SharedSlot<()>, AbortInject)>,
+    /// Background scan publish (§10.7): snapshot → enterable battles →
+    /// inject the per-state activations. Drained into the status line
+    /// when the worker finishes.
+    scan_slot: Option<SharedSlot<crate::publish::ScanOutcome>>,
+    /// The last scan's published set + scoping tag — retracted the moment a
+    /// battle actually launches, so a finished battle leaves no entry
+    /// decision lit (the picked record decays on its own, see the mod's
+    /// cleanup). Spent on use (`take`).
+    published: Option<crate::publish::ScanOutcome>,
     /// CenterAnchor state for the pick dialog (jitter fix — the
     /// dialog's width varies with the battle list, so it re-centers per
     /// measured size instead of oscillating on a .5-px tie).
@@ -1421,6 +1447,33 @@ fn live_listen_tick(
             Err(e) => listen.set_status(loc.trf("menu.pick.abort_failed", &[("error", &e)]), true),
         }
     }
+    // Drain the background scan publisher (§10.7): the snapshot + parse +
+    // injection run OFF the UI thread; only the outcome arrives here.
+    let scan_done = listen
+        .scan_slot
+        .as_ref()
+        .and_then(|s| s.lock().unwrap().take());
+    if let Some(result) = scan_done {
+        listen.scan_slot = None;
+        match result {
+            Ok(out) => {
+                // Remember the published set for the battle-launch retraction.
+                listen.published = Some(out.clone());
+                if out.published == 0 {
+                    listen.set_status(loc.tr("menu.listen.scan_empty").into_owned(), false);
+                } else {
+                    listen.set_status(
+                        loc.trf(
+                            "menu.listen.scan_published",
+                            &[("n", &out.published.to_string())],
+                        ),
+                        false,
+                    );
+                }
+            }
+            Err(e) => listen.set_status(loc.trf("menu.listen.scan_failed", &[("error", &e)]), true),
+        }
+    }
     // Drain the background pick resolver: the post-tac_start
     // resolution runs OFF the UI thread (console injection + save parsing
     // take seconds); only the outcome arrives here.
@@ -1449,9 +1502,17 @@ fn live_listen_tick(
                 crate::snapshot::PickResolution::QuietNoBattle { .. } => {
                     listen.set_status(loc.tr("menu.listen.pick_no_battle").into_owned(), true);
                     let tag = ps.tag.clone();
+                    let injector = crate::settings::live_channel_injector(
+                        menu.settings.saves_dir().as_deref(),
+                        menu.settings.log_path().as_deref(),
+                    );
+                    // The menu's own handle: after a foreground-fallback
+                    // batch the player should get her menu back (DESIGN
+                    // §3.2 step 4) instead of being stranded in HOI4.
+                    let self_hwnd = children.menu_hwnd;
                     listen.abort_slot = Some((
                         spawn_worker(move || {
-                            tactical_inject::Injector::new()
+                            injector
                                 .inject_commands(
                                     &[
                                         format!("event tac_quiet.1 {tag}"),
@@ -1462,7 +1523,7 @@ fn live_listen_tick(
                                         // skips its close-toggle after it).
                                         "reloadinterface".to_string(),
                                     ],
-                                    None,
+                                    self_hwnd.map(|h| HWND(h as *mut _)),
                                     false,
                                 )
                                 .map(|_| ())
@@ -1499,6 +1560,7 @@ fn live_listen_tick(
             },
         };
         if let Some(province) = province {
+            retract_published(&mut listen, &menu);
             if let Err(e) = spawn_live_child(
                 &mut children,
                 &menu,
@@ -1535,6 +1597,28 @@ fn live_listen_tick(
             continue;
         }
         match &msgs[i] {
+            // Scan request (§10.7): answer the mod's scan-waiting flag and
+            // publish the commandable battles into the decision layer.
+            // Snapshot + parse + injection run OFF the UI thread (they take
+            // seconds); the receipt goes out first, from the tag the click
+            // carried, and the outcome lands in the status line.
+            tactical_listen::LogMessage::TacScan { tag, .. } => {
+                if children.alive()
+                    || listen.pick_dialog.is_some()
+                    || listen.pending_start.is_some()
+                    || listen.abort_slot.is_some()
+                    || listen.scan_slot.is_some()
+                {
+                    listen.set_status(loc.tr("menu.listen.scan_busy").into_owned(), false);
+                    continue;
+                }
+                let settings = menu.settings.clone();
+                let tag = tag.clone();
+                listen.scan_slot = Some(spawn_worker(move || {
+                    crate::publish::scan_and_publish(&settings, false, &tag)
+                }));
+                listen.set_status(loc.tr("menu.listen.scanning").into_owned(), false);
+            }
             tactical_listen::LogMessage::TacStart {
                 province,
                 tag,
@@ -1568,6 +1652,7 @@ fn live_listen_tick(
                     || listen.pick_dialog.is_some()
                     || listen.pending_start.is_some()
                     || listen.abort_slot.is_some()
+                    || listen.scan_slot.is_some()
                 {
                     // A picker dialog mid-resolution (or its snapshot worker
                     // still in flight) is a busy listener too: spawning a
@@ -1634,9 +1719,10 @@ fn live_listen_tick(
                 }
                 let saves_dir = menu.settings.saves_dir();
                 let hoi4_dir = menu.settings.hoi4_dir();
+                let log_path = menu.settings.log_path();
                 let worker_loc = loc.0.clone();
                 // Picker VP labels in the UI language.
-                let zh = menu.settings.language() == tactical_locale::Language::SimpChinese;
+                let lang_code = menu.settings.language().code();
                 let slot = spawn_worker(move || -> Result<PickOutcome, String> {
                     let hoi4 = hoi4_dir.ok_or_else(|| {
                         worker_loc.tr("menu.listen.hoi4_dir_unknown").into_owned()
@@ -1644,11 +1730,15 @@ fn live_listen_tick(
                     let saves = saves_dir.ok_or_else(|| {
                         worker_loc.tr("menu.listen.saves_dir_unknown").into_owned()
                     })?;
+                    let injector = crate::settings::live_channel_injector(
+                        Some(&saves),
+                        log_path.as_deref(),
+                    );
                     let p2s = crate::snapshot::load_p2s(&hoi4);
                     // VP names ride along for the picker labels.
-                    let names = crate::snapshot::load_vp_names(&hoi4, zh);
+                    let names = crate::snapshot::load_vp_names(&hoi4, lang_code);
                     let resolution = crate::snapshot::resolve_picked_province(
-                        &tactical_inject::Injector::new(),
+                        &injector,
                         &saves,
                         &p2s,
                         false,
@@ -1709,6 +1799,25 @@ fn live_listen_tick(
 /// Hand a live trigger to a `--livebattle` child (it does the live assembly +
 /// console injection itself). Extracted from the tac_start arm so the
 /// picked-state resolver can spawn with the REAL province.
+/// Retract every entry decision the last scan published — fired the moment
+/// a battle actually launches (both spawn paths), so a finished battle
+/// leaves none of them lit; the picked record decays on its own (see the
+/// mod's cleanup). Synchronous on purpose: the child process must not race
+/// this console batch.
+fn retract_published(listen: &mut LiveListen, menu: &MenuState) {
+    let Some(p) = listen.published.take() else {
+        return;
+    };
+    let injector = crate::settings::live_channel_injector(
+        menu.settings.saves_dir().as_deref(),
+        menu.settings.log_path().as_deref(),
+    );
+    let lines = crate::publish::retract_lines(&p.tag, &p.states);
+    if let Err(e) = injector.inject_commands(&lines, None, false) {
+        battle_log(&format!("[retract] injection failed: {e}"));
+    }
+}
+
 fn spawn_live_child(
     children: &mut BattleChildren,
     menu: &MenuState,
@@ -1763,6 +1872,7 @@ const GOLD: egui::Color32 = egui::Color32::from_rgb(214, 181, 110);
 const PARCHMENT: egui::Color32 = egui::Color32::from_rgb(216, 208, 192);
 const ERROR_RED: egui::Color32 = egui::Color32::from_rgb(220, 90, 70);
 const OK_GREEN: egui::Color32 = egui::Color32::from_rgb(120, 180, 110);
+const WARN_YELLOW: egui::Color32 = egui::Color32::from_rgb(232, 196, 96);
 
 fn panel_fill() -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(24, 22, 20, 205)
@@ -1809,7 +1919,15 @@ fn draw_menu(
         Page::FirstRunLanguage => draw_first_run_language(ctx, &mut menu, &mut loc),
         Page::Settings => draw_settings(ctx, &mut menu, &icons, &mut loc),
         Page::About => draw_about(ctx, &mut menu, &icons, &mut loc),
-        Page::DebugForm => draw_debug_form(ctx, &mut menu, &mut children, &mut form, &icons, &loc),
+        Page::DebugForm => draw_debug_form(
+            ctx,
+            &mut menu,
+            &mut children,
+            &listen,
+            &mut form,
+            &icons,
+            &loc,
+        ),
     }
     // Backdrop caption, bottom-right corner (small, unobtrusive).
     let area = egui::Area::new(egui::Id::new("backdrop_info"));
@@ -2068,16 +2186,26 @@ fn draw_pick_dialog(
                 });
             } else {
                 // List fallback (map files unreadable): one button per
-                // battle — VP name or #province, tags, division counts.
+                // battle — kind marker, VP name or #province, tags,
+                // division counts.
                 ui.set_width(380.0);
                 for b in &dialog.battles {
                     let province_label = match dialog.vp_names.get(&b.province) {
                         Some(name) => format!("{name} (#{})", b.province),
                         None => format!("#{}", b.province),
                     };
+                    let kind = match b.kind {
+                        crate::enterable::BattleKind::Land => {
+                            loc.tr("menu.pick.kind.land").into_owned()
+                        }
+                        crate::enterable::BattleKind::BorderWar => {
+                            loc.tr("menu.pick.kind.border").into_owned()
+                        }
+                    };
                     let label = loc.trf(
                         "menu.pick.item",
                         &[
+                            ("kind", &kind),
                             ("province", &province_label),
                             ("atk", &b.attacker_tags.join("+")),
                             ("atk_units", &b.attacker_units.to_string()),
@@ -2116,6 +2244,7 @@ fn draw_pick_dialog(
         let Some(dialog) = listen.pick_dialog.take() else {
             return;
         };
+        retract_published(listen, menu);
         if let Err(e) = spawn_live_child(
             children,
             menu,
@@ -2139,9 +2268,17 @@ fn draw_pick_dialog(
         // hide the menu back to the tray: the player is back in HOI4.
         listen.set_status(loc.tr("menu.pick.cancelling").into_owned(), false);
         let tag = dialog.tag.clone();
+        let saves_dir = menu.settings.saves_dir();
+        let log_path = menu.settings.log_path();
+        // Restore focus to the menu after the batch (DESIGN §3.2 step 4).
+        let self_hwnd = children.menu_hwnd;
+        let injector = crate::settings::live_channel_injector(
+            saves_dir.as_deref(),
+            log_path.as_deref(),
+        );
         listen.abort_slot = Some((
             spawn_worker(move || {
-                tactical_inject::Injector::new()
+                injector
                     .inject_commands(
                         &[
                             format!("event tac_abort.1 {tag}"),
@@ -2151,7 +2288,7 @@ fn draw_pick_dialog(
                             // close-toggle after it).
                             "reloadinterface".to_string(),
                         ],
-                        None,
+                        self_hwnd.map(|h| HWND(h as *mut _)),
                         false,
                     )
                     .map(|_| ())
@@ -2245,6 +2382,13 @@ fn draw_main(
                 .clicked()
                 {
                     menu.live_listen = !menu.live_listen;
+                    // Keep the tray's cached state in step: the tray item
+                    // always names the ACTION it performs, so a stale
+                    // `listen_on` would offer "enable" while listening is on
+                    // (and turn it off on a click).
+                    if let Some(tray) = children.tray.as_ref() {
+                        tray.set_listen_on(menu.live_listen);
+                    }
                     if menu.live_listen {
                         listen.status.clear(); // re-arm the lazy listener start
                     }
@@ -2376,17 +2520,14 @@ fn draw_first_run_language(ctx: &egui::Context, menu: &mut MenuState, loc: &mut 
             // MenuState.lang_pick): the dropdown must survive re-renders,
             // otherwise picking English snaps back to the OS default next
             // frame. The OS-detected default was captured once at startup.
-            let name_of = |l: Language| match l {
-                Language::SimpChinese => "中文",
-                Language::English => "English",
-            };
             ui.vertical_centered(|ui| {
                 egui::ComboBox::from_id_salt("first_run_lang")
-                    .selected_text(name_of(menu.lang_pick))
+                    .selected_text(menu.lang_pick.display_name())
                     .width(190.0)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut menu.lang_pick, Language::SimpChinese, "中文");
-                        ui.selectable_value(&mut menu.lang_pick, Language::English, "English");
+                        for lang in Language::ALL {
+                            ui.selectable_value(&mut menu.lang_pick, *lang, lang.display_name());
+                        }
                     });
                 ui.add_space(18.0);
                 let ok = ui.add(
@@ -2471,8 +2612,12 @@ fn draw_settings(ctx: &egui::Context, menu: &mut MenuState, icons: &IconSet, loc
             ui.add_space(8.0);
             // Live validation lines (slugs → locale keys, DESIGN §15).
             let checks = s.validate();
-            for (field, ok, msg) in checks {
-                let color = if ok { OK_GREEN } else { ERROR_RED };
+            for (field, level, msg) in checks {
+                let color = match level {
+                    CheckLevel::Ok => OK_GREEN,
+                    CheckLevel::Warn => WARN_YELLOW,
+                    CheckLevel::Error => ERROR_RED,
+                };
                 let field = loc.tr(&format!("menu.settings.field.{field}"));
                 let msg = loc.tr(&format!("settings.validate.{msg}"));
                 ui.label(
@@ -2867,6 +3012,12 @@ fn draw_settings(ctx: &egui::Context, menu: &mut MenuState, icons: &IconSet, loc
         .update(resp.as_ref().map(|r| r.response.rect), ctx.pixels_per_point());
 }
 
+/// Supporter roll on the About page: SPECIAL_THANKS for the top backers,
+/// THANKS for the charging supporters. Names render verbatim in every
+/// language — extend the lists here as the roll grows.
+const SPECIAL_THANKS: &[&str] = &["W", "你的老王"];
+const THANKS: &[&str] = &["爱发电用户_af8p"];
+
 /// About page: version + build date + credits. The build date
 /// is the exe's own file mtime — the binary's birth time, which survives
 /// zip distribution — rendered in the player's local timezone
@@ -2927,6 +3078,21 @@ fn draw_about(ctx: &egui::Context, menu: &mut MenuState, icons: &IconSet, loc: &
                 ui.label(
                     egui::RichText::new(loc.tr("menu.about.thanks_ai").into_owned())
                         .size(13.0)
+                        .color(PARCHMENT),
+                );
+                ui.add_space(4.0);
+                let special = SPECIAL_THANKS.join(" · ");
+                ui.label(
+                    egui::RichText::new(
+                        loc.trf("menu.about.special_thanks", &[("names", &special)]),
+                    )
+                    .size(13.0)
+                    .color(GOLD),
+                );
+                let thanks = THANKS.join(" · ");
+                ui.label(
+                    egui::RichText::new(loc.trf("menu.about.thanks", &[("names", &thanks)]))
+                        .size(12.0)
                         .color(PARCHMENT),
                 );
                 ui.add_space(4.0);
@@ -3080,6 +3246,7 @@ fn draw_debug_form(
     ctx: &egui::Context,
     menu: &mut MenuState,
     children: &mut BattleChildren,
+    listen: &LiveListen,
     form: &mut DebugForm,
     icons: &IconSet,
     loc: &LocaleRes,
@@ -3363,7 +3530,15 @@ fn draw_debug_form(
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                let busy = children.alive();
+                // The same busy predicate the listener gate uses: a
+                // picker mid-resolution (or its snapshot worker) already
+                // owns the injection channel, so a manual spawn here would
+                // put two battle windows on one console.
+                let busy = children.alive()
+                    || listen.pick_dialog.is_some()
+                    || listen.pending_start.is_some()
+                    || listen.abort_slot.is_some()
+                    || listen.scan_slot.is_some();
                 ui.add_enabled_ui(!busy, |ui| {
                     let start = tip(
                         menu_button(ui, icons, Some(IconId::Attack), &loc.tr("menu.debug.start")),

@@ -5306,32 +5306,32 @@ dependencies = [
 
 [[package]]
 name = "tactical-ai"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "tactical-core",
 ]
 
 [[package]]
 name = "tactical-combat"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "tactical-core",
 ]
 
 [[package]]
 name = "tactical-core"
-version = "0.3.2"
+version = "0.3.3"
 
 [[package]]
 name = "tactical-inject"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "windows 0.58.0",
 ]
 
 [[package]]
 name = "tactical-listen"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "crossbeam-channel",
  "notify",
@@ -5340,18 +5340,18 @@ dependencies = [
 
 [[package]]
 name = "tactical-locale"
-version = "0.3.2"
+version = "0.3.3"
 
 [[package]]
 name = "tactical-map"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "tactical-core",
 ]
 
 [[package]]
 name = "tactical-save"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "jomini",
  "serde",
@@ -5361,14 +5361,14 @@ dependencies = [
 
 [[package]]
 name = "tactical-sync"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "tactical-core",
 ]
 
 [[package]]
 name = "tactical3d-bin"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "bevy",
  "bevy_egui",
@@ -5393,7 +5393,7 @@ dependencies = [
 
 [[package]]
 name = "tactical3d-render"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "bevy",
  "bevy_egui",

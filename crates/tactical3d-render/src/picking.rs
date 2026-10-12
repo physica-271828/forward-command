@@ -75,6 +75,12 @@ pub fn update_hover(
         if state.hover_hex.is_some() {
             state.hover_hex = None;
             state.board_colors_dirty = true;
+            // The pending-pick target mark follows `hover_hex`, so the
+            // highlight must clear with it — otherwise the green Seize /
+            // order mark stays painted while the cursor is on the panel.
+            if state.div_pick.is_some() {
+                crate::game::refresh_command_highlights(&mut state);
+            }
         }
         return;
     }

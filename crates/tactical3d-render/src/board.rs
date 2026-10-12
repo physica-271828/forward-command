@@ -173,10 +173,9 @@ fn backdrop_color_of(
 }
 
 /// River band color per fog state — the same shadow multipliers as the
-/// board, so a river reads as water-in-shadow, not grey tape. These live in
-/// the board palette's first THREE fixed slots (see below); hex fog states
-/// are baked at mesh build (the recolor fast path rewrites hex slots only —
-/// river bands keep their build-time state, pre-existing limitation).
+/// board, so a river reads as water-in-shadow, not grey tape. Each hex owns
+/// a THIRD palette slot for its river bands (see the layout below), so the
+/// recolor fast path re-fogs river edges together with the hex top.
 fn river_color(vis: VisibilityState) -> [f32; 4] {
     let water = [0.22, 0.45, 0.78, 1.0];
     match vis {
@@ -187,14 +186,15 @@ fn river_color(vis: VisibilityState) -> [f32; 4] {
 }
 
 /// Fixed board palette layout: slots 0,1,2 = river colors
-/// (visible/revealed/hidden); every in-rect hex then owns exactly TWO slots
-/// — top face at `hex_top_slot`, side walls at +1. Because the layout does
+/// (visible/revealed/hidden); every in-rect hex then owns exactly THREE
+/// slots — top face at `hex_top_slot`, side walls at +1, river-edge bands
+/// at +2. Because the layout does
 /// not depend on colors, [`recolor_board_palette`] can rewrite palette
 /// pixels in place while the mesh UVs stay valid.
 const HEX_SLOT_BASE: u32 = 3;
 
 fn hex_top_slot(width: usize, h: HexCoord) -> u32 {
-    HEX_SLOT_BASE + 2 * (h.r as usize * width + h.q as usize) as u32
+    HEX_SLOT_BASE + 3 * (h.r as usize * width + h.q as usize) as u32
 }
 
 fn write_palette_px(data: &mut [u8], slot: usize, c: [f32; 4]) {
@@ -240,11 +240,15 @@ pub fn build_board_mesh(state: &TacticalState) -> (Mesh, Image) {
         };
         let top_slot = mb.alloc_slot(color);
         let side_slot = mb.alloc_slot(scale_color(color, 0.55));
+        // Third per-hex slot: the river-edge bands' fogged water color,
+        // so the recolor fast path re-fogs them with the hex top.
+        let river_slot = mb.alloc_slot(river_color(state.fog_state(h)));
         debug_assert_eq!(
             top_slot,
             hex_top_slot(grid.width, h),
             "palette layout drift"
         );
+        debug_assert_eq!(river_slot, top_slot + 2, "palette layout drift");
         mb.add_hex_prism_slot(center, HEX_SIZE * HEX_GAP, 0.0, top, top_slot, side_slot);
 
         // River edge strips (§4.2): blue band along each flagged edge.
@@ -258,12 +262,7 @@ pub fn build_board_mesh(state: &TacticalState) -> (Mesh, Image) {
             let (a, b) = hex_edge(&corners, *dir as usize);
             let mid = (a + b) * 0.5;
             let inward = (Vec3::new(center.x, top + 0.015, center.z) - mid).normalize() * 0.16;
-            let slot = match state.fog_state(h) {
-                VisibilityState::Visible => river_slots[0],
-                VisibilityState::Revealed => river_slots[1],
-                VisibilityState::Hidden => river_slots[2],
-            };
-            mb.add_quad_slot(a, a + inward, b + inward, b, Vec3::Y, slot);
+            mb.add_quad_slot(a, a + inward, b + inward, b, Vec3::Y, river_slot);
         }
     }
 
@@ -289,6 +288,8 @@ pub fn recolor_board_palette(state: &TacticalState, image: &mut Image) {
         let slot = hex_top_slot(grid.width, h) as usize;
         write_palette_px(data, slot, color);
         write_palette_px(data, slot + 1, scale_color(color, 0.55));
+        // River-edge bands re-fog with the hex (third per-hex slot).
+        write_palette_px(data, slot + 2, river_color(state.fog_state(h)));
     }
 }
 
@@ -2098,6 +2099,263 @@ pub fn pulse_zone_borders(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Sound-ranging marks (§6.1 map intel)
+// ---------------------------------------------------------------------------
+
+/// Ground-seal entities (one merged mesh for every live mark).
+#[derive(Component)]
+pub struct SoundMarkOverlay;
+
+/// What a HEARD event stamps on the map (§6.1). One kind today —
+/// sound-ranged artillery fire — the enum is the seam the other
+/// sound-ruled tells hang on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkKind {
+    /// A fire mission that left the tube.
+    ArtilleryFire,
+}
+
+impl MarkKind {
+    /// Seal colour (palette RGB, 0..1), shared by the ground seal, the
+    /// minimap dot and the hover line so the three always read as one tell.
+    /// An amber-red that keeps its contrast on both sun-lit terrain and the
+    /// fog-muted overcast.
+    pub fn color(self) -> [f32; 4] {
+        match self {
+            MarkKind::ArtilleryFire => [0.96, 0.34, 0.12, 1.0],
+        }
+    }
+
+    /// Seal opacity by mark AGE: it lands loud and fades with the intel, so
+    /// a fresh mark still out-reads a stale one standing beside it. Ages
+    /// past the curve (still live under a longer window) keep the floor.
+    pub fn alpha_for_age(self, age: u32) -> f32 {
+        match age {
+            0 => 1.0,
+            1 => 0.70,
+            2 => 0.45,
+            _ => 0.20,
+        }
+    }
+}
+
+/// Seal radius as a fraction of the hex circumradius: a ring small enough to
+/// leave a band of its own hex visible, so the stamp never hides the ground
+/// it marks.
+const SOUND_MARK_RADIUS: f32 = HEX_SIZE * 0.60;
+/// Seal clearance follows the overlay ladder: above the flag fill
+/// (+0.02/+0.03), below the command overlays (+0.05..+0.078).
+const SOUND_MARK_LIFT: f32 = 0.045;
+/// Ring smoothness — 28 segments read as a circle at seal size.
+const SOUND_MARK_SEGMENTS: usize = 28;
+
+/// Fog-coherence tint for a seal: the same overcast dimming the board takes,
+/// at HALF strength — a mark is intel the player must spot at a glance on a
+/// hex that is otherwise in the dark, so the full `shadow()` treatment (which
+/// also mutes the hue) would blur the one thing it exists to show.
+fn mark_fog_tint(state: &TacticalState, h: HexCoord) -> [f32; 3] {
+    let mul = match state.fog_state(h) {
+        VisibilityState::Visible => [1.0, 1.0, 1.0],
+        VisibilityState::Revealed => REVEALED_MUL,
+        VisibilityState::Hidden => HIDDEN_MUL,
+    };
+    const K: f32 = 0.5;
+    [
+        1.0 + (mul[0] - 1.0) * K,
+        1.0 + (mul[1] - 1.0) * K,
+        1.0 + (mul[2] - 1.0) * K,
+    ]
+}
+
+/// One flat seal per live mark, riding its hex's terrain top: an outer RING
+/// (the heard position) with a cannon-fire icon inside (what was heard —
+/// the gun is symbolic, a sound fix carries no bearing). It is a DECAL, not
+/// a block: single-layer geometry at the overlay ladder's seal height, so
+/// the command overlays above it stay readable. The age alpha is baked into
+/// the palette (one slot per mark), and nothing carries an emissive —
+/// emissive ignores the material alpha and would turn the seals opaque.
+pub fn build_sound_mark_mesh(
+    state: &TacticalState,
+    marks: &[(HexCoord, u32, MarkKind)],
+) -> (Mesh, Image) {
+    let grid = state.grid.as_ref().expect("grid must exist");
+    let mut mb = MeshBuilder::new();
+    for &(h, age, kind) in marks {
+        if grid.cell(h).is_none() {
+            continue;
+        }
+        let base = kind.color();
+        let tint = mark_fog_tint(state, h);
+        let color = [
+            base[0] * tint[0],
+            base[1] * tint[1],
+            base[2] * tint[2],
+            kind.alpha_for_age(age),
+        ];
+        let center = hex_world(h);
+        let y = hex_top_y_at(grid, h) + SOUND_MARK_LIFT;
+        let slot = mb.slot_for(color);
+        // Local seal frame: u = +x (east), v = "icon up" (−z, away from the
+        // default camera) — the stamp reads upright on the ground plane.
+        let pt = |u: f32, v: f32| Vec3::new(center.x + u, y, center.z - v);
+        let up = Vec3::Y;
+
+        // Outer ring: an annulus band (two concentric fans), 2 tris per
+        // segment.
+        let inner_r = SOUND_MARK_RADIUS * 0.80;
+        let ring_pt = |r: f32, k: usize| {
+            let a = std::f32::consts::TAU * k as f32 / SOUND_MARK_SEGMENTS as f32;
+            pt(r * a.cos(), r * a.sin())
+        };
+        for k in 0..SOUND_MARK_SEGMENTS {
+            let k1 = (k + 1) % SOUND_MARK_SEGMENTS;
+            mb.add_tri_slot(ring_pt(inner_r, k), ring_pt(SOUND_MARK_RADIUS, k), ring_pt(SOUND_MARK_RADIUS, k1), up, slot);
+            mb.add_tri_slot(ring_pt(inner_r, k), ring_pt(SOUND_MARK_RADIUS, k1), ring_pt(inner_r, k1), up, slot);
+        }
+
+        // Cannon-fire icon inside the ring: side-view gun with a muzzle
+        // blast, proportioned after the leFH 18 — barrel ≈ trail ≈ 2× the
+        // wheel diameter (2.5 m tube, 3 m box trail, Ø1.3 m wheels), plus
+        // the shield plate over the wheel. Local coords in hex-size units.
+        let quad = |mb: &mut MeshBuilder, a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32)| {
+            mb.add_tri_slot(pt(a.0, a.1), pt(b.0, b.1), pt(c.0, c.1), up, slot);
+            mb.add_tri_slot(pt(a.0, a.1), pt(c.0, c.1), pt(d.0, d.1), up, slot);
+        };
+        // Wheel: an 8-gon fan under the breech.
+        let (wu, wv, wr) = (0.02f32, -0.07f32, 0.08f32);
+        for k in 0..8 {
+            let a0 = std::f32::consts::TAU * k as f32 / 8.0;
+            let a1 = std::f32::consts::TAU * (k + 1) as f32 / 8.0;
+            mb.add_tri_slot(
+                pt(wu, wv),
+                pt(wu + wr * a0.cos(), wv + wr * a0.sin()),
+                pt(wu + wr * a1.cos(), wv + wr * a1.sin()),
+                up,
+                slot,
+            );
+        }
+        // Barrel: breech → muzzle, elevated ~28°, as a quad around its axis.
+        let (bu, bv) = (0.0f32, 0.015f32); // breech
+        let (mu, mv) = (0.265f32, 0.156f32); // muzzle
+        let bl = ((mu - bu).powi(2) + (mv - bv).powi(2)).sqrt();
+        let (dx, dy) = ((mu - bu) / bl, (mv - bv) / bl); // barrel axis
+        let (px, py) = (-dy * 0.0275, dx * 0.0275); // half-width perp
+        quad(
+            &mut mb,
+            (bu + px, bv + py),
+            (mu + px, mv + py),
+            (mu - px, mv - py),
+            (bu - px, bv - py),
+        );
+        // Shield: the sloped plate riding over the wheel.
+        quad(&mut mb, (0.045, 0.115), (0.115, 0.095), (0.105, -0.035), (0.035, -0.05));
+        // Trail: the box beam angling back-down from the axle, tapering to
+        // its tip (an abstract icon — no separate spade plate).
+        quad(&mut mb, (-0.02, -0.015), (0.045, -0.055), (-0.315, -0.135), (-0.295, -0.11));
+        // Muzzle blast: five spikes fanned off the muzzle tip — the "heard
+        // it fire" tell, so it out-reads the gun itself.
+        for (fan, len) in [
+            (-0.55f32, 0.085f32),
+            (-0.28, 0.105),
+            (0.0, 0.13),
+            (0.28, 0.105),
+            (0.55, 0.085),
+        ] {
+            let (fx, fy) = (
+                dx * fan.cos() - dy * fan.sin(),
+                dx * fan.sin() + dy * fan.cos(),
+            );
+            let (tx, ty) = (mu + fx * len, mv + fy * len);
+            mb.add_tri_slot(
+                pt(mu + px * 1.2 + dx * 0.01, mv + py * 1.2 + dy * 0.01),
+                pt(tx, ty),
+                pt(mu - px * 1.2 + dx * 0.01, mv - py * 1.2 + dy * 0.01),
+                up,
+                slot,
+            );
+        }
+    }
+    mb.build()
+}
+
+/// Signature of the current mark set — the rebuild gate, same idea as the
+/// flag-zone one: the overlay only follows the (turn, marks) pair, never the
+/// frame clock.
+fn sound_mark_sig(marks: &[(HexCoord, u32)]) -> u64 {
+    let mut s = 0x9E37_9E37u64 ^ marks.len() as u64;
+    for &(h, age) in marks {
+        s = s
+            .wrapping_mul(31)
+            .wrapping_add(((h.q as u64) << 32) | (h.r as u64 & 0xffff_ffff))
+            .wrapping_mul(31)
+            .wrapping_add(age as u64);
+    }
+    s
+}
+
+/// Spawn/refresh the sound seals (§6.1): one ring-and-icon seal per live
+/// mark the PLAYER has heard. Turn-driven only — a mark is created by a fire phase
+/// and ages one step per full turn, so the whole overlay is rebuilt when the
+/// (turn, mark-set) signature moves; nothing animates per frame.
+pub fn sync_sound_markers(
+    mut commands: Commands,
+    state: Res<TacticalState>,
+    game: Option<Res<GameController>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    q_overlay: Query<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>), With<SoundMarkOverlay>>,
+    mut shown: Local<(u32, u64)>,
+) {
+    let Some(game) = game else { return };
+    // Query with the clock the marks were stamped with — the same one
+    // `update_fog` ticks on (`state.turn` is only written at the closeout,
+    // inside the frame that stamps them).
+    let turn = game.session.turn_number;
+    let marks = state.sound_marks(turn);
+    let sig = (turn, sound_mark_sig(&marks));
+    if *shown == sig {
+        return;
+    }
+    *shown = sig;
+    despawn_visuals(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &mut images,
+        q_overlay
+            .iter()
+            .map(|(e, m, mat)| (e, m.0.clone(), mat.0.clone())),
+    );
+    if marks.is_empty() || state.grid.is_none() {
+        return;
+    }
+    // One kind today: every mark in the fog is an artillery tell.
+    let list: Vec<(HexCoord, u32, MarkKind)> = marks
+        .iter()
+        .map(|&(h, age)| (h, age, MarkKind::ArtilleryFire))
+        .collect();
+    let (mesh, img) = build_sound_mark_mesh(&state, &list);
+    let mat = materials.add(StandardMaterial {
+        // The per-mark alpha rides the palette; the material itself is
+        // white so the seal shows exactly the colour the tell defines.
+        base_color: Color::WHITE,
+        base_color_texture: Some(images.add(img)),
+        perceptual_roughness: 0.9,
+        alpha_mode: AlphaMode::Blend,
+        cull_mode: None,
+        ..default()
+    });
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(mat),
+        Transform::default(),
+        SoundMarkOverlay,
+        NotShadowCaster, // ground-hugging overlay: casts no visible shadow
+    ));
+}
+
 /// Roads and railways (§4.2): ONE merged static mesh of ground-hugging
 /// ribbons over the terrain — each net decomposed into ordered polyline
 /// runs swept as continuous quad strips with rounded corners; bridge
@@ -3588,7 +3846,7 @@ mod tests {
 
     /// Palette fast path: a colors-only recolor must produce EXACTLY the
     /// palette a full rebuild would — the slot layout is fixed
-    /// (3 river slots + 2 per hex), so the mesh never needs rebuilding.
+    /// (3 river slots + 3 per hex), so the mesh never needs rebuilding.
     #[test]
     fn palette_recolor_matches_full_rebuild() {
         let mut state = TacticalState::default();
@@ -3597,8 +3855,8 @@ mod tests {
         state.grid = Some(Arc::new(grid));
 
         let (_, image_a) = build_board_mesh(&state);
-        // Fixed layout: 3 river slots + 2 per hex (8×8 = 64 hexes).
-        assert_eq!(image_a.data.len(), (3 + 2 * 64) * 4);
+        // Fixed layout: 3 river slots + 3 per hex (8×8 = 64 hexes).
+        assert_eq!(image_a.data.len(), (3 + 3 * 64) * 4);
 
         // Change a highlight → recolor in place, then compare against a
         // from-scratch rebuild of the same state.
@@ -3614,6 +3872,42 @@ mod tests {
         assert_eq!(
             recolored.data, image_b.data,
             "palette recolor must equal a full rebuild"
+        );
+
+        // Fog pass: one observer at (6,6) — the river-edge hex (2,2) stays
+        // Hidden, its band the shadowed water color; the recolor of the
+        // VISIBLE build must equal a from-scratch fogged rebuild.
+        let mut fogged = TacticalState {
+            grid: state.grid.clone(),
+            player_side: state.player_side,
+            units: vec![BattalionUnit::new(
+                1,
+                "O",
+                UnitType::Infantry,
+                Side::Attacker,
+                HexCoord::new(6, 6),
+            )],
+            ..Default::default()
+        };
+        let mut fog = tactical_core::fog::FogOfWar::new(8, 8, 2, 3);
+        fog.update(
+            fogged.grid.as_ref().unwrap(),
+            &fogged.units,
+            Side::Attacker,
+            fogged.turn,
+        );
+        fogged.fog = Some(fog);
+        assert_eq!(
+            fogged.fog_state(HexCoord::new(2, 2)),
+            VisibilityState::Hidden,
+            "the river hex must sit in the dark for this test"
+        );
+        let mut recolored = image_a.clone();
+        recolor_board_palette(&fogged, &mut recolored);
+        let (_, image_c) = build_board_mesh(&fogged);
+        assert_eq!(
+            recolored.data, image_c.data,
+            "fogged recolor must equal a full rebuild (river band included)"
         );
     }
 
@@ -4689,4 +4983,113 @@ mod tests {
         // Village hamlet (4 boxes) + factory (3 boxes), 24 verts per box.
         assert_eq!(vertex_count(&props), 96 + 72);
     }
+
+    /// §6.1 seals: age drives the whole fade — a fresh mark lands solid and
+    /// every later turn thins it (a floor covers longer intel windows).
+    #[test]
+    fn sound_mark_alpha_curve_by_age() {
+        let k = MarkKind::ArtilleryFire;
+        assert_eq!(k.alpha_for_age(0), 1.0);
+        assert_eq!(k.alpha_for_age(1), 0.70);
+        assert_eq!(k.alpha_for_age(2), 0.45);
+        assert_eq!(k.alpha_for_age(3), 0.20);
+        assert_eq!(k.alpha_for_age(9), 0.20, "past the curve keeps the floor");
+    }
+
+    /// The seal overlay's rebuild gate follows the mark set: a cleared set,
+    /// an expired mark and an age step all read as changes, an unchanged set
+    /// does not (the turn rides the caller's `Local`, not this signature).
+    #[test]
+    fn sound_mark_sig_follows_the_mark_set() {
+        let a = [(HexCoord::new(2, 2), 0), (HexCoord::new(3, 5), 2)];
+        assert_eq!(sound_mark_sig(&a), sound_mark_sig(&a));
+        assert_ne!(sound_mark_sig(&a), sound_mark_sig(&[]), "cleared");
+        assert_ne!(
+            sound_mark_sig(&a),
+            sound_mark_sig(&[(HexCoord::new(2, 2), 0)]),
+            "one mark expired"
+        );
+        assert_ne!(
+            sound_mark_sig(&a),
+            sound_mark_sig(&[(HexCoord::new(2, 2), 1), (HexCoord::new(3, 5), 3)]),
+            "same hexes, next turn's ages"
+        );
+    }
+
+    /// One ring-and-icon seal per live mark with the age alpha baked into
+    /// the palette; an empty set builds no geometry at all.
+    #[test]
+    fn sound_mark_mesh_builds_ring_and_icon_per_mark() {
+        let mut state = TacticalState::default();
+        state.grid = Some(Arc::new(HexGrid::new(8, 8, Terrain::Plains)));
+        let marks = [
+            (HexCoord::new(2, 2), 0, MarkKind::ArtilleryFire),
+            (HexCoord::new(3, 5), 2, MarkKind::ArtilleryFire),
+        ];
+        let (mesh, image) = build_sound_mark_mesh(&state, &marks);
+        let indices = mesh.indices().map(|i| i.len()).unwrap_or(0);
+        // Two rings alone would be 2 × 28 segments × 2 tris × 3 indices —
+        // anything beyond that is the cannon icon inside them.
+        assert!(
+            indices > 2 * SOUND_MARK_SEGMENTS * 2 * 3,
+            "rings + cannon icons built"
+        );
+        let alphas: Vec<u8> = image.data.chunks(4).map(|p| p[3]).collect();
+        assert!(alphas.contains(&255), "the fresh seal is solid");
+        assert!(
+            alphas.iter().any(|&a| a > 0 && a < 255),
+            "the older seal is faded"
+        );
+
+        let (empty, _) = build_sound_mark_mesh(&state, &[]);
+        assert_eq!(empty.indices().map(|i| i.len()).unwrap_or(0), 0);
+    }
+
+    /// The overlay through the real system: one merged entity while the intel
+    /// lives, torn down when the window closes, and nothing for a mark only
+    /// the AI's own fog heard (§6.1 — the seals never leak the enemy view).
+    #[test]
+    fn sound_mark_overlay_spawns_and_clears() {
+        fn seals(app: &mut App) -> usize {
+            let world = app.world_mut();
+            let mut q = world.query::<&SoundMarkOverlay>();
+            q.iter(world).count()
+        }
+
+        let mut app = App::new();
+        app.add_plugins(bevy::MinimalPlugins);
+        let mut state = TacticalState::default();
+        state.grid = Some(Arc::new(HexGrid::new(8, 8, Terrain::Plains)));
+        let game =
+            GameController::new(Side::Attacker, tactical_ai::CombatTactic::ElasticDefense, 1);
+        let turn = game.session.turn_number;
+        let mut fog = tactical_core::fog::FogOfWar::new(8, 8, 3, 3);
+        fog.mark_firing(HexCoord::new(2, 2), turn);
+        state.fog = Some(fog);
+        let mut ai_fog = tactical_core::fog::FogOfWar::new(8, 8, 3, 3);
+        ai_fog.mark_firing(HexCoord::new(6, 6), turn);
+        state.ai_fog = Some(ai_fog);
+        app.insert_resource(state);
+        app.insert_resource(game);
+        app.insert_resource(Assets::<Mesh>::default());
+        app.insert_resource(Assets::<bevy::image::Image>::default());
+        app.insert_resource(Assets::<StandardMaterial>::default());
+        app.add_systems(Update, sync_sound_markers);
+
+        app.update();
+        assert_eq!(seals(&mut app), 1, "one merged seal entity for the mark");
+        // The clock moves past the intel window: the seal despawns.
+        app.world_mut()
+            .resource_mut::<GameController>()
+            .session
+            .turn_number = turn + 4;
+        app.update();
+        assert_eq!(seals(&mut app), 0, "expired intel draws nothing");
+    }
+
+
+
+
+
+
 }

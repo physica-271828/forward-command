@@ -26,8 +26,9 @@ mod units;
 
 pub use mapping::{map_unit_class, map_unit_type, unit_type_abbrev, UnitClass, UnitNaming};
 pub use model::{
-    ArmyData, BattalionInfo, CountryData, DivisionData, EquipmentDesign, LandCombatData,
-    LandCombatSideData, LeaderData, SaveGame, TemplateData, COMBAT_TACTIC_IDS,
+    ArmyData, BattalionInfo, BorderWarCombatData, BorderWarCombatSideData, CountryData,
+    DivisionData, EquipmentDesign, LandCombatData, LandCombatSideData, LeaderData, SaveGame,
+    TemplateData, COMBAT_TACTIC_IDS,
 };
 pub use names::{NameGroup, NameGroups};
 pub use parser::{find_divisions_in_province, SaveParser};

@@ -112,6 +112,8 @@ impl BattleRoster {
         }
     }
 
+    /// No reader today — the roster is empty exactly when [`Self::entries`]
+    /// is; kept so the roster reads like the other collections here.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -184,7 +186,8 @@ impl BattleRoster {
     }
 
     /// The approach direction of a division joining from `from_province`:
-    /// the contested province's border-bearing table entry for it.
+    /// the contested province's border-bearing table entry for it. Called
+    /// from [`Self::join_direction`]; no out-of-crate reader yet.
     pub fn approach_dir(&self, from_province: u32) -> Option<HexDirection> {
         self.approach_dirs.get(&from_province).copied()
     }

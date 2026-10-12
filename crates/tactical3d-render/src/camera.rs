@@ -158,20 +158,23 @@ const RIGHT_CLICK_PX: f32 = 6.0;
 pub fn default_view(state: &TacticalState) -> RtsCamera {
     let mut cam = RtsCamera::default();
     if let Some(grid) = &state.grid {
-        let (x, z) =
-            tactical_core::hex::HexCoord::new(grid.width as i32 / 2, grid.height as i32 / 2)
-                .to_world(crate::board::HEX_SIZE);
-        cam.target = Vec3::new(x, 0.0, z);
-
         // Fit the whole board in frame. The binding constraint is the NEAR
         // edge: at pitch -0.9 the view axis hits the board center, so ground
         // points on the eye's side appear near the bottom screen edge — the
         // camera must be far enough that the near rim stays inside the lower
-        // half-fov. Then check far edge and cross axis, take the max.
-        // (Bevy default Camera3d vertical fov = π/4.)
+        // half-fov. The FAR edge is computed too, but at the fixed default
+        // pitch it is never the larger term (d_far ≈ 1.26·r_along against
+        // d_near ≈ 2.51·r_along); it is kept as the guard for a steeper
+        // pitch, where the far relation can flip. (Bevy default Camera3d
+        // vertical fov = π/4.)
         let (max_x, max_z) =
             tactical_core::hex::HexCoord::new(grid.width as i32 - 1, grid.height as i32 - 1)
                 .to_world(crate::board::HEX_SIZE);
+        // The fit extents are symmetric about the target, so the target
+        // must be the board's bounding-box CENTRE (max/2) — not the centre
+        // hex's origin (to_world places hex (0,0)'s centre at 0,0, so the
+        // bbox centre is half a hex off the middle hex's origin).
+        cam.target = Vec3::new(max_x * 0.5, 0.0, max_z * 0.5);
         // Board half-extents along / across the view azimuth.
         let (ux, uz) = (cam.yaw.cos(), cam.yaw.sin());
         let r_along = (ux.abs() * max_x + uz.abs() * max_z) * 0.5;
@@ -531,5 +534,34 @@ mod tests {
         assert_eq!(glide.active.unwrap().duration, 0.35);
         glide.start(&cam, Vec3::new(500.0, 0.0, 500.0), 300.0); // cross-map jump
         assert_eq!(glide.active.unwrap().duration, 1.2);
+    }
+
+    /// The fit's symmetric extents demand the board's bounding-box CENTRE
+    /// as the target — the middle hex's origin sits half a hex off it
+    /// (hex (0,0)'s centre is the world origin), clipping the west columns
+    /// on small boards.
+    #[test]
+    fn default_view_targets_the_board_bbox_centre() {
+        let state = TacticalState {
+            grid: Some(std::sync::Arc::new(tactical_core::grid::HexGrid::new(
+                12,
+                12,
+                tactical_core::terrain::Terrain::Plains,
+            ))),
+            ..Default::default()
+        };
+        let cam = default_view(&state);
+        let (max_x, max_z) =
+            tactical_core::hex::HexCoord::new(11, 11).to_world(crate::board::HEX_SIZE);
+        assert!(
+            (cam.target.x - max_x * 0.5).abs() < 1e-4,
+            "{}",
+            cam.target.x
+        );
+        assert!(
+            (cam.target.z - max_z * 0.5).abs() < 1e-4,
+            "{}",
+            cam.target.z
+        );
     }
 }

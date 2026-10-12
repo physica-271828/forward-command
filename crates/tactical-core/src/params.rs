@@ -53,10 +53,12 @@ pub struct CombatParams {
     pub partial_encircle_org_attrition: f32, // 0.025
     pub full_encircle_org_attrition: f32,    // 0.05
 
-    // §6.5 ZOC — surcharges zeroed for a feel trial (enemy-adjacent
-    // maneuver felt too punishing); mechanism kept, re-enable here.
-    pub zoc_entry_ap_cost: f32,  // +1 when enabled
-    pub zoc_to_zoc_ap_cost: f32, // +2 when enabled
+    // §6.5 控制区 (control zone): entering a hex covered by the enemy's
+    // fighting units scales that step's cost by
+    // `1 + control_slow_k × Σ(org_ratio × strength_ratio)` over the
+    // covering units — a fresh infantry battalion roughly halves the pace,
+    // a spent one barely dents it. 0.0 switches the delay off.
+    pub control_slow_k: f32, // 1.0
 
     // §6.2/§6.9 lane spreading: soft surcharges (effective km) for
     // pathing through another FRIENDLY standing order's route — path hexes
@@ -67,8 +69,11 @@ pub struct CombatParams {
     pub friendly_dest_penalty_km: f32, // 2.0
 
     // §6.8
-    pub hold_defense_bonus: f32,         // 0.25
-    pub entrench_max_layers: u8,         // 3
+    pub hold_defense_bonus: f32, // 0.25
+    /// Cap on the entrenchment layer count a save can field — read by the
+    /// save assembly (`entrench_layers`) when it converts a division's
+    /// entrenchment value into layers.
+    pub entrench_max_layers: u8, // 3
     pub entrench_defense_per_layer: f32, // 0.10
 
     // §6.3 fire support: an AREA mission (F-key barrage / intel fire)
@@ -130,6 +135,9 @@ pub struct CombatParams {
 
     // Fog of war
     pub fog_reveal_duration_turns: u32, // 3
+    /// §6.1: how many turns a firing heard on a hex stays marked — the
+    /// sound-ranging intel window (0 leaves only the firing turn itself).
+    pub sound_mark_turns: u32, // 3
 
     // §6.13 command / division HQ
     /// Command aura radius in hexes (same-division battalions only).
@@ -208,8 +216,7 @@ impl Default for CombatParams {
             random_spread: 0.0,
             partial_encircle_org_attrition: 0.025,
             full_encircle_org_attrition: 0.05,
-            zoc_entry_ap_cost: 0.0,
-            zoc_to_zoc_ap_cost: 0.0,
+            control_slow_k: 1.0,
             friendly_path_penalty_km: 0.5,
             friendly_dest_penalty_km: 2.0,
             hold_defense_bonus: 0.25,
@@ -229,6 +236,7 @@ impl Default for CombatParams {
             road_elev_step_km: 0.3,
             turns_per_strategic_hour: 6,
             fog_reveal_duration_turns: 3,
+            sound_mark_turns: 3,
             hq_aura_radius: 3,
             hq_org_regen_frac: 0.02,
             hq_combat_bonus: 0.10,
@@ -299,5 +307,6 @@ mod tests {
         assert_eq!(p.off_road_surcharge_km, 0.5);
         assert_eq!(p.road_base_km, 1.0);
         assert_eq!(p.road_elev_step_km, 0.3);
+        assert_eq!(p.sound_mark_turns, 3);
     }
 }

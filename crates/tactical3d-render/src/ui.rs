@@ -5,21 +5,21 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use tactical_ai::CombatTactic;
 use tactical_core::damage::{AccuracyClass, HitBreakdown, LinearFactor};
-use tactical_core::encirclement::{detect_encirclement, EncirclementLevel};
+use tactical_core::encirclement::EncirclementLevel;
 use tactical_core::unit::{Side, UnitState};
 use tactical_core::{compute_command_links, in_command};
 use tactical_sync::BattlePhase;
 
-use crate::automation::{TurnAutomation, CLOSE_SECS_MAX, CLOSE_SECS_MIN};
-use crate::board::hex_world;
+use crate::automation::{TurnAutomation, CLOSE_SECS_MAX, CLOSE_SECS_MIN, FAST_SPEED_MAX, FAST_SPEED_MIN};
+use crate::board::{hex_world, MarkKind};
 use crate::game::{DivOrderPick, GameController, PendingCommands, PlayerCommand};
 use crate::icons::{IconId, IconSet};
 use crate::locale::LocaleRes;
 use crate::models::SideColors;
 use crate::state::{
     BattleTour, CommandMode, DesyncAction, DesyncAlert, DetailWindow, DivPickKind,
-    EngagementDetailView, FlashNotice, NoticeBar, RecallKind, SyncStall, SyncStallAction,
-    TacticalState, UiWindows,
+    EngagementDetailView, FlashNotice, NoticeBar, RecallKind, SyncProgress, SyncStall,
+    SyncStallAction, TacticalState, UiWindows,
 };
 
 /// Theme color as egui Color32 (SideColors are 0..1 floats).
@@ -83,6 +83,7 @@ impl Plugin for TacticalUiPlugin {
                         draw_settings_window,
                         draw_sync_prompt,
                         draw_sync_stall,
+                        draw_sync_progress,
                         draw_desync_alert,
                         draw_battle_report,
                         draw_engagement_detail,
@@ -127,6 +128,7 @@ const BLOCKING_PANELS: &[&str] = &["command_panel"];
 /// Pub: the render (camera/picking) and game-loop (map clicks) Update sets
 /// are explicitly ordered AFTER this system so they
 /// never read a one-frame-stale `pointer_over_ui`.
+#[allow(clippy::too_many_arguments)]
 pub fn ui_pointer_guard(
     mut contexts: EguiContexts,
     mut state: ResMut<TacticalState>,
@@ -134,6 +136,7 @@ pub fn ui_pointer_guard(
     tour: Option<Res<BattleTour>>,
     stall: Option<Res<SyncStall>>,
     desync: Option<Res<DesyncAlert>>,
+    sync_progress: Option<Res<SyncProgress>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
 ) {
     // On window-close frames the egui context is already torn
@@ -185,9 +188,11 @@ pub fn ui_pointer_guard(
         // The sync-stall dialog is modal too — it lives outside
         // UiWindows (the bin-side injector owns its lifecycle), so the
         // guard reads the resource directly. The desync guard's dialog
-        // is modal the same way.
+        // is modal the same way, and so is the in-flight sync's
+        // progress spinner.
         || stall.is_some()
         || desync.is_some()
+        || sync_progress.is_some()
         // The battle-report tour is modal too — camera pan/zoom and
         // picking stay frozen so the pinned report magnification cannot
         // be disturbed mid-playback.
@@ -517,8 +522,12 @@ fn draw_command_panel(
                         .color(egui::Color32::from_rgb(178, 34, 34)),
                 );
             }
+            // A modal surface (Esc menu, sync prompt, confirms) freezes
+            // the world-mutating buttons too — same gate the automation
+            // side applies before an auto End Turn.
             let can_act = game.session.phase == BattlePhase::TacticalActive
-                && game.session.current_side == state.player_side;
+                && game.session.current_side == state.player_side
+                && !ui_win.modal_open();
             match game.session.phase {
                 BattlePhase::Deployment => {
                     // Auto Deploy hands the still-waiting
@@ -637,21 +646,40 @@ fn draw_command_panel(
                 }
                 _ => {
                     ui.add_enabled_ui(can_act, |ui| {
-                        if tip(
-                            ui.add(
-                                icons.button(
-                                    Some(IconId::Clock),
-                                    egui::RichText::new(loc.tr("battle.button.end_turn").as_ref())
-                                        .strong(),
+                        ui.horizontal(|ui| {
+                            // 全体推进: one click fills in the Advance order
+                            // for every commanded division still without one
+                            // (explicit Seize/Engage orders stay put).
+                            if tip(
+                                ui.add(icons.button(
+                                    Some(IconId::Advance),
+                                    loc.tr("battle.button.advance_all").as_ref(),
                                     14.0,
+                                )),
+                                loc.tr("battle.tooltip.advance_all"),
+                            )
+                            .clicked()
+                            {
+                                pending.0.push(PlayerCommand::AdvanceAll);
+                            }
+                            if tip(
+                                ui.add(
+                                    icons.button(
+                                        Some(IconId::Clock),
+                                        egui::RichText::new(
+                                            loc.tr("battle.button.end_turn").as_ref(),
+                                        )
+                                        .strong(),
+                                        14.0,
+                                    ),
                                 ),
-                            ),
-                            loc.tr("battle.tooltip.end_turn"),
-                        )
-                        .clicked()
-                        {
-                            pending.0.push(PlayerCommand::EndTurn);
-                        }
+                                loc.tr("battle.tooltip.end_turn"),
+                            )
+                            .clicked()
+                            {
+                                pending.0.push(PlayerCommand::EndTurn);
+                            }
+                        });
                     });
                 }
             }
@@ -780,47 +808,80 @@ fn draw_automation_panel(ui: &mut egui::Ui, auto: &mut TurnAutomation, phase: Ba
         BattlePhase::TacticalActive | BattlePhase::ReadyToSync | BattlePhase::ReadyToEnd
     );
     ui.add_enabled_ui(active, |ui| {
+        // Fast play: the master switch — drives the three toggles below,
+        // cuts every pace, suppresses combat reports (automation.rs item 0).
+        // Space pauses/resumes the flow.
         tip(
-            ui.checkbox(&mut auto.skip_quiet_turns, loc.tr("battle.auto.skip_quiet").as_ref()),
-            loc.tr("battle.tooltip.auto.skip_quiet"),
+            ui.checkbox(&mut auto.fast_mode, loc.tr("battle.auto.fast").as_ref()),
+            loc.tr("battle.tooltip.auto.fast"),
         );
-        tip(
-            ui.checkbox(&mut auto.skip_reports, loc.tr("battle.auto.skip_reports").as_ref()),
-            loc.tr("battle.tooltip.auto.skip_reports"),
-        );
-        ui.add_enabled_ui(auto.skip_reports, |ui| {
+        if auto.fast_mode && auto.paused {
             ui.label(
-                egui::RichText::new(loc.tr("battle.auto.report_close_label").as_ref())
+                egui::RichText::new(loc.tr("battle.auto.fast.paused").as_ref())
+                    .small()
+                    .color(STR_YELLOW),
+            );
+        }
+        // RTS speed: the mode's own pace knob (automation.rs item 0) — only
+        // meaningful while the mode runs; every move re-paces the flow live.
+        if auto.fast_mode {
+            ui.label(
+                egui::RichText::new(loc.tr("battle.auto.speed_label").as_ref())
                     .small()
                     .weak(),
             );
             tip(
                 ui.add(
-                    egui::Slider::new(&mut auto.report_close_secs, CLOSE_SECS_MIN..=CLOSE_SECS_MAX)
+                    egui::Slider::new(&mut auto.fast_speed, FAST_SPEED_MIN..=FAST_SPEED_MAX)
                         .fixed_decimals(1)
-                        .suffix(" s"),
+                        .suffix("×"),
                 ),
-                loc.tr("battle.tooltip.auto.report_close_secs"),
+                loc.tr("battle.tooltip.auto.speed"),
             );
-        });
-        tip(
-            ui.checkbox(&mut auto.auto_sync, loc.tr("battle.auto.auto_sync").as_ref()),
-            loc.tr("battle.tooltip.auto.auto_sync"),
-        );
-        ui.add_enabled_ui(auto.auto_sync, |ui| {
-            ui.label(
-                egui::RichText::new(loc.tr("battle.auto.sync_close_label").as_ref())
-                    .small()
-                    .weak(),
+        }
+        ui.add_enabled_ui(!auto.fast_mode, |ui| {
+            tip(
+                ui.checkbox(&mut auto.skip_quiet_turns, loc.tr("battle.auto.skip_quiet").as_ref()),
+                loc.tr("battle.tooltip.auto.skip_quiet"),
             );
             tip(
-                ui.add(
-                    egui::Slider::new(&mut auto.sync_close_secs, CLOSE_SECS_MIN..=CLOSE_SECS_MAX)
-                        .fixed_decimals(1)
-                        .suffix(" s"),
-                ),
-                loc.tr("battle.tooltip.auto.sync_close_secs"),
+                ui.checkbox(&mut auto.skip_reports, loc.tr("battle.auto.skip_reports").as_ref()),
+                loc.tr("battle.tooltip.auto.skip_reports"),
             );
+            ui.add_enabled_ui(auto.skip_reports, |ui| {
+                ui.label(
+                    egui::RichText::new(loc.tr("battle.auto.report_close_label").as_ref())
+                        .small()
+                        .weak(),
+                );
+                tip(
+                    ui.add(
+                        egui::Slider::new(&mut auto.report_close_secs, CLOSE_SECS_MIN..=CLOSE_SECS_MAX)
+                            .fixed_decimals(1)
+                            .suffix(" s"),
+                    ),
+                    loc.tr("battle.tooltip.auto.report_close_secs"),
+                );
+            });
+            tip(
+                ui.checkbox(&mut auto.auto_sync, loc.tr("battle.auto.auto_sync").as_ref()),
+                loc.tr("battle.tooltip.auto.auto_sync"),
+            );
+            ui.add_enabled_ui(auto.auto_sync, |ui| {
+                ui.label(
+                    egui::RichText::new(loc.tr("battle.auto.sync_close_label").as_ref())
+                        .small()
+                        .weak(),
+                );
+                tip(
+                    ui.add(
+                        egui::Slider::new(&mut auto.sync_close_secs, CLOSE_SECS_MIN..=CLOSE_SECS_MAX)
+                            .fixed_decimals(1)
+                            .suffix(" s"),
+                    ),
+                    loc.tr("battle.tooltip.auto.sync_close_secs"),
+                );
+            });
         });
     });
 }
@@ -988,11 +1049,36 @@ fn draw_hover_card(
                 if let Some(u) = hovered_unit {
                     unit_card(ui, &game, &state, u, &loc);
                 } else if let Some(h) = state.hover_hex {
-                    hex_card(ui, &state, h, &loc, game.combat.params());
+                    hex_card(
+                        ui,
+                        &state,
+                        h,
+                        &loc,
+                        game.combat.params(),
+                        game.session.turn_number,
+                    );
                 }
             });
         });
     track.card_rect = Some(resp.response.rect);
+}
+
+/// Support-company hover lines: each attachment's localized name followed
+/// by its localized effect row. The effect tokens come from the core layer
+/// locale-free (see `BattalionUnit::support_effect_tokens`), so every
+/// fragment here is a locale key.
+fn support_effects_text(u: &tactical_core::unit::BattalionUnit, loc: &LocaleRes) -> String {
+    u.support_effect_tokens()
+        .into_iter()
+        .map(|(name, effects)| {
+            let parts: Vec<String> = effects
+                .into_iter()
+                .map(|(key, value)| loc.trf(key, &[("n", &value)]))
+                .collect();
+            format!("{name}: {}", parts.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// Unit hover card: full stat sheet + exact Org/Str on bar hover.
@@ -1015,7 +1101,7 @@ fn unit_card(
                 .small()
                 .weak(),
         )
-        .on_hover_text(u.support_effects_line());
+        .on_hover_text(support_effects_text(u, loc));
     }
     let mut state_line = format!(
         "{} | {} | {}",
@@ -1123,6 +1209,31 @@ fn unit_card(
             &[("n", &u.unit_type.aa_cover_radius().to_string())],
         ));
     }
+    // §6.7 strategic logistics (assembly-baked ratios): yellow below 50%,
+    // red below 25%.
+    let logistics_color = |v: f32| {
+        if v < 0.25 {
+            WARN_RED
+        } else if v < 0.5 {
+            STR_YELLOW
+        } else {
+            PARCHMENT
+        }
+    };
+    ui.label(
+        egui::RichText::new(loc.trf(
+            "battle.hover.supply",
+            &[("pct", &format!("{:.0}", u.supply * 100.0))],
+        ))
+        .color(logistics_color(u.supply)),
+    );
+    ui.label(
+        egui::RichText::new(loc.trf(
+            "battle.hover.fuel",
+            &[("pct", &format!("{:.0}", u.fuel * 100.0))],
+        ))
+        .color(logistics_color(u.fuel)),
+    );
     if u.entrenchment > 0 {
         ui.label(loc.trf(
             "battle.hover.entrenchment",
@@ -1244,6 +1355,7 @@ fn hex_card(
     h: tactical_core::hex::HexCoord,
     loc: &LocaleRes,
     params: &tactical_core::params::CombatParams,
+    turn: u32,
 ) {
     ui.label(
         egui::RichText::new(loc.trf(
@@ -1252,6 +1364,19 @@ fn hex_card(
         ))
         .strong(),
     );
+    // §6.1 sound ranging: a live mark makes this hex a target, not just
+    // ground — the F-key barrage is the counter-battery gesture, so the card
+    // names the intel and counts down the window it stays actionable.
+    if let Some(age) = state.sound_mark_age(h, turn) {
+        let left = params.sound_mark_turns.saturating_sub(age);
+        ui.label(
+            egui::RichText::new(
+                loc.trf("battle.hover.sound_mark", &[("turns", &left.to_string())]),
+            )
+            .strong()
+            .color(color32(MarkKind::ArtilleryFire.color(), 255)),
+        );
+    }
     if let Some(g) = &state.grid {
         if let Some(c) = g.cell(h) {
             // River hexes name their width band (小河 / 中河 / 大河) — the
@@ -1488,6 +1613,16 @@ fn draw_minimap(
                 ];
                 painter.circle_filled(dot(u.position), (s * 0.6).max(2.0), color32(bright, 255));
             }
+            // §6.1 sound-ranging marks: hex intel, not a sighting — drawn
+            // AFTER the unit pass and deliberately OUTSIDE its fog filter
+            // (the blip loop above hides unseen enemies; a mark is heard, and
+            // the ground seal shows it on the board too). The clip rect of
+            // `painter` keeps them inside the minimap.
+            for (h, age) in state.sound_marks(game.session.turn_number) {
+                let kind = MarkKind::ArtilleryFire;
+                let a = (kind.alpha_for_age(age) * 255.0).round().clamp(0.0, 255.0) as u8;
+                painter.circle_filled(dot(h), (s * 0.55).max(1.6), color32(kind.color(), a));
+            }
             // White quad = the main camera's visible ground
             // footprint — the four screen corners raycast onto the picking
             // plane, then mapped into the minimap's hex projection
@@ -1593,6 +1728,12 @@ fn draw_unit_labels(
     let cmd_links = game
         .as_deref()
         .map(|g| compute_command_links(&state.units, g.combat.params()));
+    // Same once-per-frame treatment for the encirclement verdicts: one
+    // pocket-memoized roster pass instead of a pocket BFS per label.
+    let encircle_levels = state
+        .grid
+        .as_deref()
+        .map(|g| tactical_core::encirclement::detect_encirclement_all(g, &state.units));
 
     for (ui, u) in state.units.iter().enumerate() {
         if !u.is_combat_effective() && u.state != UnitState::Retreating {
@@ -1733,10 +1874,9 @@ fn draw_unit_labels(
         // and share one slot. Retreating units are skipped (attrition only
         // bites on combat-effective units anyway) — their R marker owns
         // the right edge.
-        let encircled = state
-            .grid
-            .as_deref()
-            .map(|g| detect_encirclement(g, u, &state.units))
+        let encircled = encircle_levels
+            .as_ref()
+            .map(|v| v[ui])
             .unwrap_or(EncirclementLevel::None);
         let regen = encircled == EncirclementLevel::None
             && u.is_combat_effective()
@@ -2315,6 +2455,7 @@ fn draw_notice_bar(
     state: Option<Res<TacticalState>>,
     tour: Res<BattleTour>,
     loc: Res<LocaleRes>,
+    auto: Option<Res<TurnAutomation>>,
     mut anchor: Local<CenterAnchor>,
 ) {
     // Window-close frame guard (see ui_pointer_guard).
@@ -2323,12 +2464,21 @@ fn draw_notice_bar(
     };
     let Some(game) = game else { return };
     let now = time.elapsed_secs();
-    let flash = notice.flash.as_ref().filter(|f| f.until > now);
+    // RTS mode keeps the top bar silent: turn banners (flashed or pinned)
+    // and the sync-ready hint never show — the flow needs no narration.
+    // One-shot alerts the player must see (deadlock-fuse halt, battle
+    // resolved) are plain flashes and still come through.
+    let rts = auto.as_deref().map(|a| a.fast_mode).unwrap_or(false);
+    let flash = notice
+        .flash
+        .as_ref()
+        .filter(|f| f.until > now && !(rts && f.side.is_some()));
     // The enemy-turn banner stays pinned for the WHOLE enemy turn: once the
     // 3 s handover flash expires, a phase-driven banner below carries it
     // until the side flips back. Held back while the battle-report tour
     // plays — the same rule as the flash notices.
-    let enemy_turn = game.session.phase == BattlePhase::TacticalActive
+    let enemy_turn = !rts
+        && game.session.phase == BattlePhase::TacticalActive
         && !tour.active
         && state
             .as_ref()
@@ -2438,7 +2588,7 @@ fn draw_notice_bar(
                             loc.tr("battle.hint.deploy_drag")
                         }
                     }
-                    BattlePhase::ReadyToSync => loc.tr("battle.hint.sync_ready"),
+                    BattlePhase::ReadyToSync if !rts => loc.tr("battle.hint.sync_ready"),
                     BattlePhase::ReadyToEnd => loc.tr("battle.hint.battle_resolved"),
                     _ => return,
                 }
@@ -3165,16 +3315,13 @@ fn draw_oob_window(
             // Group own battalions by division, first-appearance order.
             // The group key is the (owner tag, division) command identity
             // (§7.5) — it doubles as the sector-pick / recall identifier, so
-            // the "(unattached)" stand-in is the localized string (same
-            // sentinel semantics as before — comparisons stay internal).
+            // it must stay RAW: an empty name (a scripted force with no
+            // division) keys the group as "", exactly what the commit paths
+            // compare against. The localized "(unattached)" string is for
+            // display only.
             let mut groups: Vec<((String, String), Vec<usize>)> = Vec::new();
             for u in state.units.iter().filter(|u| u.side == player) {
-                let division = if u.division.is_empty() {
-                    loc.tr("oob.unattached").into_owned()
-                } else {
-                    u.division.clone()
-                };
-                let key = (u.tag.clone(), division);
+                let key = (u.tag.clone(), u.division.clone());
                 match groups.iter_mut().find(|(k, _)| *k == key) {
                     Some((_, v)) => v.push(u.id),
                     None => groups.push((key, vec![u.id])),
@@ -3299,10 +3446,15 @@ fn draw_oob_window(
                             Some(_) => (loc.tr("battle.oob.hq_lost").into_owned(), true),
                             None => (String::new(), false),
                         };
+                        let div_label = if div.is_empty() {
+                            loc.tr("oob.unattached").into_owned()
+                        } else {
+                            div.clone()
+                        };
                         let mut title = loc.trf(
                             "battle.oob.division_header",
                             &[
-                                ("div", &div),
+                                ("div", div_label.as_str()),
                                 ("effective", &effective.to_string()),
                                 ("total", &ids.len().to_string()),
                             ],
@@ -3590,6 +3742,18 @@ fn draw_oob_window(
                                         // it only selects + focuses.
                                         if resp.clicked() && effective {
                                             if !commanded {
+                                                // Switching units mid-pick
+                                                // disarms the fire mission:
+                                                // FirePicking was armed for
+                                                // the previously selected gun.
+                                                if state.command_mode == CommandMode::FirePicking
+                                                    && state.selected_unit != Some(id)
+                                                {
+                                                    state.command_mode = CommandMode::Select;
+                                                    crate::game::refresh_command_highlights(
+                                                        &mut state,
+                                                    );
+                                                }
                                                 state.select_only(id);
                                                 focus.0 = Some(hex_world(pos) + Vec3::Y * 0.4);
                                             } else if let Some((src_host, att_idx)) =
@@ -3617,6 +3781,16 @@ fn draw_oob_window(
                                                 state.deploy_placing = Some(id);
                                                 state.clear_selection();
                                             } else {
+                                                // Same disarm as the
+                                                // uncommanded branch above.
+                                                if state.command_mode == CommandMode::FirePicking
+                                                    && state.selected_unit != Some(id)
+                                                {
+                                                    state.command_mode = CommandMode::Select;
+                                                    crate::game::refresh_command_highlights(
+                                                        &mut state,
+                                                    );
+                                                }
                                                 state.select_only(id);
                                                 focus.0 = Some(hex_world(pos) + Vec3::Y * 0.4);
                                             }
@@ -4076,7 +4250,6 @@ fn factor_label(loc: &LocaleRes, kind: LinearFactor, bd: &HitBreakdown) -> Strin
                 ("cover", &d_spct(bd.target_terrain.cover_percent())),
             ],
         ),
-        LinearFactor::AreaWeight => loc.tr("detail.factor.area_weight").into_owned(),
     }
 }
 
@@ -4374,6 +4547,7 @@ fn hit_block(
 // battle cleanly (results so far are already in HOI4).
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn draw_sync_prompt(
     mut contexts: EguiContexts,
     game: Option<Res<GameController>>,
@@ -4381,6 +4555,7 @@ fn draw_sync_prompt(
     icons: Res<IconSet>,
     mut ui_win: ResMut<UiWindows>,
     mut pending: ResMut<PendingCommands>,
+    sync_progress: Option<Res<SyncProgress>>,
     // CenterAnchor state for the prompt window + the End-Tactic confirmation.
     mut anchors: Local<SyncAnchors>,
 ) {
@@ -4388,6 +4563,13 @@ fn draw_sync_prompt(
     let Some(ctx) = contexts.try_ctx_mut() else {
         return;
     };
+    // While a sync worker is in flight the "sync complete" prompt would be
+    // premature — the progress spinner stands in for it. The flag itself
+    // stays set so the prompt returns the moment the outcome lands (the
+    // bin side never has to race the resource removal).
+    if sync_progress.is_some() {
+        return;
+    }
     if !ui_win.sync_prompt {
         ui_win.confirm_end = false;
         return;
@@ -4575,6 +4757,48 @@ fn draw_sync_stall(
             });
         });
     anchor.update(resp.as_ref().map(|r| r.response.rect), ctx.pixels_per_point());
+}
+
+/// §8.4: an hourly sync is in flight on the background worker — a modal
+/// dim + spinner so the wait reads as busy, never as a frozen window. No
+/// progress detail by design. The bin-side injector owns the
+/// `SyncProgress` lifecycle; this system only draws it. The repaint
+/// request keeps the spinner animating: the frame loop only parks while
+/// nothing asks for repaints (render gate / reactive winit modes).
+fn draw_sync_progress(
+    mut contexts: EguiContexts,
+    loc: Res<LocaleRes>,
+    progress: Option<Res<SyncProgress>>,
+) {
+    // Window-close frame guard (see ui_pointer_guard).
+    let Some(ctx) = contexts.try_ctx_mut() else {
+        return;
+    };
+    if progress.is_none() {
+        return;
+    }
+    ctx.request_repaint();
+
+    // Dim behind the modal (same treatment as the sync stall).
+    egui::Area::new(egui::Id::new("sync_progress_dim"))
+        .order(egui::Order::Middle)
+        .fixed_pos(egui::pos2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.painter()
+                .rect_filled(ctx.screen_rect(), 0.0, egui::Color32::from_black_alpha(140));
+        });
+
+    egui::Area::new(egui::Id::new("sync_progress_panel"))
+        .order(egui::Order::Middle)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            egui::Frame::window(&ctx.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new());
+                    ui.label(egui::RichText::new(loc.tr("phase.synchronizing").as_ref()).strong());
+                });
+            });
+        });
 }
 
 /// The desync guard's modal (DESIGN.md §3.2/§8.2): the sync probes proved

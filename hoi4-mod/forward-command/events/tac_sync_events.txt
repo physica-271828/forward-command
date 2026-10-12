@@ -1,6 +1,7 @@
 # Forward Command — sync/abort/complete events (DESIGN §10.3).
-# All events are is_triggered_only: without it they are random-fire
-# eligible on the daily pulse (vanilla: 6586 uses).
+# All events are is_triggered_only: without it an event becomes eligible for
+# random firing on the daily pulse, which the tactical handshake must never
+# do — every trigger here is an explicit injection from the external program.
 
 add_namespace = tac_sync
 add_namespace = tac_complete

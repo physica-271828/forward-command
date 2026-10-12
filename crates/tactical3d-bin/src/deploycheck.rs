@@ -217,9 +217,8 @@ fn ascii_map(
     out
 }
 
-pub fn run(opts: Opts) {
-    let settings = crate::settings::AppSettings::load();
-    let spec = match crate::scenario::assemble(&opts.scenario, &settings) {
+pub fn run(opts: Opts, settings: &crate::settings::AppSettings) {
+    let spec = match crate::scenario::assemble(&opts.scenario, settings) {
         Ok(spec) => spec,
         Err(e) => {
             eprintln!("--deploycheck: {e}");
@@ -228,6 +227,7 @@ pub fn run(opts: Opts) {
     };
     let grid = spec.grid;
     let zones = spec.zones.clone();
+    let staging = spec.staging.clone();
     let mut units = spec.units;
     let player = spec.player_side;
     let enemy = player.opponent();
@@ -284,6 +284,30 @@ pub fn run(opts: Opts) {
         }
         out
     };
+    // ENH-0158: the defender's deployment corridor — the attacker's
+    // approach routes to the keypoints.
+    let corridor: Vec<HexCoord> = {
+        let anchors: Vec<HexCoord> = spec
+            .flags
+            .as_ref()
+            .map(|f| f.flags.iter().map(|z| z.anchor).collect())
+            .unwrap_or_default();
+        tactical_ai::approach_corridor(
+            &grid,
+            &staging,
+            &zones.0,
+            &zones.1,
+            &anchors,
+            &tactical_core::params::CombatParams::default(),
+        )
+    };
+    let corridor_of = |side: Side| -> Option<&[HexCoord]> {
+        if side == Side::Defender && !corridor.is_empty() {
+            Some(&corridor)
+        } else {
+            None
+        }
+    };
     let deploy_division = |units: &mut Vec<BattalionUnit>,
                            tag: &str,
                            div: &str,
@@ -292,6 +316,23 @@ pub fn run(opts: Opts) {
                            zone: &[HexCoord],
                            foe: &[HexCoord],
                            side: Side| {
+        // ENH-0157: the attacker's divisions stage on their own source
+        // provinces' areas (tooling mirrors the AI flow).
+        let zone: &[HexCoord] = if side == Side::Attacker && !staging.is_empty() {
+            units
+                .iter()
+                .find(|u| u.side == side && u.tag == tag && u.division == div)
+                .and_then(|u| u.hoi4_province)
+                .and_then(|p| {
+                    staging
+                        .iter()
+                        .find(|(s, _)| *s == p)
+                        .map(|(_, c)| c.as_slice())
+                })
+                .unwrap_or(zone)
+        } else {
+            zone
+        };
         tactical_ai::ai_deploy_impl(
             &grid,
             units,
@@ -304,6 +345,7 @@ pub fn run(opts: Opts) {
             Some(tag),
             Some(&all_divisions),
             false, // tooling mirror of the AI flow — arrange everyone
+            corridor_of(side),
         );
         for u in units.iter_mut() {
             if u.side == side
@@ -318,17 +360,31 @@ pub fn run(opts: Opts) {
         }
     };
     if !split {
-        tactical_ai::ai_deploy(
+        if !tactical_ai::ai_deploy_staged(
             &grid,
             &mut units,
+            &staging,
             player_zone,
             enemy_zone,
             player,
             player_card,
             &HashSet::new(),
-            None,
-            None,
-        );
+            &HashSet::new(),
+            false,
+        ) {
+            tactical_ai::ai_deploy(
+                &grid,
+                &mut units,
+                player_zone,
+                enemy_zone,
+                player,
+                player_card,
+                &HashSet::new(),
+                None,
+                None,
+                corridor_of(player),
+            );
+        }
     } else {
         let mut pre_used: HashSet<(i32, i32)> = HashSet::new();
         for (tag, div) in &player_divs {
@@ -358,17 +414,31 @@ pub fn run(opts: Opts) {
             }
         }
     }
-    tactical_ai::ai_deploy(
+    if !tactical_ai::ai_deploy_staged(
         &grid,
         &mut units,
+        &staging,
         enemy_zone,
         player_zone,
         enemy,
         enemy_card,
         &HashSet::new(),
-        None,
-        None,
-    );
+        &HashSet::new(),
+        false,
+    ) {
+        tactical_ai::ai_deploy(
+            &grid,
+            &mut units,
+            enemy_zone,
+            player_zone,
+            enemy,
+            enemy_card,
+            &HashSet::new(),
+            None,
+            None,
+            corridor_of(enemy),
+        );
+    }
     for u in &mut units {
         u.undeployed = false;
     }

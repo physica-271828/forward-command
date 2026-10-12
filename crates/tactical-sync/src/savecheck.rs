@@ -40,7 +40,9 @@
 //!   gone entirely) = the province fell (attacker victory). Anything
 //!   unreadable fails OPEN ([`Hoi4BattleCheck::Unknown`] = "keep
 //!   fighting"): a false ending would strand the player mid-battle, a
-//!   missed one just costs a sync.
+//!   missed one just costs a sync. One-line division REFERENCES in the
+//!   country rosters are not records and are skipped outright, never
+//!   failed open (see [`defender_holds`]).
 //!
 //! Completeness guard: a fresh save is only scanned once its tail carries
 //! the `checksum="..."` line — Clausewitz text saves end with it, so a
@@ -102,23 +104,28 @@ fn quoted_after<'a>(window: &'a str, key: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
-/// Every `land_combat`'s `location` in the save (duplicates kept — only
-/// membership is ever queried).
+/// Every `land_combat` / `border_war_combat`'s `location` in the save
+/// (duplicates kept — only membership is ever queried). Border wars are a
+/// separate record type whose `location` is the DEFENDER's province — the
+/// same role a land combat's `location` plays — so a running border war
+/// must report `Alive` exactly like a running land battle.
 fn battle_locations(text: &str) -> Vec<u32> {
-    const TOKEN: &str = "land_combat={";
+    const TOKENS: [&str; 2] = ["land_combat={", "border_war_combat={"];
     let mut out = Vec::new();
-    let mut rest = text;
-    while let Some(i) = rest.find(TOKEN) {
-        let start = i + TOKEN.len();
-        // `location=` is the record's second line. Bound the window by the
-        // NEXT record so a (hypothetical) location-less record can never
-        // pair with its successor's location.
-        let next = rest[start..].find(TOKEN).map(|j| start + j);
-        let end = floor_boundary(rest, next.unwrap_or(rest.len()).min(start + 512));
-        if let Some(loc) = number_after(&rest[start..end], "location=") {
-            out.push(loc);
+    for token in TOKENS {
+        let mut rest = text;
+        while let Some(i) = rest.find(token) {
+            let start = i + token.len();
+            // `location=` is the record's second line. Bound the window by
+            // the NEXT same-type record so a (hypothetical) location-less
+            // record can never pair with its successor's location.
+            let next = rest[start..].find(token).map(|j| start + j);
+            let end = floor_boundary(rest, next.unwrap_or(rest.len()).min(start + 512));
+            if let Some(loc) = number_after(&rest[start..end], "location=") {
+                out.push(loc);
+            }
+            rest = &rest[start..];
         }
-        rest = &rest[start..];
     }
     out
 }
@@ -143,17 +150,33 @@ fn battle_locations(text: &str) -> Vec<u32> {
 /// division see a routed neighbor's `retreat=yes` (the bleed case has
 /// been observed in the real save: a full-org bystander followed by a
 /// routed division).
+///
+/// Country-level rosters ALSO serialize one-line references to divisions
+/// (`division={ id=884 type=51 }`) whose next real record can sit
+/// megabytes away. A reference is not a record and is skipped before any
+/// read ([`is_division_reference`]) — otherwise the fail-open below would
+/// fire on every real save and no ending could ever be reported.
 fn defender_holds(text: &str, contested: u32, defender_tags: &[&str]) -> Option<bool> {
     const TOKEN: &str = "division={";
+    /// Byte cap on one record's scan window (see the doc above).
+    const RECORD_WINDOW: usize = 1536;
     let mut unreadable = false;
     let mut rest = text;
     while let Some(i) = rest.find(TOKEN) {
         let start = i + TOKEN.len();
-        let next = rest[start..].find(TOKEN).map(|j| start + j);
-        let end = floor_boundary(rest, next.unwrap_or(rest.len()).min(start + 1536));
+        let end_of_record = rest[start..].find(TOKEN).map(|j| start + j);
+        let limit = end_of_record.unwrap_or(rest.len());
+        let cut_by_cap = limit > start + RECORD_WINDOW;
+        let end = floor_boundary(rest, limit.min(start + RECORD_WINDOW));
         let window = &rest[start..end];
-        if number_after(window, "location=") == Some(contested) {
-            match quoted_after(window, "logical_country=") {
+        // Before ANY read: a reference one-liner is not a record, and its
+        // window may otherwise reach a neighbouring block's `location=`.
+        if is_division_reference(window) {
+            rest = &rest[start..];
+            continue;
+        }
+        match number_after(window, "location=") {
+            Some(loc) if loc == contested => match quoted_after(window, "logical_country=") {
                 Some(tag) if defender_tags.contains(&tag) => {
                     if !window.contains("retreat=yes") {
                         return Some(true); // holding — standing or marching
@@ -162,7 +185,13 @@ fn defender_holds(text: &str, contested: u32, defender_tags: &[&str]) -> Option<
                 }
                 Some(_) => {} // another tag's division at the province
                 None => unreadable = true,
-            }
+            },
+            Some(_) => {} // a division elsewhere in the save
+            // No `location=` at all: on a record the cap cut short, the
+            // division may be one of ours AT the province — fail open
+            // rather than let the truncated neighbour read as a victory.
+            None if cut_by_cap => unreadable = true,
+            None => {}
         }
         rest = &rest[start..];
     }
@@ -171,6 +200,25 @@ fn defender_holds(text: &str, contested: u32, defender_tags: &[&str]) -> Option<
     } else {
         Some(false)
     }
+}
+
+/// A one-line REFERENCE to a division (`division={ id=884 type=51 }`, the
+/// shape country rosters and training queues serialize) closes its block
+/// before any nested `{` and carries no `location=` — it is not a
+/// record. Real saves put hundreds of kilobytes between such an entry
+/// and the next `division={` record, so a reference mistaken for a
+/// truncated record would fail the whole scan open and freeze the
+/// judgement forever; a real record always opens `id={ … }` (a `{`
+/// before the first `}`), which is exactly what this rejects.
+fn is_division_reference(window: &str) -> bool {
+    /// How far a reference's block may reach before it stops counting.
+    const CLOSED_WINDOW: usize = 256;
+    let head = &window[..floor_boundary(window, window.len().min(CLOSED_WINDOW))];
+    let Some(close) = head.find('}') else {
+        return false;
+    };
+    let content = &head[..close];
+    !content.contains('{') && !content.contains("location=")
 }
 
 /// The post-sync check: is the mirrored HOI4 battle still alive? See the
@@ -251,6 +299,20 @@ mod tests {
     }
 
     #[test]
+    fn alive_when_border_war_lists_the_contested_province() {
+        // A running border war is its own record type (§10.7) whose
+        // `location` is the defender's province — it must report Alive
+        // exactly like a land battle, or the first sync would declare the
+        // battle over.
+        let bw = "border_war_combat={\n\t\tid={ id=3459 type=4713 }\n\t\tlocation=11879\n\t\tday=9\n\t\tduration=9\n";
+        let text = save(bw);
+        assert_eq!(
+            check_hoi4_battle(&text, 11879, &["SOV"]),
+            Hoi4BattleCheck::Alive
+        );
+    }
+
+    #[test]
     fn ended_attacker_when_battle_gone_and_no_defender_at_the_province() {
         // Battle ended, defenders routed away; only the attacker marched in.
         let text = save(&format!(
@@ -316,6 +378,27 @@ mod tests {
     }
 
     #[test]
+    fn a_cap_cut_division_record_fails_open() {
+        // A record longer than the scan window whose `location=` sits past
+        // the cut: the division may well be AT the contested province, so
+        // this is "unreadable" (→ Unknown), never "no defender holding"
+        // (→ a false attacker victory).
+        let padding = "component".to_string() + &" 0".repeat(900) + "\n";
+        let record = format!(
+            "\t\t\tdivision={{\n\t\t\t\tid={{ id=1 type=51 }}\n\t\t\t\t{padding}\t\t\t\tlocation=13238\n\t\t\t\tlogical_country=\"ETH\"\n\t\t\t}}\n"
+        );
+        assert!(
+            record.find("location=").unwrap() > 1536,
+            "test layout: the record must exceed the window"
+        );
+        let text = save(&record);
+        assert_eq!(
+            check_hoi4_battle(&text, 13238, &["ETH"]),
+            Hoi4BattleCheck::Unknown
+        );
+    }
+
+    #[test]
     fn a_divisions_window_never_pairs_with_the_next_divisions_location() {
         // Division at 12766 whose own location line is (hypothetically)
         // missing must not see the next division's 13238.
@@ -364,6 +447,74 @@ mod tests {
             Hoi4BattleCheck::Ended {
                 winner: Side::Attacker
             }
+        );
+    }
+
+    /// The real-save country-roster shape: a one-line REFERENCE to a
+    /// division. Real saves put 145 KB–8.6 MB of unrelated content between
+    /// such an entry and the next `division={` record.
+    fn roster_reference(id: u32) -> String {
+        format!("\t\t\t\tdivision={{ id={id} type=51 }}\n")
+    }
+
+    /// Filler pushing the next `division={` past the 1536-byte record
+    /// window — the gap class that used to poison the scan.
+    fn reference_gap() -> String {
+        "\t\t\t\tcomponent=0\n".repeat(100)
+    }
+
+    #[test]
+    fn a_roster_reference_is_not_read_as_a_truncated_record() {
+        // Live regression (border war): rosters carry reference one-liners
+        // whose next `division={` record sits far past the window cap; each
+        // one used to flip the scan-wide `unreadable` flag, so a battle
+        // whose record was gone could NEVER be reported as ended and the
+        // app froze on "battle continues" forever.
+        let text = save(&format!(
+            "{}{}{}",
+            roster_reference(884),
+            reference_gap(),
+            routed_division(1833, 13238, "ETH") // routed out — province fell
+        ));
+        assert_eq!(
+            check_hoi4_battle(&text, 13238, &["ETH"]),
+            Hoi4BattleCheck::Ended {
+                winner: Side::Attacker
+            }
+        );
+    }
+
+    #[test]
+    fn a_roster_reference_never_hides_a_standing_defender() {
+        let text = save(&format!(
+            "{}{}{}",
+            roster_reference(884),
+            reference_gap(),
+            division(1833, 13238, "ETH")
+        ));
+        assert_eq!(
+            check_hoi4_battle(&text, 13238, &["ETH"]),
+            Hoi4BattleCheck::Ended {
+                winner: Side::Defender
+            }
+        );
+    }
+
+    #[test]
+    fn a_roster_reference_never_lends_its_window_to_neighbouring_keys() {
+        // A reference's scan window can reach a NEIGHBOURING block's
+        // `location=`/`logical_country=` — reading those as the reference's
+        // own would fabricate a defender holding the province.
+        let body = format!(
+            "{}reinforcement={{\n\t\t\t\tlocation=13238\n\t\t\t\tlogical_country=\"ETH\"\n\t\t\t}}\n",
+            roster_reference(884)
+        );
+        let text = save(&body);
+        assert_eq!(
+            check_hoi4_battle(&text, 13238, &["ETH"]),
+            Hoi4BattleCheck::Ended {
+                winner: Side::Attacker
+            } // nothing actually holds the province
         );
     }
 

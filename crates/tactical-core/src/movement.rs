@@ -10,11 +10,17 @@
 //! Contact rule (§6.5): a unit that steps into a hex adjacent to an enemy
 //! makes contact — the order is consumed and the unit stops there, ready
 //! for the player/AI to decide on an assault next turn.
+//!
+//! Re-pointing (§6.2 step-progress memory): replacing an order whose
+//! fresh route starts on a different first step banks the abandoned
+//! investment into the unit's step memory instead of losing it —
+//! pointing back onto that first step picks the hours back up (see
+//! [`repoint_carry_hours`]).
 
 use crate::grid::HexGrid;
 use crate::hex::HexCoord;
 use crate::params::CombatParams;
-use crate::pathfinding::{find_path, step_hours, zoc_hexes};
+use crate::pathfinding::{control_field, find_path, step_hours, ControlField};
 use crate::unit::{BattalionUnit, Side};
 
 /// One side-turn's movement budget in hours (§6.2/§8.1).
@@ -131,12 +137,94 @@ pub fn refresh_move_order(
     // growing" report) — reintroducing through this side door the very
     // pinning family the apply layer killed (§7.2 order persistence).
     // The queued chain legs ride along untouched.
+    //
+    // A first-step change can undercut the bank: hours invested toward an
+    // expensive step exceed the new, cheaper step's cost. Clamp the carry
+    // to that cost — the §6.2 invariant `hours < first-step cost` keeps
+    // the surplus from refunding into the turn's march budget at advance
+    // time (the per-turn cap is speed/6 km, not negotiable).
+    let hours = if same_next {
+        order.hours
+    } else {
+        let control = control_field(grid, view, unit.side.opponent());
+        step_hours(grid, unit, &control, unit.position, path[0], params)
+            .map(|c| order.hours.min(c))
+            .unwrap_or(order.hours)
+    };
     unit.move_order = Some(crate::unit::MoveOrder {
         path,
-        hours: order.hours,
+        hours,
         queue: order.queue,
     });
     true
+}
+
+/// Re-point a standing march order onto a fresh route (§6.2 step-progress
+/// memory): returns the hours the new order starts with, updating the
+/// unit's progress memory as a side effect. Shared by the player command
+/// path and the AI apply path so both walk the same retention ladder:
+///
+/// 1. the fresh route shares the standing order's first step — the
+///    invested hours ride along untouched (the unit is mid-step into that
+///    very hex; nothing was abandoned and the memory stays as it is);
+/// 2. the memory's hex IS the fresh route's first step and the unit still
+///    stands next to it — the banked investment is picked back up,
+///    clamped to the step's current cost (the same clamp as the
+///    route-refresh carry), and the memory is consumed;
+/// 3. otherwise the bar restarts from zero.
+///
+/// The restore is judged BEFORE the outgoing order banks: the A→B→A
+/// change of mind must still find A's investment in the slot. The banking
+/// then keeps the memory the MOST RECENTLY abandoned progress — on a
+/// restore, the outgoing order's own investment re-arms the slot in the
+/// same call.
+///
+/// A memory whose hex no longer neighbours the unit is stale — the unit
+/// marched on since banking it — and lapses (dropped) the first time a
+/// re-point asks for it. `control` prices the restore clamp from the
+/// caller's pathing view (§6.5 slowdown included; fog-filtered for the
+/// player, omniscient for the AI).
+pub fn repoint_carry_hours(
+    grid: &HexGrid,
+    control: &ControlField,
+    unit: &mut BattalionUnit,
+    new_path: &[HexCoord],
+    params: &CombatParams,
+) -> f32 {
+    let Some(&new_first) = new_path.first() else {
+        return 0.0;
+    };
+    // Rung 1: same first step — the investment rides along; nothing
+    // banks, nothing restores.
+    if unit
+        .move_order
+        .as_ref()
+        .is_some_and(|o| o.path.first() == Some(&new_first))
+    {
+        return unit.move_order.as_ref().map(|o| o.hours).unwrap_or(0.0);
+    }
+    // Rung 2: the banked memory matches the fresh first step — restore
+    // BEFORE the outgoing order's own banking overwrites the slot.
+    let mut restored = None;
+    if let Some((hex, hours)) = unit.step_memory {
+        if hex == new_first {
+            if unit.position.distance(hex) == 1 {
+                restored = Some(
+                    step_hours(grid, unit, control, unit.position, hex, params)
+                        .map(|cost| hours.min(cost))
+                        .unwrap_or(hours),
+                );
+            }
+            // Consumed on a hit, lapsed (stale geometry) on a miss — the
+            // slot clears either way.
+            unit.step_memory = None;
+        }
+    }
+    // The outgoing order's first step genuinely differs: its investment
+    // banks as the most recent abandonment (a no-progress order banks
+    // nothing and leaves an older, mismatching memory in place).
+    unit.bank_step_memory();
+    restored.unwrap_or(0.0)
 }
 
 /// Activate the next leg of a Shift-click chain: the standing segment is
@@ -270,15 +358,19 @@ pub fn advance_move_orders(
                 break;
             }
             let from = units[i].position;
-            let enemy_zoc = zoc_hexes(grid, units, units[i].side.opponent());
-            let Some(cost) = step_hours(grid, &units[i], &enemy_zoc, from, next, params) else {
+            let control = control_field(grid, units, units[i].side.opponent());
+            let Some(cost) = step_hours(grid, &units[i], &control, from, next, params) else {
                 units[i].move_order = None; // path invalidated — drop quietly
                 break;
             };
 
             if order.hours + remaining + 1e-6 >= cost {
-                // Complete the step into `next`.
-                remaining -= cost - order.hours;
+                // Complete the step into `next`. The banked hours may
+                // overpay the step (a refresh can carry them onto a
+                // cheaper first step) — the surplus is shed, never
+                // refunded into the turn's remaining budget (§6.2 caps
+                // the end-of-turn advance at speed/6 km).
+                remaining -= (cost - order.hours).max(0.0);
                 units[i].position = next;
                 units[i].entrenchment = 0;
                 // Moving also drops the take-cover stance.
@@ -369,8 +461,8 @@ pub fn next_step_progress(
 ) -> Option<f32> {
     let order = unit.move_order.as_ref()?;
     let &next = order.path.first()?;
-    let enemy_zoc = zoc_hexes(grid, units, unit.side.opponent());
-    let cost = step_hours(grid, unit, &enemy_zoc, unit.position, next, params)?;
+    let control = control_field(grid, units, unit.side.opponent());
+    let cost = step_hours(grid, unit, &control, unit.position, next, params)?;
     Some((order.hours / cost.max(1e-6)).clamp(0.0, 1.0))
 }
 
@@ -382,14 +474,14 @@ pub fn order_eta_hours(
     params: &CombatParams,
 ) -> Option<f32> {
     let order = unit.move_order.as_ref()?;
-    let enemy_zoc = zoc_hexes(grid, units, unit.side.opponent());
+    let control = control_field(grid, units, unit.side.opponent());
     let mut total = -order.hours;
     let mut from = unit.position;
     for &next in &order.path {
         // An impassable leg costs f32::MAX, not 0: a 0-cost step would make
         // the (broken) old route look CHEAPER than a fresh detour and bias
         // the route-comparison callers.
-        total += step_hours(grid, unit, &enemy_zoc, from, next, params).unwrap_or(f32::MAX);
+        total += step_hours(grid, unit, &control, from, next, params).unwrap_or(f32::MAX);
         from = next;
     }
     Some(total.max(0.0))
@@ -416,14 +508,14 @@ pub fn chain_eta_hours(
 ) -> Option<f32> {
     let order = unit.move_order.as_ref()?;
     let mut total = order_eta_hours(grid, unit, units, params).unwrap_or(0.0);
-    let enemy_zoc = zoc_hexes(grid, units, unit.side.opponent());
+    let control = control_field(grid, units, unit.side.opponent());
     for leg in &order.queue {
         let mut from = match leg.preview.first() {
             Some(&h) => h,
             None => continue, // no preview — nothing to estimate
         };
         for &next in leg.preview.iter().skip(1) {
-            total += step_hours(grid, unit, &enemy_zoc, from, next, params).unwrap_or(f32::MAX);
+            total += step_hours(grid, unit, &control, from, next, params).unwrap_or(f32::MAX);
             from = next;
         }
     }
@@ -450,6 +542,11 @@ mod tests {
             hours: 0.0,
             queue: Default::default(),
         })
+    }
+
+    /// No enemy cover on the test map — an empty §6.5 control field.
+    fn no_control() -> ControlField {
+        ControlField::default()
     }
 
     #[test]
@@ -524,9 +621,10 @@ mod tests {
         let enemy = unit(1, UnitType::Infantry, Side::Defender, 3, 2); // adjacent to (3,1)
         let mut units = vec![u, enemy];
         let p = CombatParams::default();
-        // ZOC surcharges are zeroed in the defaults; off-road motor pays
-        // 1.75/hex against the 2 km budget, so entering the enemy-adjacent
-        // (3,1) happens on turn 2 — contact fires and the order is spent.
+        // §6.5 control: the enemy covers the (3,1) step — a fresh infantry
+        // battalion doubles its price (off-road motor 1.75 → 3.5 km against
+        // the 2 km/turn budget), so contact fires on the THIRD turn.
+        let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         assert_eq!(units[0].position, HexCoord::new(3, 1));
@@ -612,8 +710,10 @@ mod tests {
         e.move_order = order(&[(4, 2)]);
         let mut units = vec![u, e];
         let p = CombatParams::default();
-        // ZOC off in the defaults: off-road motor needs two 2 km budgets to
-        // reach (3,1) — contact fires on turn 2, halting both sides.
+        // §6.5 control doubles the enemy-adjacent (3,1) step (1.75 → 3.5 km
+        // against the 2 km/turn budget): contact fires on the third turn,
+        // halting both sides.
+        let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         assert!(ev.contains(&MovementEvent::MadeContact { unit_id: 0 }));
@@ -851,6 +951,376 @@ mod tests {
             "destination kept"
         );
     }
+
+    #[test]
+    fn over_invested_step_never_refunds_into_the_turn_budget() {
+        // Hours banked on an expensive step, carried by a refresh onto a
+        // CHEAPER first step, complete that step — but the surplus must not
+        // grow the turn's remaining budget (§6.2 caps the end-of-turn
+        // advance at speed/6 km).
+        let mut g = grid(8, 8);
+        for (q, r) in [(2, 1), (3, 1)] {
+            g.cell_mut(HexCoord::new(q, r)).unwrap().road = true;
+        }
+        let mut u = unit(0, UnitType::Infantry, Side::Attacker, 1, 1);
+        // 1/3 h banked (two turns into a 0.5 h forest step); the detour's
+        // road steps cost 1.0/4 = 0.25 h — the bank overpays the step.
+        u.move_order = Some(crate::unit::MoveOrder {
+            path: vec![HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            hours: 1.0 / 3.0,
+            queue: Default::default(),
+        });
+        let mut units = vec![u];
+        let p = CombatParams::default();
+        let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        // The carried hours cover the first step; the plain 1/6 h budget
+        // only PARTLY pays the second — a refund would complete both road
+        // steps (2 km in a 2/3 km turn).
+        assert_eq!(units[0].position, HexCoord::new(2, 1));
+        let o = units[0].move_order.as_ref().unwrap();
+        assert!(
+            (o.hours - 1.0 / 6.0).abs() < 1e-4,
+            "the turn's budget is invested, never grown: {}",
+            o.hours
+        );
+    }
+
+    fn order_with_hours(path: &[(i32, i32)], hours: f32) -> Option<crate::unit::MoveOrder> {
+        let mut o = order(path).unwrap();
+        o.hours = hours;
+        Some(o)
+    }
+
+    #[test]
+    fn repoint_same_first_step_carries_and_leaves_memory_untouched() {
+        // §6.2 retention ladder, rung 1: the fresh route shares the old
+        // first step — the invested hours ride along and the memory is
+        // neither written nor consumed (nothing was abandoned).
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Infantry, Side::Attacker, 1, 1);
+        u.move_order = order_with_hours(&[(2, 1), (3, 1)], 0.12);
+        u.step_memory = Some((HexCoord::new(1, 2), 0.07));
+        let p = CombatParams::default();
+        let carry = repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(2, 1), HexCoord::new(4, 1)],
+            &p,
+        );
+        assert!(
+            (carry - 0.12).abs() < 1e-6,
+            "same first step carries: {carry}"
+        );
+        assert_eq!(
+            u.step_memory,
+            Some((HexCoord::new(1, 2), 0.07)),
+            "memory untouched"
+        );
+    }
+
+    #[test]
+    fn repoint_banks_abandoned_progress_and_restores_it_on_change_of_mind() {
+        // A→B: B's first step differs — A's investment banks into the
+        // step memory and B starts from zero. A→B→A: the banked hours
+        // come back (the player changed her mind) and the memory is
+        // consumed.
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Infantry, Side::Attacker, 1, 1);
+        let p = CombatParams::default();
+        u.move_order = order_with_hours(&[(2, 1), (3, 1)], 0.12);
+        let b_path = [HexCoord::new(1, 2), HexCoord::new(1, 3)];
+        let carry = repoint_carry_hours(&g, &no_control(), &mut u, &b_path, &p);
+        assert_eq!(carry, 0.0, "a different first step restarts the bar");
+        assert_eq!(
+            u.step_memory,
+            Some((HexCoord::new(2, 1), 0.12)),
+            "abandoned progress banked"
+        );
+        u.move_order = order_with_hours(&[(1, 2), (1, 3)], 0.0);
+        let a_path = [HexCoord::new(2, 1), HexCoord::new(3, 1)];
+        let carry = repoint_carry_hours(&g, &no_control(), &mut u, &a_path, &p);
+        assert!(
+            (carry - 0.12).abs() < 1e-6,
+            "banked progress restored: {carry}"
+        );
+        assert_eq!(u.step_memory, None, "the restore consumes the memory");
+    }
+
+    #[test]
+    fn repoint_memory_holds_only_the_latest_abandonment() {
+        // A→B→C with three distinct first steps: B's abandonment
+        // overwrites A's — the memory always holds the MOST RECENTLY
+        // deserted investment. Pointing back at A restores nothing (a
+        // mismatching memory survives the ask); pointing back at B
+        // restores B's.
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Infantry, Side::Attacker, 1, 1);
+        let p = CombatParams::default();
+        u.move_order = order_with_hours(&[(2, 1), (3, 1)], 0.12);
+        repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(1, 2), HexCoord::new(1, 3)],
+            &p,
+        );
+        u.move_order = order_with_hours(&[(1, 2), (1, 3)], 0.20);
+        repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(2, 0), HexCoord::new(3, 0)],
+            &p,
+        );
+        assert_eq!(
+            u.step_memory,
+            Some((HexCoord::new(1, 2), 0.20)),
+            "B's abandonment overwrote A's"
+        );
+        u.move_order = order_with_hours(&[(2, 0), (3, 0)], 0.0);
+        let carry = repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            &p,
+        );
+        assert_eq!(
+            carry, 0.0,
+            "A's memory was overwritten — nothing to restore"
+        );
+        assert_eq!(u.step_memory, Some((HexCoord::new(1, 2), 0.20)));
+        u.move_order = order_with_hours(&[(2, 1), (3, 1)], 0.0);
+        let carry = repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(1, 2), HexCoord::new(1, 3)],
+            &p,
+        );
+        assert!(
+            (carry - 0.20).abs() < 1e-6,
+            "the latest abandonment restores: {carry}"
+        );
+    }
+
+    #[test]
+    fn repoint_restore_clamps_to_the_current_step_cost() {
+        // The banked hours outprice the step they return to (terrain or
+        // ZOC changed since the banking): the restore clamps to the
+        // step's current cost — the §6.2 invariant `hours < first-step
+        // cost` holds (same clamp as the route-refresh carry).
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Infantry, Side::Attacker, 1, 1);
+        let p = CombatParams::default();
+        // A plains infantry step into (2,1) costs 1.5/4 = 0.375 h; the
+        // memory banks 0.5 h (e.g. banked while a ZOC surcharge priced it).
+        u.step_memory = Some((HexCoord::new(2, 1), 0.5));
+        u.move_order = order_with_hours(&[(1, 2)], 0.0);
+        let carry = repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            &p,
+        );
+        let cost = crate::pathfinding::step_hours(
+            &g,
+            &u,
+            &no_control(),
+            u.position,
+            HexCoord::new(2, 1),
+            &p,
+        )
+        .unwrap();
+        assert!(
+            (carry - cost).abs() < 1e-6,
+            "clamped to the step cost {cost}: {carry}"
+        );
+        assert!(carry < 0.5, "the surplus over the step cost is shed");
+    }
+
+    #[test]
+    fn repoint_memory_lapses_when_the_unit_marched_away() {
+        // Lazy geometry check: the remembered hex no longer neighbours
+        // the unit (it marched on after the banking) — the memory is
+        // stale, restores nothing, and is dropped. (A freshly planned
+        // route always starts adjacent; the guard exists for stale or
+        // foreign paths.)
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Infantry, Side::Attacker, 4, 4);
+        let p = CombatParams::default();
+        u.step_memory = Some((HexCoord::new(2, 1), 0.12));
+        u.move_order = order_with_hours(&[(4, 3)], 0.0);
+        let carry = repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            &p,
+        );
+        assert_eq!(carry, 0.0, "no neighbour, no restore");
+        assert_eq!(u.step_memory, None, "a stale memory lapses");
+    }
+
+    #[test]
+    fn repoint_memory_survives_full_turns_of_marching() {
+        // The memory never ticks down on its own: the replacement order
+        // marches out and arrives, turns pass — the banked investment is
+        // still there for the change of mind, and still restores.
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Infantry, Side::Attacker, 1, 1);
+        let p = CombatParams::default();
+        u.move_order = order_with_hours(&[(2, 1), (3, 1)], 0.12);
+        repoint_carry_hours(&g, &no_control(), &mut u, &[HexCoord::new(1, 2)], &p);
+        u.move_order = order_with_hours(&[(1, 2)], 0.0);
+        let mut units = vec![u];
+        // Three side-turns march the one-step order out (0.375 h step vs
+        // the 1/6 h budget) — the unit arrives, the order completes.
+        for _ in 0..3 {
+            advance_move_orders(&g, &mut units, Side::Attacker, &p);
+        }
+        let u = &mut units[0];
+        assert_eq!(
+            u.position,
+            HexCoord::new(1, 2),
+            "the replacement march arrived"
+        );
+        assert!(u.move_order.is_none());
+        assert_eq!(
+            u.step_memory,
+            Some((HexCoord::new(2, 1), 0.12)),
+            "banked progress survives the turns"
+        );
+        // (1,2) still neighbours the banked (2,1) — the restore fires.
+        let carry = repoint_carry_hours(
+            &g,
+            &no_control(),
+            u,
+            &[HexCoord::new(2, 1), HexCoord::new(2, 2)],
+            &p,
+        );
+        assert!(
+            (carry - 0.12).abs() < 1e-6,
+            "restored after full turns: {carry}"
+        );
+    }
+
+    #[test]
+    fn repoint_consumed_memory_needs_new_progress_to_restore_again() {
+        // Once consumed, a second re-point at the same first step finds
+        // an empty memory — unless fresh progress was banked in the
+        // meantime (another abandonment re-arms the restore).
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Infantry, Side::Attacker, 1, 1);
+        let p = CombatParams::default();
+        u.step_memory = Some((HexCoord::new(2, 1), 0.12));
+        u.move_order = order_with_hours(&[(1, 2), (1, 3)], 0.0);
+        let carry = repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            &p,
+        );
+        assert!((carry - 0.12).abs() < 1e-6, "first restore consumes");
+        // The restored order runs to completion (arrival clears it).
+        u.move_order = None;
+        let carry = repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(2, 1), HexCoord::new(4, 1)],
+            &p,
+        );
+        assert_eq!(carry, 0.0, "no ghost restore from a consumed memory");
+        // Re-armed: the restored order had been abandoned again with its
+        // progress intact — the bank holds it anew.
+        u.move_order = order_with_hours(&[(2, 1), (3, 1)], 0.12);
+        repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(1, 2), HexCoord::new(1, 3)],
+            &p,
+        );
+        u.move_order = order_with_hours(&[(1, 2), (1, 3)], 0.0);
+        let carry = repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            &p,
+        );
+        assert!(
+            (carry - 0.12).abs() < 1e-6,
+            "re-banked progress restores again: {carry}"
+        );
+    }
+
+    #[test]
+    fn stand_by_banks_progress_and_reissue_restores_it() {
+        // Stand-by (§7.4) cancels the march but banks its step progress:
+        // re-issuing toward the same first step picks the investment up.
+        let g = grid(8, 8);
+        let mut u = unit(0, UnitType::Infantry, Side::Attacker, 1, 1);
+        let p = CombatParams::default();
+        u.move_order = order_with_hours(&[(2, 1), (3, 1)], 0.12);
+        u.stand_by();
+        assert!(u.move_order.is_none());
+        assert_eq!(
+            u.step_memory,
+            Some((HexCoord::new(2, 1), 0.12)),
+            "stand-by banks the cancelled march's progress"
+        );
+        let carry = repoint_carry_hours(
+            &g,
+            &no_control(),
+            &mut u,
+            &[HexCoord::new(2, 1), HexCoord::new(4, 1)],
+            &p,
+        );
+        assert!(
+            (carry - 0.12).abs() < 1e-6,
+            "re-issue restores the stood-by progress: {carry}"
+        );
+        assert_eq!(u.step_memory, None);
+    }
+
+    #[test]
+    fn refresh_clamps_carried_hours_to_the_new_first_step_cost() {
+        // The detour's first step is CHEAPER than the hours banked on the
+        // old one: the carry is capped at the new step's cost, restoring
+        // the §6.2 invariant `hours < first-step cost`.
+        let (g, mut u, blocker, wall) = walled_scenario();
+        // (2,1) as a mountain makes the 0.333 h bank plausible (a 4.75/12
+        // ≈ 0.396 h step, two budgets in); the southern detour runs on
+        // road (1.0/12 ≈ 0.083 h per first step) — far under the bank.
+        let mut g = g;
+        g.set_terrain(HexCoord::new(2, 1), Terrain::Mountain);
+        for r in 2..=3 {
+            for q in 0..=4 {
+                g.cell_mut(HexCoord::new(q, r)).unwrap().road = true;
+            }
+        }
+        u.move_order.as_mut().unwrap().hours = 1.0 / 3.0;
+        let p = CombatParams::default();
+        let units_view = vec![u.clone(), blocker, wall];
+        let changed = refresh_move_order(&g, &mut u, &units_view, &p);
+        assert!(changed, "parked blocker → detour adopted");
+        let o = u.move_order.as_ref().unwrap();
+        let first = o.path[0];
+        let cap =
+            crate::pathfinding::step_hours(&g, &u, &no_control(), u.position, first, &p).unwrap();
+        assert!(
+            o.hours <= cap + 1e-6,
+            "carried hours {} exceed the new first step's cost {}",
+            o.hours,
+            cap
+        );
+        assert!(o.hours > 0.0, "the carry itself is preserved");
+    }
 }
 
 #[cfg(test)]
@@ -988,6 +1458,10 @@ mod chain_tests {
         let mut units = vec![u, enemy];
         let p = CombatParams::default();
 
+        // §6.5 control doubles the covered first step (1.75 → 3.5 km against
+        // the 2 km/turn budget): the chain reaches (2,1) on the second turn
+        // and the contact kills it — queued legs included.
+        let _ = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         let ev = advance_move_orders(&g, &mut units, Side::Attacker, &p);
         assert_eq!(units[0].position, HexCoord::new(2, 1));
         assert!(

@@ -9,12 +9,12 @@
 //!  log.move.eta:0 "{name} → ({q}, {r}) — ETA {n} turn(s)"   # comment
 //! ```
 //!
-//! - Both shipping languages are ALSO embedded via `include_str!`, so the exe
+//! - All shipping languages are ALSO embedded via `include_str!`, so the exe
 //!   works standalone; files in the external `localisation/` dir override the
 //!   embedded values key-by-key (alphabetical file order, later wins) — this
-//!   is the user customization / third-language entry point.
-//! - Lookup falls back zh → en → the raw key itself (HOI4 shows the key on a
-//!   miss too; it makes missing translations visible during development).
+//!   is the user customization / extra-language entry point.
+//! - Lookup falls back zh/ru → en → the raw key itself (HOI4 shows the key on
+//!   a miss too; it makes missing translations visible during development).
 //! - Dynamic values use `{name}` placeholders via [`Locale::trf`] instead of
 //!   positional `format!` args, because word order differs across languages.
 //!
@@ -32,16 +32,22 @@ pub enum Language {
     #[default]
     English,
     SimpChinese,
+    Russian,
 }
 
 impl Language {
-    pub const ALL: &'static [Language] = &[Language::English, Language::SimpChinese];
+    pub const ALL: &'static [Language] = &[
+        Language::English,
+        Language::SimpChinese,
+        Language::Russian,
+    ];
 
     /// Folder / `l_<code>:` header name (HOI4 convention).
     pub fn code(self) -> &'static str {
         match self {
             Language::English => "english",
             Language::SimpChinese => "simp_chinese",
+            Language::Russian => "russian",
         }
     }
 
@@ -51,15 +57,17 @@ impl Language {
         match self {
             Language::English => "English",
             Language::SimpChinese => "中文",
+            Language::Russian => "Русский",
         }
     }
 
     /// Parse a settings.json `language` value; unknown/empty → SimpChinese
-    /// (the primary user base is Chinese-speaking). Explicit "en" still
-    /// selects English.
+    /// (the primary user base is Chinese-speaking). Explicit "en"/"ru" still
+    /// selects English/Russian.
     pub fn from_code(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "en" | "english" => Language::English,
+            "ru" | "russian" => Language::Russian,
             _ => Language::SimpChinese,
         }
     }
@@ -69,6 +77,7 @@ impl Language {
         match self {
             Language::English => "en",
             Language::SimpChinese => "zh",
+            Language::Russian => "ru",
         }
     }
 }
@@ -89,6 +98,13 @@ const EMBEDDED_ZH: &[&str] = &[
     include_str!("../../../localisation/simp_chinese/10-battle-ui_l_simp_chinese.yml"),
     include_str!("../../../localisation/simp_chinese/20-battle-log_l_simp_chinese.yml"),
     include_str!("../../../localisation/simp_chinese/30-names_l_simp_chinese.yml"),
+];
+
+const EMBEDDED_RU: &[&str] = &[
+    include_str!("../../../localisation/russian/00-core_l_russian.yml"),
+    include_str!("../../../localisation/russian/10-battle-ui_l_russian.yml"),
+    include_str!("../../../localisation/russian/20-battle-log_l_russian.yml"),
+    include_str!("../../../localisation/russian/30-names_l_russian.yml"),
 ];
 
 /// The `localisation/` override dir: next to the exe in shipped packages
@@ -264,6 +280,7 @@ fn embedded(lang: Language) -> &'static [&'static str] {
     match lang {
         Language::English => EMBEDDED_EN,
         Language::SimpChinese => EMBEDDED_ZH,
+        Language::Russian => EMBEDDED_RU,
     }
 }
 
@@ -364,31 +381,42 @@ mod tests {
     }
 
     /// The embedded shipping files must define exactly the same key set in
-    /// both languages — a missing translation is a build-time failure, not a
+    /// every language — a missing translation is a build-time failure, not a
     /// runtime surprise.
     #[test]
-    fn embedded_en_zh_key_parity() {
-        let en = EMBEDDED_EN.iter().fold(HashMap::new(), |mut m, t| {
-            parse_into(&mut m, t);
-            m
-        });
-        let zh = EMBEDDED_ZH.iter().fold(HashMap::new(), |mut m, t| {
-            parse_into(&mut m, t);
-            m
-        });
-        let mut only_en: Vec<_> = en.keys().filter(|k| !zh.contains_key(*k)).collect();
-        let mut only_zh: Vec<_> = zh.keys().filter(|k| !en.contains_key(*k)).collect();
-        only_en.sort();
-        only_zh.sort();
-        assert!(
-            only_en.is_empty(),
-            "keys missing in simp_chinese: {only_en:?}"
-        );
-        assert!(only_zh.is_empty(), "keys missing in english: {only_zh:?}");
-        // Placeholder-set parity: a zh string missing a `{name}` placeholder
-        // used to pass the key-parity check and render the literal `{name}`
-        // at runtime. trf substitution is keyed by name, so the SETS must
-        // match exactly.
+    fn embedded_shipping_key_parity() {
+        let load = |files: &[&str]| {
+            files.iter().fold(HashMap::new(), |mut m, t| {
+                parse_into(&mut m, t);
+                m
+            })
+        };
+        let tables: Vec<(Language, HashMap<String, String>)> = Language::ALL
+            .iter()
+            .map(|&l| (l, load(embedded(l))))
+            .collect();
+        for (i, (la, ta)) in tables.iter().enumerate() {
+            for (lb, tb) in tables.iter().skip(i + 1) {
+                let mut only_a: Vec<_> = ta.keys().filter(|k| !tb.contains_key(*k)).collect();
+                let mut only_b: Vec<_> = tb.keys().filter(|k| !ta.contains_key(*k)).collect();
+                only_a.sort();
+                only_b.sort();
+                assert!(
+                    only_a.is_empty(),
+                    "keys missing in {}: {only_a:?}",
+                    lb.code()
+                );
+                assert!(
+                    only_b.is_empty(),
+                    "keys missing in {}: {only_b:?}",
+                    la.code()
+                );
+            }
+        }
+        // Placeholder-set parity: a translated string missing a `{name}`
+        // placeholder used to pass the key-parity check and render the
+        // literal `{name}` at runtime. trf substitution is keyed by name, so
+        // the SETS must match exactly.
         let placeholders = |s: &str| -> std::collections::BTreeSet<String> {
             let mut set = std::collections::BTreeSet::new();
             let mut rest = s;
@@ -404,16 +432,19 @@ mod tests {
             }
             set
         };
-        for k in en.keys() {
-            assert!(!en[k].trim().is_empty(), "empty english value for {k}");
-            assert!(!zh[k].trim().is_empty(), "empty simp_chinese value for {k}");
-            assert_eq!(
-                placeholders(&en[k]),
-                placeholders(&zh[k]),
-                "placeholder mismatch for {k}: en={:?} zh={:?}",
-                placeholders(&en[k]),
-                placeholders(&zh[k])
-            );
+        let en = &tables[0].1;
+        for (lang, table) in &tables {
+            for (k, v) in table.iter() {
+                assert!(!v.trim().is_empty(), "empty {} value for {k}", lang.code());
+                assert_eq!(
+                    placeholders(&en[k]),
+                    placeholders(v),
+                    "placeholder mismatch for {k}: en={:?} {}={:?}",
+                    placeholders(&en[k]),
+                    lang.code(),
+                    placeholders(v)
+                );
+            }
         }
     }
 

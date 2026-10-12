@@ -39,10 +39,24 @@ pub fn load_railways(path: &Path) -> Result<Vec<RailwayLine>> {
         ) else {
             continue;
         };
-        let path: Vec<u32> = it
-            .take(count)
-            .filter_map(|t| t.parse::<u32>().ok())
-            .collect();
+        // Truncation (fewer pids than the declared count) is intended and
+        // stays legal; a pid that does not parse drops the WHOLE line — the
+        // surviving pids would read as consecutive provinces and paint a
+        // segment the map does not have.
+        let mut path: Vec<u32> = Vec::new();
+        let mut malformed = false;
+        for token in it.take(count) {
+            match token.parse::<u32>() {
+                Ok(pid) => path.push(pid),
+                Err(_) => {
+                    malformed = true;
+                    break;
+                }
+            }
+        }
+        if malformed {
+            continue;
+        }
         // A usable line connects at least two provinces.
         if path.len() >= 2 {
             out.push(RailwayLine { level, path });
@@ -106,5 +120,26 @@ mod tests {
     fn missing_file_is_empty_not_error() {
         let lines = load_railways(Path::new("no/such/railways.txt")).unwrap();
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn a_malformed_pid_drops_the_whole_line() {
+        // Truncation is intended (a line may declare more pids than it
+        // carries), but skipping a single bad token would join two
+        // non-adjacent provinces into one painted segment.
+        let dir = std::env::temp_dir().join(format!("tac_rails_junk_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("railways.txt");
+        std::fs::write(&path, "1 3 6332 junk 11245\n2 2 111 222\n").unwrap();
+        let lines = load_railways(&path).unwrap();
+        assert_eq!(lines.len(), 1, "the damaged line must be dropped whole");
+        assert_eq!(
+            lines[0],
+            RailwayLine {
+                level: 2,
+                path: vec![111, 222],
+            }
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

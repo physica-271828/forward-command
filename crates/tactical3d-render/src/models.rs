@@ -24,7 +24,9 @@ pub fn uniform_color(side: Side) -> [f32; 4] {
 /// Attacker/defender theme colors: bound to the HOI4 map colors
 /// of the battling countries (`data/country_colors.json`) by the bin crate;
 /// falls back to classic wargame blue vs red. Inserted once per battle and
-/// never mutated afterwards (the unit mesh cache keys on Side only).
+/// never mutated afterwards. The unit mesh cache keys on family, side,
+/// gun state and country tag — the tag because the base plate is baked
+/// into the mesh — so a change here also needs the cache cleared.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct SideColors {
     pub attacker: [f32; 4],
@@ -127,18 +129,24 @@ pub fn build_unit_mesh(
         ModelFamily::TankAmphibious => amphibious_tank(&mut mb, u, y0),
         ModelFamily::Artillery => match gun {
             GunState::Emplaced => gun_emplaced(&mut mb, u, y0, 0.40, false),
+            // Self-propelled piece: single mesh, no carriage states —
+            // the emplaced form (never a tow with an empty tow bar).
+            GunState::NA => gun_emplaced(&mut mb, u, y0, 0.40, false),
             _ => gun_limbered(&mut mb, u, y0, 0.40, false, gun),
         },
         ModelFamily::AntiTank => match gun {
             GunState::Emplaced => gun_emplaced(&mut mb, u, y0, 0.44, true),
+            GunState::NA => gun_emplaced(&mut mb, u, y0, 0.44, true),
             _ => gun_limbered(&mut mb, u, y0, 0.44, true, gun),
         },
         ModelFamily::AntiAir => match gun {
             GunState::Emplaced => aa_emplaced(&mut mb, u, y0),
+            GunState::NA => aa_emplaced(&mut mb, u, y0),
             _ => aa_limbered(&mut mb, u, y0, gun),
         },
         ModelFamily::RocketTowed => match gun {
             GunState::Emplaced => rocket_towed_emplaced(&mut mb, u, y0),
+            GunState::NA => rocket_towed_emplaced(&mut mb, u, y0),
             _ => rocket_towed_limbered(&mut mb, u, y0, gun),
         },
         // Truck-mounted Katyusha: single model, no carriage states.
@@ -875,7 +883,9 @@ fn limber_front(mb: &mut MeshBuilder, u: [f32; 4], y0: f32, state: GunState, tip
             // light prime mover ahead of the piece (crew rides in it)
             truck_at(mb, u, y0, tip + 0.16);
         }
-        _ => {}
+        // No prime mover to draw: the emplaced piece and the
+        // self-propelled single-mesh form stand alone.
+        GunState::Emplaced | GunState::NA => {}
     }
 }
 
@@ -1130,4 +1140,37 @@ pub fn build_selection_ring_mesh() -> (Mesh, Image) {
     let mut mb = MeshBuilder::new();
     mb.add_cylinder(Vec3::ZERO, 0.62, 0.0, 0.02, [1.0, 0.9, 0.2, 1.0], 28);
     mb.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vert_count(family: ModelFamily, gun: GunState) -> usize {
+        let (mesh, _) = build_unit_mesh(family, Side::Attacker, [0.5, 0.5, 0.5, 1.0], gun);
+        mesh.count_vertices()
+    }
+
+    /// Self-propelled pieces (GunState::NA) render the emplaced single
+    /// mesh — never the limbered tow with an empty tow bar.
+    #[test]
+    fn self_propelled_guns_render_the_emplaced_mesh() {
+        for family in [
+            ModelFamily::Artillery,
+            ModelFamily::AntiTank,
+            ModelFamily::AntiAir,
+            ModelFamily::RocketTowed,
+        ] {
+            assert_eq!(
+                vert_count(family, GunState::NA),
+                vert_count(family, GunState::Emplaced),
+                "{family:?} NA must take the emplaced form"
+            );
+            assert_ne!(
+                vert_count(family, GunState::NA),
+                vert_count(family, GunState::LimberedFoot),
+                "{family:?} NA must not be the empty-tow-bar limbered form"
+            );
+        }
+    }
 }

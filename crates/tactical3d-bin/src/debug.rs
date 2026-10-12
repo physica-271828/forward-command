@@ -57,7 +57,7 @@ pub fn run() {
     for (i, t) in TACTICS.iter().enumerate() {
         println!("  [{}] {}", i + 1, t.name());
     }
-    let tactic_idx = prompt("Tactic [1-9]", "2")
+    let tactic_idx = prompt("Tactic [1-16]", "2")
         .parse::<usize>()
         .ok()
         .filter(|i| (1..=TACTICS.len()).contains(i))
@@ -207,55 +207,23 @@ fn province_map() -> Option<(
     let id: u32 = prompt("Province id (e.g. 3560 for Sedan)", "3560")
         .parse()
         .ok()?;
-    let hoi4_dir = tactical_map::detect_hoi4_dir()?;
-    let map_dir = hoi4_dir.join("map");
-    println!("loading province map data from {} …", map_dir.display());
-    let pm = tactical_map::ProvinceMap::load_bmp(&map_dir.join("provinces.bmp")).ok()?;
-    let defs = tactical_map::load_definition_csv(&map_dir.join("definition.csv")).ok()?;
-    let adj =
-        tactical_map::load_adjacencies_csv(&map_dir.join("adjacencies.csv")).unwrap_or_default();
-    let mut gen = tactical_map::MapGenerator::new(pm, defs, adj);
-    // River hex overlay (rivers.bmp) + VP urban (history/states).
-    if let Ok(rivers) = tactical_map::IndexMap::load_indexed_bmp(&map_dir.join("rivers.bmp")) {
-        gen.set_rivers(rivers);
-    }
-    let states_dir = tactical_map::states_dir_of(&hoi4_dir);
-    let vps = tactical_map::load_victory_points(&states_dir).unwrap_or_default();
-    gen.set_victory_points(vps);
-    // State data drives the village density + factory districts; the
-    // static rail network paints the rail overlay (live per-province
-    // levels come from the save — not wired here yet).
-    gen.set_province_to_state(
-        tactical_map::load_province_to_state(&states_dir).unwrap_or_default(),
-    );
-    gen.set_state_categories(tactical_map::load_state_categories(&states_dir).unwrap_or_default());
-    gen.set_state_industry(tactical_map::load_state_industry(&states_dir).unwrap_or_default());
-    gen.set_state_infrastructure(tactical_map::load_state_infrastructure(&states_dir).unwrap_or_default());
-    gen.set_railways(
-        tactical_map::load_railways(&map_dir.join("railways.txt")).unwrap_or_default(),
-    );
-    // Unitstacks index-0 positions anchor VP cities at the real city
-    // location within the province.
-    gen.set_unit_stacks(tactical_map::load_unit_stacks(
-        &map_dir.join("unitstacks.txt"),
-    ));
-    // VP display names for the floating city label, in the UI language
-    // (Chinese session → the install's Chinese yml).
-    let zh =
-        crate::settings::AppSettings::load().language() == tactical_locale::Language::SimpChinese;
-    gen.set_vp_names(tactical_map::load_vp_names(&tactical_map::vp_names_path(
-        &hoi4_dir, zh,
-    )));
-
-    let dirs_raw = prompt(
-        "Attack directions (comma list, e.g. E,NE for Sedan 1940)",
-        "E,NE",
-    );
-    let dirs: Vec<tactical_core::hex::HexDirection> = dirs_raw
-        .split(',')
-        .filter_map(|t| tactical_core::hex::HexDirection::from_token(t.trim()))
-        .collect();
-    let tmap = gen.generate(id, &dirs).ok()?;
+    // Route through the settings-aware cached generator — a manually
+    // configured hoi4_dir (Settings) is honored, and the battle-seeded
+    // elevation field matches what `--battle province=` would build.
+    let settings = crate::settings::AppSettings::load();
+    let tmap = crate::scenario::with_generator(&settings, |gen| {
+        let dirs_raw = prompt(
+            "Attack directions (comma list, e.g. E,NE for Sedan 1940)",
+            "E,NE",
+        );
+        let dirs: Vec<tactical_core::hex::HexDirection> = dirs_raw
+            .split(',')
+            .filter_map(|t| tactical_core::hex::HexDirection::from_token(t.trim()))
+            .collect();
+        // The scripted path's default relief seed (scenario.rs).
+        gen.generate_with_elevation_seed(id, &dirs, 7)
+    })?
+    .ok()?;
     println!(
         "province {} generated: {}×{} hexes",
         id, tmap.grid.width, tmap.grid.height

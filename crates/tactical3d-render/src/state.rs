@@ -135,6 +135,19 @@ pub struct TacticalState {
     /// Deployment zones (attacker/defender) shown during deployment phase.
     pub deployment_zones: Option<(Vec<HexCoord>, Vec<HexCoord>)>,
 
+    /// Interior battles (§4.2 step 9): the province-boundary rout rim
+    /// overriding the defender zone's east rim.
+    pub retreat_rim: Option<Vec<HexCoord>>,
+
+    /// Live battles: each source province's own staging hexes inside the
+    /// attacker zone — AI / auto-deploy ties each attacking division to
+    /// its own source's staging area.
+    pub staging: Vec<(u32, Vec<HexCoord>)>,
+
+    /// The battle's flag anchors (§6.11) — the defender's deployment
+    /// corridor (ENH-0158) routes toward them.
+    pub flag_anchors: Vec<HexCoord>,
+
     /// Unit being drag-deployed: set on left-press over an own
     /// unit during Deployment, consumed on release. While set, a ghost
     /// preview follows the cursor over valid zone hexes.
@@ -213,6 +226,11 @@ pub struct TacticalState {
     /// confirms that engagement's report — unit id → the hex to render at.
     /// Entries are released (slide / disappear) by `tick_battle_tour`.
     pub report_ghosts: HashMap<usize, HexCoord>,
+
+    /// Monotonic count of combat reports produced by fire phases (tour-armed
+    /// AND fast-play-suppressed alike) — the turn automation's round-activity
+    /// combat signal, independent of whether the report tour ever opens.
+    pub combat_reports: u64,
 }
 
 /// One attack lane inside an engagement report.
@@ -382,6 +400,7 @@ impl UiWindows {
             || self.settings_open_delay > 0
             || self.sync_prompt
             || self.confirm_end
+            || self.confirm_recall.is_some()
     }
 
     /// Esc peels off the topmost modal layer.
@@ -393,16 +412,21 @@ impl UiWindows {
             self.settings_open_delay = 0;
         } else if self.confirm_end {
             self.confirm_end = false;
+        } else if self.esc_menu {
+            // The global menu goes before the recall dialog that may have
+            // been opened from its right panel — Esc always closes the
+            // surface the player is looking at.
+            self.esc_menu = false;
+            self.confirm_reset = false;
+            self.confirm_exit = false;
+        } else if self.confirm_recall.is_some() {
+            self.confirm_recall = None;
         } else if self.confirm_reset {
             self.confirm_reset = false;
         } else if self.confirm_exit {
             self.confirm_exit = false;
         } else if self.sync_prompt {
             self.sync_prompt = false;
-        } else if self.esc_menu {
-            self.esc_menu = false;
-            self.confirm_reset = false;
-            self.confirm_exit = false;
         }
     }
 }
@@ -440,6 +464,15 @@ pub enum SyncStallAction {
     /// original log-and-continue path; the clock lags one hour).
     Cancel,
 }
+
+/// An hourly sync's blocking half (console injection, clock-receipt wait,
+/// post-sync checks) is running on a background worker (§8.4). Present
+/// only while the worker is in flight (inserted at spawn, removed when the
+/// outcome lands); the modal spinner keeps the board frozen for the
+/// duration — the same pause semantics the synchronous path had, without
+/// freezing the window itself.
+#[derive(Resource)]
+pub struct SyncProgress;
 
 /// The desync guard fired (DESIGN.md §3.2/§8.2): the sync probes proved
 /// the strategic world no longer matches this battle (clock receipt off
@@ -530,6 +563,9 @@ impl Default for TacticalState {
             command_mode: CommandMode::Select,
             highlights: Vec::new(),
             deployment_zones: None,
+            retreat_rim: None,
+            staging: Vec::new(),
+            flag_anchors: Vec::new(),
             deploy_drag: None,
             deploy_placing: None,
             deploy_sector: None,
@@ -549,6 +585,7 @@ impl Default for TacticalState {
             attach_picking: None,
             div_pick: None,
             report_ghosts: HashMap::new(),
+            combat_reports: 0,
         }
     }
 }
@@ -596,6 +633,27 @@ impl TacticalState {
         match &self.ai_fog {
             Some(f) => f.state(h, self.turn),
             None => VisibilityState::Visible,
+        }
+    }
+
+    /// Age of the live sound-ranging mark on `h`, or `None` — the intel a
+    /// HEARD shot leaves behind (DESIGN.md §6.1).
+    ///
+    /// `turn` must be the LIVE `GameController::session.turn_number`, the
+    /// clock [`tactical_core::fog::FogOfWar::mark_firing`] stamps with and
+    /// `update_fog` ticks on; `state.turn` is only written at the full-turn
+    /// closeout, so no consumer should pass it.
+    pub fn sound_mark_age(&self, h: HexCoord, turn: u32) -> Option<u32> {
+        self.fog.as_ref()?.firing_marker(h, turn)
+    }
+
+    /// Every live sound mark the PLAYER knows, as (hex, age in turns) — the
+    /// player's own fog only: the opponent's `ai_fog` marks are its picture,
+    /// never surfaced here (§6.1, the same rule as `fog_state`).
+    pub fn sound_marks(&self, turn: u32) -> Vec<(HexCoord, u32)> {
+        match &self.fog {
+            Some(f) => f.firing_marks(turn).collect(),
+            None => Vec::new(),
         }
     }
 
@@ -797,6 +855,38 @@ mod tests {
         BattalionUnit::new(id, format!("U{id}"), UnitType::Infantry, Side::Attacker, pos)
     }
 
+    /// §6.1 sound marks: the display view reads the PLAYER's own fog — a mark
+    /// only the AI heard never surfaces — and judges age against the turn the
+    /// caller hands in, never a clock of its own.
+    #[test]
+    fn sound_marks_read_the_players_fog_and_the_live_turn() {
+        let mut s = TacticalState::default();
+        assert!(s.sound_marks(3).is_empty(), "no fog, no intel");
+        assert_eq!(s.sound_mark_age(HexCoord::new(2, 2), 3), None);
+
+        let mut player_fog = FogOfWar::new(8, 8, 3, 3);
+        player_fog.mark_firing(HexCoord::new(2, 2), 5);
+        let mut ai_fog = FogOfWar::new(8, 8, 3, 3);
+        ai_fog.mark_firing(HexCoord::new(6, 6), 5);
+        s.fog = Some(player_fog);
+        s.ai_fog = Some(ai_fog);
+
+        assert_eq!(s.sound_mark_age(HexCoord::new(2, 2), 5), Some(0));
+        assert_eq!(s.sound_mark_age(HexCoord::new(2, 2), 8), Some(3));
+        assert_eq!(
+            s.sound_mark_age(HexCoord::new(2, 2), 9),
+            None,
+            "the intel window closed"
+        );
+        assert_eq!(
+            s.sound_mark_age(HexCoord::new(6, 6), 5),
+            None,
+            "the AI's own marks are its picture, never the player's"
+        );
+        assert_eq!(s.sound_marks(6), vec![(HexCoord::new(2, 2), 1)]);
+        assert!(s.sound_marks(9).is_empty());
+    }
+
     #[test]
     fn select_helpers_keep_the_primary_invariant() {
         let mut s = TacticalState::default();
@@ -911,5 +1001,43 @@ mod tests {
         s.store_control_group(1);
         assert_eq!(s.control_groups[0], vec![1], "2 moved to group 2");
         assert_eq!(s.control_groups[1], vec![2, 3]);
+    }
+
+    #[test]
+    fn recall_confirmation_is_a_modal() {
+        // The recall dialog is drawn from the right panel, NOT from the Esc
+        // menu — but it is still a modal: map clicks and order issuing must
+        // freeze, and Esc must peel it instead of cancelling the selection.
+        let mut w = UiWindows {
+            confirm_recall: Some(RecallKind::All),
+            ..UiWindows::default()
+        };
+        assert!(w.modal_open(), "an open recall dialog freezes map input");
+        w.close_modal();
+        assert!(
+            w.confirm_recall.is_none(),
+            "Esc must dismiss the recall dialog"
+        );
+        assert!(!w.modal_open());
+        // A clearer modal keeps priority (Esc peels the topmost layer).
+        let mut w = UiWindows {
+            esc_menu: true,
+            confirm_recall: Some(RecallKind::Division {
+                tag: "GER".to_string(),
+                division: String::new(),
+            }),
+            ..UiWindows::default()
+        };
+        w.close_modal();
+        assert!(
+            !w.esc_menu,
+            "Esc always pops the global menu — it is the one surface the player expects to close"
+        );
+        assert!(
+            w.confirm_recall.is_some(),
+            "the dialog stays for the next Esc"
+        );
+        w.close_modal();
+        assert!(w.confirm_recall.is_none());
     }
 }

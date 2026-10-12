@@ -83,13 +83,24 @@ pub enum LogMessage {
         tag: String,
         enemy_tactic: String,
     },
-    /// `tac_refresh` — player clicked "Refresh Battle Markers" (DESIGN.md
-    /// §10.1): the external program snapshots the save (savegame),
-    /// computes the states holding player land_combats and injects
-    /// set_state_flag=tac_hot on exactly those states (+ tac_hot_count).
-    /// No tag — read from the snapshot's `player=` key (the mod's
-    /// interpolated tag cannot be trusted).
-    TacRefresh { ts: String },
+    /// `tac_scan` — player clicked "Scan for Commandable Battles"
+    /// (DESIGN.md §10.7): the external program snapshots the save, derives
+    /// every battle the player takes part in and publishes their states to
+    /// the decision layer (per-state `activate_targeted_decision`, same-day
+    /// only — the daily pulse reclaims them).
+    ///
+    /// The click carries the scanning country's `tag` because the scan is
+    /// a receipt round trip: the external program must clear the mod's
+    /// scan-waiting flag BEFORE it snapshots and parses the save (seconds
+    /// of real time — at max game speed the mod's waiting window is over
+    /// long before the answer arrives), and a scan answered only after the
+    /// parse would already have tripped the mod's watchdog. Empty when the
+    /// log carries no usable tag — the un-interpolated `[ROOT.GetTag]`
+    /// literal, the mangled `"0"`, or anything outside the engine's
+    /// three-uppercase-letter tag shape (see `real_scan_tag`); the
+    /// publisher then reads the tag from the snapshot's `player=` key
+    /// instead.
+    TacScan { ts: String, tag: String },
 }
 
 /// Parse a single `game.log` line into a [`LogMessage`].
@@ -154,8 +165,9 @@ pub fn parse_log_line(line: &str) -> Option<LogMessage> {
             tag: real_tag(&v),
             enemy_tactic: get_str(&v, "enemy_tactic")?.to_owned(),
         }),
-        "tac_refresh" => Some(LogMessage::TacRefresh {
+        "tac_scan" => Some(LogMessage::TacScan {
             ts: real_ts(&v, &prefix_date),
+            tag: real_scan_tag(&v),
         }),
         // Unknown types (e.g. tac_damage_applied / tac_battle_ended from
         // DESIGN.md §10.2, or future additions) are ignored gracefully.
@@ -168,7 +180,18 @@ fn get_str<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a str> {
 }
 
 fn get_u64(v: &serde_json::Value, key: &str) -> Option<u64> {
-    v.get(key)?.as_u64()
+    let n = v.get(key)?;
+    if let Some(u) = n.as_u64() {
+        return Some(u);
+    }
+    // HOI4 interpolation renders numbers as floats (`3.000`). A field the
+    // mod meant as a count must not vanish because of that: accept an
+    // integral float, reject a fractional one (no silent truncation).
+    let f = n.as_f64()?;
+    if f.fract() != 0.0 || f < 0.0 {
+        return None;
+    }
+    Some(f as u64)
 }
 
 /// Tag from the mod, with repair: the mangled interpolation prints `"0"`,
@@ -177,6 +200,26 @@ fn real_tag(v: &serde_json::Value) -> String {
     match get_str(v, "tag") {
         Some(s) if s != "0" => s.to_owned(),
         _ => String::new(),
+    }
+}
+
+/// Country tag from a `tac_scan` line, accepted only in the engine's own tag
+/// shape: exactly three uppercase ASCII letters.
+///
+/// The scan ships `"tag":"[ROOT.GetTag]"`, and HOI4 interpolates `[...]`
+/// inside `log` strings — if that interpolation ever fails, the literal
+/// reaches us. A literal is not a scope, so injecting it would void the
+/// whole publish batch silently while the mod's scan watchdog reads the
+/// silence as "no external program running" and raises a false popup.
+/// Anything that is not a tag (the literal bracket form, the mangled `"0"`,
+/// empty, wrong case or length) becomes empty, and the publisher then falls
+/// back to the save's `player=` key.
+fn real_scan_tag(v: &serde_json::Value) -> String {
+    let tag = real_tag(v);
+    if tag.len() == 3 && tag.bytes().all(|b| b.is_ascii_uppercase()) {
+        tag
+    } else {
+        String::new()
     }
 }
 
@@ -547,16 +590,55 @@ mod tests {
     }
 
     #[test]
-    fn parses_tac_refresh_with_prefix_date_fallback() {
-        // The mod ships a bare {"type":"tac_refresh"} — ts inherits the log
-        // line's [yyyy.mm.dd.hh] prefix.
-        let line = r#"[13:58:58][1936.01.02.04][effectbase.cpp:1783]: {"type":"tac_refresh"}"#;
+    fn parses_tac_scan_with_prefix_date_fallback() {
+        // A bare {"type":"tac_scan"} (a log from before the scan carried a
+        // tag) — ts inherits the log line's [yyyy.mm.dd.hh] prefix, the
+        // tag stays empty.
+        let line = r#"[13:58:58][1936.01.02.04][effectbase.cpp:1783]: {"type":"tac_scan"}"#;
         assert_eq!(
             parse_log_line(line),
-            Some(LogMessage::TacRefresh {
+            Some(LogMessage::TacScan {
                 ts: "1936.01.02.04".to_owned(),
+                tag: String::new(),
             })
         );
+    }
+
+    #[test]
+    fn tac_scan_tag_rides_the_click_and_survives_mangling() {
+        // The scan line of the receipt round trip: the tag lets the
+        // external program answer BEFORE it snapshots and parses the save.
+        let line =
+            r#"[13:58:58][1936.01.02.04][effectbase.cpp:1783]: {"type":"tac_scan","tag":"JAP"}"#;
+        assert_eq!(
+            parse_log_line(line),
+            Some(LogMessage::TacScan {
+                ts: "1936.01.02.04".to_owned(),
+                tag: "JAP".to_owned(),
+            })
+        );
+        // Anything that is not a country tag in the engine's shape — the
+        // mangled "0", an absent field, the un-interpolated bracket
+        // literal, wrong case or length — becomes empty, and the publisher
+        // then falls back to the snapshot's `player=` key.
+        for mangled in [
+            r#"{"type":"tac_scan","ts":"1936.1.2.04","tag":"0"}"#,
+            r#"{"type":"tac_scan","ts":"1936.1.2.04"}"#,
+            r#"{"type":"tac_scan","ts":"1936.1.2.04","tag":"[ROOT.GetTag]"}"#,
+            r#"{"type":"tac_scan","ts":"1936.1.2.04","tag":""}"#,
+            r#"{"type":"tac_scan","ts":"1936.1.2.04","tag":"jap"}"#,
+            r#"{"type":"tac_scan","ts":"1936.1.2.04","tag":"JAPA"}"#,
+            r#"{"type":"tac_scan","ts":"1936.1.2.04","tag":"JA"}"#,
+        ] {
+            assert_eq!(
+                parse_log_line(mangled),
+                Some(LogMessage::TacScan {
+                    ts: "1936.1.2.04".to_owned(),
+                    tag: String::new(),
+                }),
+                "line should parse with an empty tag: {mangled:?}"
+            );
+        }
     }
 
     #[test]
@@ -627,6 +709,34 @@ mod tests {
                 "line should be ignored: {line:?}"
             );
         }
+    }
+
+    #[test]
+    fn integral_float_ids_are_accepted_fractional_are_rejected() {
+        // HOI4 interpolation renders numbers as floats ("province":3.000) —
+        // the same quirk that already mangled `ts` to "0". A whole-valued
+        // float must parse (dropping the whole tac_start over it would
+        // silently ignore the player's click); a fractional one must not
+        // be truncated into a wrong id.
+        let line = r#"{"type":"tac_start","province":3.000,"tag":"GER","leader_id":12.0,"attack_dirs":["W"]}"#;
+        assert_eq!(
+            parse_log_line(line),
+            Some(LogMessage::TacStart {
+                ts: String::new(),
+                province: 3,
+                tag: "GER".to_owned(),
+                leader_id: 12,
+                attack_dirs: vec!["W".to_owned()],
+                is_player_attacker: true,
+                ver: None,
+            })
+        );
+        let fractional =
+            r#"{"type":"tac_start","province":3.5,"tag":"GER","leader_id":1,"attack_dirs":["W"]}"#;
+        assert_eq!(parse_log_line(fractional), None);
+        let negative =
+            r#"{"type":"tac_start","province":-1,"tag":"GER","leader_id":1,"attack_dirs":["W"]}"#;
+        assert_eq!(parse_log_line(negative), None);
     }
 
     #[test]

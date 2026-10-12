@@ -12,6 +12,7 @@
     "max_speed": 7,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 4.0,
     "build_cost": 8.0,
     "resources": {
       "steel": 2,
@@ -35,6 +36,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 4.0,
     "build_cost": 10.0,
     "resources": {
       "steel": 3,
@@ -58,6 +60,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "steel": 2
@@ -81,6 +84,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "steel": 2
@@ -104,6 +108,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 5.0,
     "resources": {
       "steel": 2
@@ -127,6 +132,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 6.0,
     "resources": {
       "steel": 3
@@ -150,6 +156,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "tungsten": 2,
@@ -174,6 +181,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "tungsten": 2,
@@ -198,6 +206,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 5.0,
     "resources": {
       "tungsten": 2,
@@ -223,6 +232,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 6.0,
     "resources": {
       "tungsten": 2,
@@ -248,6 +258,7 @@
     "max_speed": 9,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.8,
     "build_cost": 3.5,
     "resources": {
       "steel": 2
@@ -270,6 +281,7 @@
     "max_speed": 12,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 5.5,
     "resources": {
       "steel": 2
@@ -292,6 +304,7 @@
     "max_speed": 15,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 7.5,
     "resources": {
       "steel": 2,
@@ -315,6 +328,7 @@
     "max_speed": 16,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 8.5,
     "resources": {
       "steel": 2,
@@ -338,6 +352,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.5,
     "resources": {
       "tungsten": 1,
@@ -362,6 +377,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.5,
     "resources": {
       "tungsten": 1,
@@ -386,6 +402,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "tungsten": 1,
@@ -410,6 +427,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.5,
     "resources": {
       "tungsten": 1,
@@ -434,6 +452,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "tungsten": 2,
@@ -459,6 +478,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "tungsten": 2,
@@ -484,6 +504,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 5.0,
     "resources": {
       "tungsten": 2,
@@ -509,6 +530,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.2,
     "build_cost": 12.0,
     "resources": {
       "rubber": 1,
@@ -535,6 +557,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.2,
     "build_cost": 12.0,
     "resources": {
       "rubber": 1,
@@ -561,6 +584,7 @@
     "max_speed": 0,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 0.25,
     "build_cost": 45.0,
     "resources": {
       "steel": 4,
@@ -585,6 +609,7 @@
     "max_speed": 0,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 0.25,
     "build_cost": 45.0,
     "resources": {
       "steel": 4,
@@ -609,6 +634,7 @@
     "max_speed": 0,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 65.0,
     "resources": {
       "tungsten": 3,
@@ -634,6 +660,7 @@
     "max_speed": 0,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 65.0,
     "resources": {
       "tungsten": 3,
@@ -659,6 +686,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 50.0,
     "resources": {
       "aluminium": 2,
@@ -682,6 +710,7 @@
     "max_speed": 5760,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 50.0,
     "resources": {
       "aluminium": 2,
@@ -705,6 +734,7 @@
     "max_speed": 6500,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 74.0,
     "resources": {
       "aluminium": 3,
@@ -728,6 +758,7 @@
     "max_speed": 9999,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 90.0,
     "resources": {
       "aluminium": 3,
@@ -751,6 +782,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 70.0,
     "resources": {
       "steel": 1
@@ -773,6 +805,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 70.0,
     "resources": {
       "steel": 1
@@ -796,6 +829,7 @@
     "max_speed": 9999,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 0.0,
     "resources": {},
     "categories": [
@@ -817,6 +851,7 @@
     "max_speed": 0,
     "reliability": 0,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 400.0,
     "resources": {
       "steel": 1
@@ -840,6 +875,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 36.0,
     "resources": {
       "aluminium": 2,
@@ -863,6 +899,7 @@
     "max_speed": 640,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 36.0,
     "resources": {
       "aluminium": 2,
@@ -886,6 +923,7 @@
     "max_speed": 5760,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 36.0,
     "resources": {
       "aluminium": 2,
@@ -909,6 +947,7 @@
     "max_speed": 6500,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 74.0,
     "resources": {
       "aluminium": 3,
@@ -932,6 +971,7 @@
     "max_speed": 10,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 9.0,
     "resources": {
       "aluminium": 2,
@@ -957,6 +997,7 @@
     "max_speed": 4,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 0.43,
     "resources": {
       "steel": 2
@@ -980,6 +1021,7 @@
     "max_speed": 4,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 0.5,
     "resources": {
       "steel": 2
@@ -1002,6 +1044,7 @@
     "max_speed": 4,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 0.58,
     "resources": {
       "steel": 3
@@ -1024,6 +1067,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 0.69,
     "resources": {
       "steel": 4
@@ -1046,6 +1090,7 @@
     "max_speed": 450,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 1.25,
     "build_cost": 140.0,
     "resources": {
       "aluminium": 8,
@@ -1069,6 +1114,7 @@
     "max_speed": 8,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.4,
     "build_cost": 8.0,
     "resources": {
       "steel": 2,
@@ -1092,6 +1138,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.4,
     "build_cost": 10.0,
     "resources": {
       "steel": 3,
@@ -1115,6 +1162,7 @@
     "max_speed": 12,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.4,
     "build_cost": 12.0,
     "resources": {
       "steel": 4,
@@ -1138,6 +1186,7 @@
     "max_speed": 650,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.32,
     "build_cost": 200.0,
     "resources": {
       "aluminium": 8,
@@ -1161,6 +1210,7 @@
     "max_speed": 10,
     "reliability": 0.65,
     "supply_use": 0,
+    "fuel_consumption": 1.2,
     "build_cost": 2.5,
     "resources": {
       "rubber": 1,
@@ -1184,6 +1234,7 @@
     "max_speed": 12,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.2,
     "build_cost": 2.5,
     "resources": {
       "rubber": 1,
@@ -1207,6 +1258,7 @@
     "max_speed": 12,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 0.5,
     "build_cost": 1.5,
     "resources": {
       "rubber": 1,
@@ -1231,6 +1283,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 800.0,
     "resources": {
       "aluminium": 3,
@@ -1255,6 +1308,7 @@
     "max_speed": 6500,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 800.0,
     "resources": {
       "aluminium": 3,
@@ -1279,6 +1333,7 @@
     "max_speed": 8000,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 1200.0,
     "resources": {
       "aluminium": 4,
@@ -1303,6 +1358,7 @@
     "max_speed": 400,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 4.0,
     "resources": {
       "aluminium": 2,
@@ -1326,6 +1382,7 @@
     "max_speed": 425,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 5.0,
     "resources": {
       "aluminium": 3,
@@ -1349,6 +1406,7 @@
     "max_speed": 450,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 6.0,
     "resources": {
       "aluminium": 3,
@@ -1372,6 +1430,7 @@
     "max_speed": 475,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 7.0,
     "resources": {
       "aluminium": 4,
@@ -1395,6 +1454,7 @@
     "max_speed": 500,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 10.0,
     "resources": {
       "aluminium": 4,
@@ -1418,6 +1478,7 @@
     "max_speed": 900,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 14.0,
     "resources": {
       "aluminium": 4,
@@ -1441,6 +1502,7 @@
     "max_speed": 400,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 6.0,
     "resources": {
       "aluminium": 2,
@@ -1464,6 +1526,7 @@
     "max_speed": 425,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 8.5,
     "resources": {
       "aluminium": 3,
@@ -1487,6 +1550,7 @@
     "max_speed": 450,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 9.5,
     "resources": {
       "aluminium": 3,
@@ -1510,6 +1574,7 @@
     "max_speed": 475,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 11.0,
     "resources": {
       "aluminium": 4,
@@ -1533,6 +1598,7 @@
     "max_speed": 500,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.05,
     "build_cost": 14.5,
     "resources": {
       "aluminium": 4,
@@ -1556,6 +1622,7 @@
     "max_speed": 200,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 6.0,
     "resources": {
       "aluminium": 2,
@@ -1579,6 +1646,7 @@
     "max_speed": 325,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 8.0,
     "resources": {
       "aluminium": 3,
@@ -1602,6 +1670,7 @@
     "max_speed": 375,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 10.0,
     "resources": {
       "aluminium": 4,
@@ -1625,6 +1694,7 @@
     "max_speed": 425,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 13.0,
     "resources": {
       "aluminium": 5,
@@ -1648,6 +1718,7 @@
     "max_speed": 500,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 14.0,
     "resources": {
       "aluminium": 5,
@@ -1671,6 +1742,7 @@
     "max_speed": 200,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.16,
     "build_cost": 16.0,
     "resources": {
       "aluminium": 3,
@@ -1694,6 +1766,7 @@
     "max_speed": 225,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.16,
     "build_cost": 18.0,
     "resources": {
       "aluminium": 3,
@@ -1717,6 +1790,7 @@
     "max_speed": 300,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.16,
     "build_cost": 20.0,
     "resources": {
       "aluminium": 4,
@@ -1740,6 +1814,7 @@
     "max_speed": 350,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.16,
     "build_cost": 22.0,
     "resources": {
       "aluminium": 5,
@@ -1763,6 +1838,7 @@
     "max_speed": 400,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.16,
     "build_cost": 23.0,
     "resources": {
       "aluminium": 6,
@@ -1786,6 +1862,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.0,
     "build_cost": 38.0,
     "resources": {
       "aluminium": 3,
@@ -1809,6 +1886,7 @@
     "max_speed": 400,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.0,
     "build_cost": 38.0,
     "resources": {
       "aluminium": 3,
@@ -1833,6 +1911,7 @@
     "max_speed": 450,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.0,
     "build_cost": 38.0,
     "resources": {
       "aluminium": 3,
@@ -1857,6 +1936,7 @@
     "max_speed": 480,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.0,
     "build_cost": 38.0,
     "resources": {
       "aluminium": 3,
@@ -1881,6 +1961,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 0.0,
     "resources": {},
     "categories": [
@@ -1902,6 +1983,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 800.0,
     "resources": {
       "steel": 4,
@@ -1927,6 +2009,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 500.0,
     "resources": {
       "steel": 2
@@ -1948,6 +2031,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 650.0,
     "resources": {
       "steel": 2
@@ -1969,6 +2053,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 30.0,
     "resources": {
       "aluminium": 1,
@@ -1992,6 +2077,7 @@
     "max_speed": 5760,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 30.0,
     "resources": {
       "aluminium": 1,
@@ -2015,6 +2101,7 @@
     "max_speed": 0,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 70,
     "build_cost": 2094.0,
     "resources": {
       "chromium": 1
@@ -2037,6 +2124,7 @@
     "max_speed": 0,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 70,
     "build_cost": 2600.0,
     "resources": {
       "steel": 5,
@@ -2060,6 +2148,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 70,
     "build_cost": 3250.0,
     "resources": {
       "steel": 6,
@@ -2083,6 +2172,7 @@
     "max_speed": 0,
     "reliability": 0.85,
     "supply_use": 0,
+    "fuel_consumption": 72,
     "build_cost": 4250.0,
     "resources": {
       "steel": 6,
@@ -2106,6 +2196,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 90,
     "build_cost": 4500.0,
     "resources": {
       "steel": 8,
@@ -2129,6 +2220,7 @@
     "max_speed": 0,
     "reliability": 0.65,
     "supply_use": 0,
+    "fuel_consumption": 70,
     "build_cost": 2700.0,
     "resources": {
       "steel": 4,
@@ -2152,6 +2244,7 @@
     "max_speed": 0,
     "reliability": 0.65,
     "supply_use": 0,
+    "fuel_consumption": 60,
     "build_cost": 2700.0,
     "resources": {
       "steel": 3,
@@ -2175,6 +2268,7 @@
     "max_speed": 0,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 50,
     "build_cost": 1250.0,
     "resources": {
       "steel": 3
@@ -2197,6 +2291,7 @@
     "max_speed": 0,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 87,
     "build_cost": 3750.0,
     "resources": {
       "steel": 3,
@@ -2220,6 +2315,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 70,
     "build_cost": 4500.0,
     "resources": {
       "steel": 4,
@@ -2243,6 +2339,7 @@
     "max_speed": 0,
     "reliability": 0.85,
     "supply_use": 0,
+    "fuel_consumption": 70,
     "build_cost": 5250.0,
     "resources": {
       "steel": 4,
@@ -2266,6 +2363,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 70,
     "build_cost": 6000.0,
     "resources": {
       "steel": 5,
@@ -2289,6 +2387,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 94,
     "build_cost": 6500.0,
     "resources": {
       "steel": 5,
@@ -2312,6 +2411,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 95,
     "build_cost": 4500.0,
     "resources": {
       "steel": 5,
@@ -2335,6 +2435,7 @@
     "max_speed": 0,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 87,
     "build_cost": 1500.0,
     "resources": {
       "steel": 2,
@@ -2358,6 +2459,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 1800.0,
     "resources": {
       "steel": 2
@@ -2379,6 +2481,7 @@
     "max_speed": 0,
     "reliability": 0.85,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 1900.0,
     "resources": {
       "steel": 2
@@ -2400,6 +2503,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 2000.0,
     "resources": {
       "steel": 3
@@ -2421,6 +2525,7 @@
     "max_speed": 0,
     "reliability": 0.95,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 2100.0,
     "resources": {
       "steel": 3,
@@ -2443,6 +2548,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 1800.0,
     "resources": {
       "steel": 2
@@ -2465,6 +2571,7 @@
     "max_speed": 0,
     "reliability": 0.85,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 1650.0,
     "resources": {
       "steel": 3
@@ -2487,6 +2594,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 1700.0,
     "resources": {
       "steel": 3
@@ -2509,6 +2617,7 @@
     "max_speed": 0,
     "reliability": 0.92,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 2000.0,
     "resources": {
       "steel": 4,
@@ -2532,6 +2641,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 33,
     "build_cost": 2200.0,
     "resources": {
       "steel": 3
@@ -2553,6 +2663,7 @@
     "max_speed": 0,
     "reliability": 0.85,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 2600.0,
     "resources": {
       "steel": 4
@@ -2574,6 +2685,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 3000.0,
     "resources": {
       "steel": 4
@@ -2595,6 +2707,7 @@
     "max_speed": 0,
     "reliability": 0.92,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 3400.0,
     "resources": {
       "steel": 5,
@@ -2617,6 +2730,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 1700.0,
     "resources": {
       "steel": 2
@@ -2638,6 +2752,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 1700.0,
     "resources": {
       "steel": 3
@@ -2659,6 +2774,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 2800.0,
     "resources": {
       "steel": 3,
@@ -2681,6 +2797,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 1500.0,
     "resources": {
       "steel": 2
@@ -2702,6 +2819,7 @@
     "max_speed": 0,
     "reliability": 0.95,
     "supply_use": 0,
+    "fuel_consumption": 20,
     "build_cost": 2100.0,
     "resources": {
       "steel": 3
@@ -2723,6 +2841,7 @@
     "max_speed": 0,
     "reliability": 0.65,
     "supply_use": 0,
+    "fuel_consumption": 60,
     "build_cost": 2600.0,
     "resources": {
       "steel": 2
@@ -2744,6 +2863,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 60,
     "build_cost": 2800.0,
     "resources": {
       "chromium": 1
@@ -2765,6 +2885,7 @@
     "max_speed": 0,
     "reliability": 0.85,
     "supply_use": 0,
+    "fuel_consumption": 60,
     "build_cost": 3000.0,
     "resources": {
       "steel": 3,
@@ -2787,6 +2908,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 60,
     "build_cost": 3200.0,
     "resources": {
       "steel": 4,
@@ -2809,6 +2931,7 @@
     "max_speed": 0,
     "reliability": 0.95,
     "supply_use": 0,
+    "fuel_consumption": 60,
     "build_cost": 3400.0,
     "resources": {
       "steel": 4,
@@ -2831,6 +2954,7 @@
     "max_speed": 0,
     "reliability": 0.95,
     "supply_use": 0,
+    "fuel_consumption": 72,
     "build_cost": 3600.0,
     "resources": {
       "tungsten": 2,
@@ -2854,6 +2978,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 68,
     "build_cost": 5500.0,
     "resources": {
       "steel": 5,
@@ -2876,6 +3001,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 67,
     "build_cost": 5600.0,
     "resources": {
       "steel": 3,
@@ -2898,6 +3024,7 @@
     "max_speed": 0,
     "reliability": 0.85,
     "supply_use": 0,
+    "fuel_consumption": 60,
     "build_cost": 5400.0,
     "resources": {
       "steel": 4,
@@ -2920,6 +3047,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 60,
     "build_cost": 5200.0,
     "resources": {
       "steel": 4,
@@ -2942,6 +3070,7 @@
     "max_speed": 0,
     "reliability": 0.92,
     "supply_use": 0,
+    "fuel_consumption": 60,
     "build_cost": 6000.0,
     "resources": {
       "steel": 5,
@@ -2964,6 +3093,7 @@
     "max_speed": 0,
     "reliability": 0.85,
     "supply_use": 0,
+    "fuel_consumption": 93,
     "build_cost": 8500.0,
     "resources": {
       "steel": 4,
@@ -2986,6 +3116,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 93,
     "build_cost": 13000.0,
     "resources": {
       "steel": 5,
@@ -3008,6 +3139,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 67,
     "build_cost": 2500.0,
     "resources": {
       "steel": 3,
@@ -3030,6 +3162,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 60,
     "build_cost": 4000.0,
     "resources": {
       "steel": 4,
@@ -3052,6 +3185,7 @@
     "max_speed": 0,
     "reliability": 0.92,
     "supply_use": 0,
+    "fuel_consumption": 80,
     "build_cost": 6200.0,
     "resources": {
       "steel": 5,
@@ -3074,6 +3208,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 400.0,
     "resources": {
       "steel": 2
@@ -3095,6 +3230,7 @@
     "max_speed": 0,
     "reliability": 0.85,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 500.0,
     "resources": {
       "steel": 2
@@ -3116,6 +3252,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 550.0,
     "resources": {
       "steel": 3
@@ -3137,6 +3274,7 @@
     "max_speed": 0,
     "reliability": 0.92,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 600.0,
     "resources": {
       "steel": 3,
@@ -3159,6 +3297,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 7,
     "build_cost": 400.0,
     "resources": {
       "steel": 2
@@ -3180,6 +3319,7 @@
     "max_speed": 0,
     "reliability": 0.85,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 500.0,
     "resources": {
       "steel": 3
@@ -3202,6 +3342,7 @@
     "max_speed": 0,
     "reliability": 0.9,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 500.0,
     "resources": {
       "steel": 3
@@ -3224,6 +3365,7 @@
     "max_speed": 0,
     "reliability": 0.92,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 500.0,
     "resources": {
       "steel": 4,
@@ -3247,6 +3389,7 @@
     "max_speed": 0,
     "reliability": 0.6,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 320.0,
     "resources": {
       "steel": 1
@@ -3269,6 +3412,7 @@
     "max_speed": 0,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 350.0,
     "resources": {
       "steel": 2
@@ -3291,6 +3435,7 @@
     "max_speed": 0,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 420.0,
     "resources": {
       "steel": 2
@@ -3313,6 +3458,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 550.0,
     "resources": {
       "steel": 3,
@@ -3336,6 +3482,7 @@
     "max_speed": 0,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 490.0,
     "resources": {
       "steel": 2
@@ -3358,6 +3505,7 @@
     "max_speed": 0,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 650.0,
     "resources": {
       "steel": 3
@@ -3380,6 +3528,7 @@
     "max_speed": 0,
     "reliability": 0.6,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 150.0,
     "resources": {
       "steel": 1
@@ -3402,6 +3551,7 @@
     "max_speed": 0,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 1150.0,
     "resources": {
       "steel": 3,
@@ -3425,6 +3575,7 @@
     "max_speed": 0,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 850.0,
     "resources": {
       "steel": 4
@@ -3448,6 +3599,7 @@
     "max_speed": 0,
     "reliability": 0.6,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 250.0,
     "resources": {
       "steel": 1
@@ -3470,6 +3622,7 @@
     "max_speed": 0,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 250.0,
     "resources": {
       "steel": 2
@@ -3492,6 +3645,7 @@
     "max_speed": 0,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 350.0,
     "resources": {
       "steel": 2
@@ -3514,6 +3668,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 400.0,
     "resources": {
       "steel": 3,
@@ -3537,6 +3692,7 @@
     "max_speed": 0,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 490.0,
     "resources": {
       "steel": 2
@@ -3559,6 +3715,7 @@
     "max_speed": 0,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 650.0,
     "resources": {
       "steel": 3
@@ -3581,6 +3738,7 @@
     "max_speed": 0,
     "reliability": 0.6,
     "supply_use": 0,
+    "fuel_consumption": 1,
     "build_cost": 150.0,
     "resources": {
       "steel": 1
@@ -3603,6 +3761,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 1150.0,
     "resources": {
       "steel": 4,
@@ -3626,6 +3785,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 4,
     "build_cost": 900.0,
     "resources": {
       "steel": 4,
@@ -3649,6 +3809,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 1450.0,
     "resources": {
       "steel": 4,
@@ -3672,6 +3833,7 @@
     "max_speed": 8,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 12.0,
     "resources": {
       "tungsten": 2,
@@ -3695,6 +3857,7 @@
     "max_speed": 3,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 0.0,
     "resources": {},
     "categories": [
@@ -3716,6 +3879,7 @@
     "max_speed": 3,
     "reliability": 0.7,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 1600.0,
     "resources": {
       "steel": 8,
@@ -3741,6 +3905,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "aluminium": 1,
@@ -3766,6 +3931,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 500.0,
     "resources": {
       "steel": 2
@@ -3787,6 +3953,7 @@
     "max_speed": 0,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 650.0,
     "resources": {
       "steel": 2
@@ -3808,6 +3975,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.0,
     "resources": {
       "steel": 1
@@ -3830,6 +3998,7 @@
     "max_speed": 5,
     "reliability": 0.95,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.35,
     "resources": {
       "steel": 1
@@ -3852,6 +4021,7 @@
     "max_speed": 6,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.7,
     "resources": {
       "steel": 1
@@ -3874,6 +4044,7 @@
     "max_speed": 7,
     "reliability": 1.3,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.0,
     "resources": {
       "steel": 2
@@ -3896,6 +4067,7 @@
     "max_speed": 4,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.5,
     "resources": {
       "steel": 1
@@ -3918,6 +4090,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.75,
     "resources": {
       "steel": 1
@@ -3940,6 +4113,7 @@
     "max_speed": 6,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "steel": 1
@@ -3962,6 +4136,7 @@
     "max_speed": 6,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.25,
     "resources": {
       "steel": 2
@@ -3984,6 +4159,7 @@
     "max_speed": 3,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 9.0,
     "resources": {
       "steel": 1
@@ -4006,6 +4182,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 10.0,
     "resources": {
       "steel": 1
@@ -4028,6 +4205,7 @@
     "max_speed": 5,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 11.0,
     "resources": {
       "steel": 1,
@@ -4051,6 +4229,7 @@
     "max_speed": 5,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 12.0,
     "resources": {
       "steel": 2,
@@ -4074,6 +4253,7 @@
     "max_speed": 7,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 6.0,
     "resources": {
       "steel": 2,
@@ -4097,6 +4277,7 @@
     "max_speed": 4,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 28.0,
     "resources": {
       "steel": 3,
@@ -4120,6 +4301,7 @@
     "max_speed": 5,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.5,
     "resources": {
       "steel": 1
@@ -4142,6 +4324,7 @@
     "max_speed": 5,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 12,
     "build_cost": 330.0,
     "resources": {
       "steel": 8,
@@ -4165,6 +4348,7 @@
     "max_speed": 0,
     "reliability": 0,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 70.0,
     "resources": {
       "steel": 1
@@ -4187,6 +4371,7 @@
     "max_speed": 0,
     "reliability": 0,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 50.0,
     "resources": {
       "steel": 1
@@ -4209,6 +4394,7 @@
     "max_speed": 0,
     "reliability": 0,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 105.0,
     "resources": {
       "steel": 2
@@ -4231,6 +4417,7 @@
     "max_speed": 330,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.21,
     "build_cost": 22.0,
     "resources": {
       "aluminium": 2,
@@ -4254,6 +4441,7 @@
     "max_speed": 500,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.21,
     "build_cost": 24.0,
     "resources": {
       "aluminium": 3,
@@ -4277,6 +4465,7 @@
     "max_speed": 650,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.21,
     "build_cost": 26.0,
     "resources": {
       "aluminium": 3,
@@ -4300,6 +4489,7 @@
     "max_speed": 720,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.21,
     "build_cost": 28.0,
     "resources": {
       "aluminium": 4,
@@ -4323,6 +4513,7 @@
     "max_speed": 950,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.42,
     "build_cost": 30.0,
     "resources": {
       "aluminium": 2,
@@ -4344,6 +4535,7 @@
     "max_speed": 1100,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.42,
     "build_cost": 32.0,
     "resources": {
       "aluminium": 3,
@@ -4365,6 +4557,7 @@
     "max_speed": 1400,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.52,
     "build_cost": 39.0,
     "resources": {
       "aluminium": 4,
@@ -4386,6 +4579,7 @@
     "max_speed": 297,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.21,
     "build_cost": 26.4,
     "resources": {
       "aluminium": 2,
@@ -4409,6 +4603,7 @@
     "max_speed": 450,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.21,
     "build_cost": 28.4,
     "resources": {
       "aluminium": 3,
@@ -4432,6 +4627,7 @@
     "max_speed": 585,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.21,
     "build_cost": 30.4,
     "resources": {
       "aluminium": 3,
@@ -4455,6 +4651,7 @@
     "max_speed": 648,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.21,
     "build_cost": 32.4,
     "resources": {
       "aluminium": 3,
@@ -4478,6 +4675,7 @@
     "max_speed": 390,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 22.0,
     "resources": {
       "aluminium": 2,
@@ -4498,6 +4696,7 @@
     "max_speed": 450,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 24.0,
     "resources": {
       "aluminium": 3,
@@ -4518,6 +4717,7 @@
     "max_speed": 550,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 26.0,
     "resources": {
       "aluminium": 3,
@@ -4538,6 +4738,7 @@
     "max_speed": 351,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 26.4,
     "resources": {
       "aluminium": 2,
@@ -4558,6 +4759,7 @@
     "max_speed": 405,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 28.4,
     "resources": {
       "aluminium": 3,
@@ -4578,6 +4780,7 @@
     "max_speed": 495,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 30.4,
     "resources": {
       "aluminium": 3,
@@ -4598,6 +4801,7 @@
     "max_speed": 230,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.28,
     "build_cost": 26.0,
     "resources": {
       "aluminium": 2,
@@ -4618,6 +4822,7 @@
     "max_speed": 300,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.28,
     "build_cost": 28.0,
     "resources": {
       "aluminium": 3,
@@ -4638,6 +4843,7 @@
     "max_speed": 400,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.28,
     "build_cost": 30.0,
     "resources": {
       "aluminium": 3,
@@ -4658,6 +4864,7 @@
     "max_speed": 207,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.28,
     "build_cost": 31.2,
     "resources": {
       "aluminium": 2,
@@ -4678,6 +4885,7 @@
     "max_speed": 270,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.28,
     "build_cost": 33.2,
     "resources": {
       "aluminium": 3,
@@ -4698,6 +4906,7 @@
     "max_speed": 360,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.28,
     "build_cost": 35.2,
     "resources": {
       "aluminium": 3,
@@ -4718,6 +4927,7 @@
     "max_speed": 950,
     "reliability": 0.3,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 16.0,
     "resources": {
       "aluminium": 3,
@@ -4739,6 +4949,7 @@
     "max_speed": 1100,
     "reliability": 0.5,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 18.0,
     "resources": {
       "aluminium": 3,
@@ -4760,6 +4971,7 @@
     "max_speed": 1150,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 20.0,
     "resources": {
       "aluminium": 3,
@@ -4781,6 +4993,7 @@
     "max_speed": 1150,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 14.0,
     "resources": {
       "aluminium": 2,
@@ -4802,6 +5015,7 @@
     "max_speed": 250,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.36,
     "build_cost": 35.0,
     "resources": {
       "aluminium": 2,
@@ -4825,6 +5039,7 @@
     "max_speed": 430,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.36,
     "build_cost": 37.0,
     "resources": {
       "aluminium": 3,
@@ -4848,6 +5063,7 @@
     "max_speed": 440,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.36,
     "build_cost": 39.0,
     "resources": {
       "aluminium": 4,
@@ -4871,6 +5087,7 @@
     "max_speed": 480,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.36,
     "build_cost": 41.0,
     "resources": {
       "aluminium": 5,
@@ -4894,6 +5111,7 @@
     "max_speed": 1000,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.72,
     "build_cost": 45.0,
     "resources": {
       "aluminium": 2,
@@ -4915,6 +5133,7 @@
     "max_speed": 1000,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.72,
     "build_cost": 48.0,
     "resources": {
       "aluminium": 3,
@@ -4936,6 +5155,7 @@
     "max_speed": 500,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 28.0,
     "resources": {
       "aluminium": 2,
@@ -4956,6 +5176,7 @@
     "max_speed": 550,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 30.0,
     "resources": {
       "aluminium": 3,
@@ -4976,6 +5197,7 @@
     "max_speed": 600,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 32.0,
     "resources": {
       "aluminium": 4,
@@ -4996,6 +5218,7 @@
     "max_speed": 500,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 20.0,
     "resources": {
       "aluminium": 2,
@@ -5016,6 +5239,7 @@
     "max_speed": 550,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.26,
     "build_cost": 20.0,
     "resources": {
       "aluminium": 3,
@@ -5036,6 +5260,7 @@
     "max_speed": 400,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.8,
     "build_cost": 60.0,
     "resources": {
       "aluminium": 3,
@@ -5059,6 +5284,7 @@
     "max_speed": 450,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.8,
     "build_cost": 62.0,
     "resources": {
       "aluminium": 4,
@@ -5082,6 +5308,7 @@
     "max_speed": 500,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.8,
     "build_cost": 64.0,
     "resources": {
       "aluminium": 5,
@@ -5105,6 +5332,7 @@
     "max_speed": 920,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.6,
     "build_cost": 80.0,
     "resources": {
       "aluminium": 3,
@@ -5126,6 +5354,7 @@
     "max_speed": 6,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.0,
     "build_cost": 7.0,
     "resources": {
       "steel": 1
@@ -5148,6 +5377,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.4,
     "build_cost": 8.0,
     "resources": {
       "steel": 2
@@ -5170,6 +5400,7 @@
     "max_speed": 12,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.4,
     "build_cost": 9.0,
     "resources": {
       "steel": 3
@@ -5192,6 +5423,7 @@
     "max_speed": 14,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.4,
     "build_cost": 10.0,
     "resources": {
       "steel": 4
@@ -5214,6 +5446,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.2,
     "build_cost": 8.0,
     "resources": {
       "steel": 2,
@@ -5234,6 +5467,7 @@
     "max_speed": 12,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.2,
     "build_cost": 9.0,
     "resources": {
       "steel": 3,
@@ -5254,6 +5488,7 @@
     "max_speed": 14,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.2,
     "build_cost": 10.0,
     "resources": {
       "steel": 4,
@@ -5274,6 +5509,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.2,
     "build_cost": 8.0,
     "resources": {
       "steel": 2,
@@ -5294,6 +5530,7 @@
     "max_speed": 12,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.2,
     "build_cost": 9.0,
     "resources": {
       "steel": 3,
@@ -5314,6 +5551,7 @@
     "max_speed": 14,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.2,
     "build_cost": 10.0,
     "resources": {
       "steel": 4,
@@ -5334,6 +5572,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.6,
     "build_cost": 10.0,
     "resources": {
       "steel": 2
@@ -5353,6 +5592,7 @@
     "max_speed": 12,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.6,
     "build_cost": 11.0,
     "resources": {
       "steel": 3
@@ -5372,6 +5612,7 @@
     "max_speed": 14,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.6,
     "build_cost": 12.0,
     "resources": {
       "steel": 4
@@ -5391,6 +5632,7 @@
     "max_speed": 8,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 3.6,
     "build_cost": 12.0,
     "resources": {
       "tungsten": 2,
@@ -5414,6 +5656,7 @@
     "max_speed": 9,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 3.6,
     "build_cost": 13.0,
     "resources": {
       "tungsten": 2,
@@ -5437,6 +5680,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 3.6,
     "build_cost": 14.0,
     "resources": {
       "tungsten": 2,
@@ -5460,6 +5704,7 @@
     "max_speed": 8,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 12.0,
     "resources": {
       "tungsten": 3,
@@ -5480,6 +5725,7 @@
     "max_speed": 9,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 13.0,
     "resources": {
       "steel": 3,
@@ -5500,6 +5746,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 14.0,
     "resources": {
       "steel": 4,
@@ -5520,6 +5767,7 @@
     "max_speed": 8,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 12.0,
     "resources": {
       "tungsten": 4,
@@ -5540,6 +5788,7 @@
     "max_speed": 9,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 13.0,
     "resources": {
       "tungsten": 4,
@@ -5560,6 +5809,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.8,
     "build_cost": 14.0,
     "resources": {
       "tungsten": 4,
@@ -5580,6 +5830,7 @@
     "max_speed": 8,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.9,
     "build_cost": 12.0,
     "resources": {
       "tungsten": 2,
@@ -5600,6 +5851,7 @@
     "max_speed": 9,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.9,
     "build_cost": 13.0,
     "resources": {
       "tungsten": 2,
@@ -5620,6 +5872,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0.9,
     "build_cost": 14.0,
     "resources": {
       "tungsten": 2,
@@ -5640,6 +5893,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 4.4,
     "build_cost": 25.0,
     "resources": {
       "steel": 3,
@@ -5663,6 +5917,7 @@
     "max_speed": 6,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 4.4,
     "build_cost": 27.0,
     "resources": {
       "steel": 3,
@@ -5686,6 +5941,7 @@
     "max_speed": 6,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 4.4,
     "build_cost": 30.0,
     "resources": {
       "steel": 4,
@@ -5709,6 +5965,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.2,
     "build_cost": 25.0,
     "resources": {
       "steel": 3,
@@ -5729,6 +5986,7 @@
     "max_speed": 6,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.2,
     "build_cost": 27.0,
     "resources": {
       "steel": 4,
@@ -5749,6 +6007,7 @@
     "max_speed": 6,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.2,
     "build_cost": 30.0,
     "resources": {
       "steel": 5,
@@ -5769,6 +6028,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.2,
     "build_cost": 25.0,
     "resources": {
       "steel": 3,
@@ -5789,6 +6049,7 @@
     "max_speed": 6,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.2,
     "build_cost": 27.0,
     "resources": {
       "steel": 4,
@@ -5809,6 +6070,7 @@
     "max_speed": 6,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.2,
     "build_cost": 30.0,
     "resources": {
       "steel": 4,
@@ -5829,6 +6091,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.1,
     "build_cost": 25.0,
     "resources": {
       "steel": 3,
@@ -5849,6 +6112,7 @@
     "max_speed": 6,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.1,
     "build_cost": 27.0,
     "resources": {
       "steel": 3,
@@ -5869,6 +6133,7 @@
     "max_speed": 6,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.1,
     "build_cost": 30.0,
     "resources": {
       "steel": 4,
@@ -5889,6 +6154,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 5,
     "build_cost": 28.0,
     "resources": {
       "steel": 3,
@@ -5912,6 +6178,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.5,
     "build_cost": 28.0,
     "resources": {
       "steel": 3,
@@ -5932,6 +6199,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.5,
     "build_cost": 28.0,
     "resources": {
       "steel": 3,
@@ -5952,6 +6220,7 @@
     "max_speed": 10,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 1.25,
     "build_cost": 28.0,
     "resources": {
       "steel": 3,
@@ -5972,6 +6241,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 10,
     "build_cost": 100.0,
     "resources": {
       "steel": 3,
@@ -5995,6 +6265,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 5,
     "build_cost": 100.0,
     "resources": {
       "steel": 3,
@@ -6015,6 +6286,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 5,
     "build_cost": 100.0,
     "resources": {
       "steel": 3,
@@ -6035,6 +6307,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 2.5,
     "build_cost": 100.0,
     "resources": {
       "steel": 3,
@@ -6055,6 +6328,7 @@
     "max_speed": 7,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 4,
     "build_cost": 10.0,
     "resources": {
       "steel": 2
@@ -6077,6 +6351,7 @@
     "max_speed": 8,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 4,
     "build_cost": 13.0,
     "resources": {
       "steel": 2,
@@ -6100,6 +6375,7 @@
     "max_speed": 5,
     "reliability": 0.65,
     "supply_use": 0,
+    "fuel_consumption": 14,
     "build_cost": 330.0,
     "resources": {
       "steel": 20,
@@ -6123,6 +6399,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.0,
     "resources": {
       "steel": 1
@@ -6147,6 +6424,7 @@
     "max_speed": 5,
     "reliability": 0.95,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.35,
     "resources": {
       "steel": 1
@@ -6171,6 +6449,7 @@
     "max_speed": 6,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.7,
     "resources": {
       "steel": 1
@@ -6195,6 +6474,7 @@
     "max_speed": 7,
     "reliability": 1.3,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.0,
     "resources": {
       "steel": 2
@@ -6219,6 +6499,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.0,
     "resources": {
       "steel": 1
@@ -6243,6 +6524,7 @@
     "max_speed": 5,
     "reliability": 0.95,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.35,
     "resources": {
       "steel": 1
@@ -6267,6 +6549,7 @@
     "max_speed": 6,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.7,
     "resources": {
       "steel": 1
@@ -6291,6 +6574,7 @@
     "max_speed": 7,
     "reliability": 1.3,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.0,
     "resources": {
       "steel": 2
@@ -6315,6 +6599,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.0,
     "resources": {
       "steel": 1
@@ -6339,6 +6624,7 @@
     "max_speed": 5,
     "reliability": 0.95,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.35,
     "resources": {
       "steel": 1
@@ -6363,6 +6649,7 @@
     "max_speed": 6,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.7,
     "resources": {
       "steel": 1
@@ -6387,6 +6674,7 @@
     "max_speed": 7,
     "reliability": 1.3,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.0,
     "resources": {
       "steel": 2
@@ -6411,6 +6699,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.0,
     "resources": {
       "steel": 1
@@ -6435,6 +6724,7 @@
     "max_speed": 5,
     "reliability": 0.95,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.35,
     "resources": {
       "steel": 1
@@ -6459,6 +6749,7 @@
     "max_speed": 6,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.7,
     "resources": {
       "steel": 1
@@ -6483,6 +6774,7 @@
     "max_speed": 7,
     "reliability": 1.3,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.0,
     "resources": {
       "steel": 2
@@ -6507,6 +6799,7 @@
     "max_speed": 4,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.0,
     "resources": {
       "steel": 1
@@ -6531,6 +6824,7 @@
     "max_speed": 5,
     "reliability": 0.95,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.35,
     "resources": {
       "steel": 1
@@ -6555,6 +6849,7 @@
     "max_speed": 6,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 2.7,
     "resources": {
       "steel": 1
@@ -6579,6 +6874,7 @@
     "max_speed": 7,
     "reliability": 1.3,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.0,
     "resources": {
       "steel": 2
@@ -6603,6 +6899,7 @@
     "max_speed": 4,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.5,
     "resources": {
       "steel": 1
@@ -6627,6 +6924,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.75,
     "resources": {
       "steel": 1
@@ -6651,6 +6949,7 @@
     "max_speed": 6,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "steel": 1
@@ -6675,6 +6974,7 @@
     "max_speed": 6,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.25,
     "resources": {
       "steel": 2
@@ -6699,6 +6999,7 @@
     "max_speed": 4,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.5,
     "resources": {
       "steel": 1
@@ -6723,6 +7024,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.75,
     "resources": {
       "steel": 1
@@ -6747,6 +7049,7 @@
     "max_speed": 6,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "steel": 1
@@ -6771,6 +7074,7 @@
     "max_speed": 6,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.25,
     "resources": {
       "steel": 2
@@ -6795,6 +7099,7 @@
     "max_speed": 4,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.5,
     "resources": {
       "steel": 1
@@ -6819,6 +7124,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.75,
     "resources": {
       "steel": 1
@@ -6843,6 +7149,7 @@
     "max_speed": 6,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "steel": 1
@@ -6867,6 +7174,7 @@
     "max_speed": 6,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.25,
     "resources": {
       "steel": 2
@@ -6891,6 +7199,7 @@
     "max_speed": 4,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.5,
     "resources": {
       "steel": 1
@@ -6915,6 +7224,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.75,
     "resources": {
       "steel": 1
@@ -6939,6 +7249,7 @@
     "max_speed": 6,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "steel": 1
@@ -6963,6 +7274,7 @@
     "max_speed": 6,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.25,
     "resources": {
       "steel": 2
@@ -6987,6 +7299,7 @@
     "max_speed": 4,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.5,
     "resources": {
       "steel": 1
@@ -7011,6 +7324,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 3.75,
     "resources": {
       "steel": 1
@@ -7035,6 +7349,7 @@
     "max_speed": 6,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.0,
     "resources": {
       "steel": 1
@@ -7059,6 +7374,7 @@
     "max_speed": 6,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 4.25,
     "resources": {
       "steel": 2
@@ -7083,6 +7399,7 @@
     "max_speed": 3,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 9.0,
     "resources": {
       "steel": 1
@@ -7107,6 +7424,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 10.0,
     "resources": {
       "steel": 1
@@ -7131,6 +7449,7 @@
     "max_speed": 5,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 11.0,
     "resources": {
       "steel": 1,
@@ -7156,6 +7475,7 @@
     "max_speed": 5,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 12.0,
     "resources": {
       "steel": 2,
@@ -7181,6 +7501,7 @@
     "max_speed": 3,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 9.0,
     "resources": {
       "steel": 1
@@ -7205,6 +7526,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 10.0,
     "resources": {
       "steel": 1
@@ -7229,6 +7551,7 @@
     "max_speed": 5,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 11.0,
     "resources": {
       "steel": 1,
@@ -7254,6 +7577,7 @@
     "max_speed": 5,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 12.0,
     "resources": {
       "steel": 2,
@@ -7279,6 +7603,7 @@
     "max_speed": 3,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 9.0,
     "resources": {
       "steel": 1
@@ -7303,6 +7628,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 10.0,
     "resources": {
       "steel": 1
@@ -7327,6 +7653,7 @@
     "max_speed": 5,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 11.0,
     "resources": {
       "steel": 1,
@@ -7352,6 +7679,7 @@
     "max_speed": 5,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 12.0,
     "resources": {
       "steel": 2,
@@ -7377,6 +7705,7 @@
     "max_speed": 3,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 9.0,
     "resources": {
       "steel": 1
@@ -7401,6 +7730,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 10.0,
     "resources": {
       "steel": 1
@@ -7425,6 +7755,7 @@
     "max_speed": 5,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 11.0,
     "resources": {
       "steel": 1,
@@ -7450,6 +7781,7 @@
     "max_speed": 5,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 12.0,
     "resources": {
       "steel": 2,
@@ -7475,6 +7807,7 @@
     "max_speed": 3,
     "reliability": 0.75,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 9.0,
     "resources": {
       "steel": 1
@@ -7499,6 +7832,7 @@
     "max_speed": 5,
     "reliability": 0.8,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 10.0,
     "resources": {
       "steel": 1
@@ -7523,6 +7857,7 @@
     "max_speed": 5,
     "reliability": 1.1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 11.0,
     "resources": {
       "steel": 1,
@@ -7548,6 +7883,7 @@
     "max_speed": 5,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 12.0,
     "resources": {
       "steel": 2,
@@ -7573,6 +7909,7 @@
     "max_speed": 4,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 28.0,
     "resources": {
       "steel": 3,
@@ -7598,6 +7935,7 @@
     "max_speed": 4,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 28.0,
     "resources": {
       "steel": 3,
@@ -7623,6 +7961,7 @@
     "max_speed": 4,
     "reliability": 1,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 28.0,
     "resources": {
       "steel": 3,
@@ -7648,6 +7987,7 @@
     "max_speed": 7,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 6.0,
     "resources": {
       "steel": 2,
@@ -7673,6 +8013,7 @@
     "max_speed": 7,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 6.0,
     "resources": {
       "steel": 2,
@@ -7698,6 +8039,7 @@
     "max_speed": 7,
     "reliability": 1.2,
     "supply_use": 0,
+    "fuel_consumption": 0,
     "build_cost": 6.0,
     "resources": {
       "steel": 2,

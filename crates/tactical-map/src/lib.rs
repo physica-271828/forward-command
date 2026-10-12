@@ -26,7 +26,7 @@ pub use bmp::{IndexMap, ProvinceMap};
 pub use csv::{
     load_adjacencies_csv, load_definition_csv, Adjacency, AdjacencyKind, ProvinceInfo, ProvinceKind,
 };
-pub use generator::{river_bit, DeploymentZones, MapGenerator, TacticalMap};
+pub use generator::{DeploymentZones, MapGenerator, TacticalMap};
 pub use localisation::{load_vp_names, vp_names_path};
 pub use rails::{load_railways, RailwayLine};
 pub use states::{
@@ -618,7 +618,7 @@ mod tests {
             }
             eprintln!("[topo] {name}: orphan_villages={orphan_villages}");
 
-            // Road net vs the elevation field (ENH-0137: price roads by
+            // Road net vs the elevation field (roads are priced by
             // relief instead of terrain type — how much relief does the
             // painted net actually sit on?).
             let mut by_elev = std::collections::BTreeMap::new();

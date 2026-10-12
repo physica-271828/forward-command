@@ -37,8 +37,10 @@ import sys
 _parser = argparse.ArgumentParser(description=__doc__)
 _parser.add_argument("--hoi4-dir", default=os.environ.get("HOI4_DIR", r"D:\Steam\steamapps\common\Hearts of Iron IV"),
                      help="HOI4 install directory (or set HOI4_DIR env var)")
-_parser.add_argument("--out", default=r"D:\OpenCode\Forward Command\forward-command\data",
-                     help="output directory for the extracted JSON tables")
+_DATA_DIR = os.environ.get("FC_DATA_DIR") or os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data"))
+_parser.add_argument("--out", default=_DATA_DIR,
+                     help="output directory for the extracted JSON tables (or set FC_DATA_DIR)")
 _args = _parser.parse_args()
 GAME_DIR = _args.hoi4_dir
 OUT_DIR = _args.out

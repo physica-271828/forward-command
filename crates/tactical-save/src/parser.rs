@@ -21,8 +21,9 @@ use jomini::Windows1252Encoding;
 
 use crate::mapping::map_unit_class;
 use crate::model::{
-    ArmyData, BattalionInfo, CountryData, DivisionData, EquipmentDesign, LandCombatData,
-    LandCombatSideData, LeaderData, SaveGame, TemplateData,
+    ArmyData, BattalionInfo, BorderWarCombatData, BorderWarCombatSideData, CountryData,
+    DivisionData, EquipmentDesign, LandCombatData, LandCombatSideData, LeaderData, SaveGame,
+    TemplateData,
 };
 use crate::SaveError;
 
@@ -62,7 +63,7 @@ impl SaveParser {
         let mut templates: Vec<TemplateData> = Vec::new();
         for (key, group) in root.field_groups() {
             if key.read_str() == "division_templates" {
-                templates = parse_root_templates(&group)?;
+                templates = parse_root_templates(&group);
             }
         }
 
@@ -70,13 +71,15 @@ impl SaveParser {
         // division equipment as `id = N` references, and this block maps
         // each id to its full record:
         // `light_tank_chassis_2 = { id = { id = 2203 type = 70 }
-        //   name = "Type 95 Ha-Go" is_frame = no upgrades = { upgrades = {
+        //   name = "Type 95 Ha-Go" upgrades = { upgrades = {
         //   { tank_nsb_engine_upgrade 0 } { tank_nsb_armor_upgrade 0 } } }
         //   modules = { main_armament_slot = tank_heavy_machine_gun … } }`.
         // The token alone only fixes the CHASSIS row (designer-era tank
         // chassis carry no attack stats — the gun is a module pick), so the
         // module/upgrade fields are parsed too; the design-aware assembly
-        // (§5.3) computes real combat stats from them.
+        // (§5.3) computes real combat stats from them. The record's
+        // `is_frame` flag is ignored: a frame entry and a design of the same
+        // chassis differ only by their module picks, which is what is read.
         let mut designs: HashMap<u64, EquipmentDesign> = HashMap::new();
         for (key, group) in root.field_groups() {
             if key.read_str() != "equipments" {
@@ -107,11 +110,6 @@ impl SaveParser {
                                         if !text.is_empty() {
                                             design.name = Some(text);
                                         }
-                                    }
-                                }
-                                "is_frame" => {
-                                    for (_op, v) in g.values() {
-                                        design.is_frame = read_text(&v) == "yes";
                                     }
                                 }
                                 "modules" => {
@@ -202,21 +200,30 @@ impl SaveParser {
             }
         }
 
-        // Pass 2: countries.
+        // Pass 2: countries. The root template maps are built ONCE here —
+        // parse_country merges in only the country's own local templates.
+        let root_template_maps = build_template_maps(&templates, &[]);
         let mut countries: HashMap<String, CountryData> = HashMap::new();
         for (key, group) in root.field_groups() {
             if key.read_str() == "countries" {
                 for (_op, value) in group.values() {
+                    // A non-object `countries` degrades like every other
+                    // malformed block (§11.3) — the countries it would have
+                    // carried are simply absent.
                     let Ok(obj) = value.read_object() else {
-                        return Err(SaveError::Parse("`countries` is not an object".to_string()));
+                        continue;
                     };
                     for (tag_key, tag_group) in obj.field_groups() {
                         let tag = tag_key.read_str().to_string();
                         // A single malformed country must not abort the parse
                         // (§11.3); skip it and keep going.
-                        if let Ok(mut country) =
-                            parse_country(&tag, &tag_group, &templates, &designs, &advisor_roles)
-                        {
+                        if let Ok(mut country) = parse_country(
+                            &tag,
+                            &tag_group,
+                            &root_template_maps,
+                            &designs,
+                            &advisor_roles,
+                        ) {
                             // Pass-1.6 leader traits ride on the tag.
                             country.leader_traits = leader_traits.remove(&tag).unwrap_or_default();
                             countries.insert(tag, country);
@@ -263,9 +270,11 @@ impl SaveParser {
             }
         }
 
-        // Pass 3: ongoing land battles in the root `combat` block —
-        // the save's authoritative battle record.
+        // Pass 3: ongoing battles in the root `combat` block — the save's
+        // authoritative record. Land battles and border wars are serialized
+        // side by side; a border war never produces a `land_combat` entry.
         let mut land_combats: Vec<LandCombatData> = Vec::new();
+        let mut border_war_combats: Vec<BorderWarCombatData> = Vec::new();
         for (key, group) in root.field_groups() {
             if key.read_str() != "combat" {
                 continue;
@@ -275,13 +284,22 @@ impl SaveParser {
                     continue;
                 };
                 for (ck, cg) in combat_obj.field_groups() {
-                    if ck.read_str() != "land_combat" {
-                        continue;
-                    }
-                    for (_op, value) in cg.values() {
-                        if let Ok(combat) = parse_land_combat(&value) {
-                            land_combats.push(combat);
+                    match ck.read_str().as_ref() {
+                        "land_combat" => {
+                            for (_op, value) in cg.values() {
+                                if let Ok(combat) = parse_land_combat(&value) {
+                                    land_combats.push(combat);
+                                }
+                            }
                         }
+                        "border_war_combat" => {
+                            for (_op, value) in cg.values() {
+                                if let Ok(combat) = parse_border_war_combat(&value) {
+                                    border_war_combats.push(combat);
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -404,6 +422,7 @@ impl SaveParser {
             player,
             date: save_date,
             land_combats,
+            border_war_combats,
             picked_states,
             leaders,
             armies,
@@ -518,6 +537,135 @@ fn parse_land_combat_side(obj: &ObjectReader<'_, '_, Encoding>, side: &mut LandC
     }
 }
 
+/// Parse one `border_war_combat = { ... }` block. Structurally a sibling of
+/// `land_combat` (the same location + per-side division/tactic/tag shape)
+/// plus a country tag and its own contested state/province per side.
+fn parse_border_war_combat(
+    value: &ValueReader<'_, '_, Encoding>,
+) -> Result<BorderWarCombatData, SaveError> {
+    let obj = value
+        .read_object()
+        .map_err(|e| SaveError::Parse(format!("border_war_combat is not an object: {e}")))?;
+    let mut location: Option<u32> = None;
+    let mut attacker = BorderWarCombatSideData::default();
+    let mut defender = BorderWarCombatSideData::default();
+    for (key, group) in obj.field_groups() {
+        match key.read_str().as_ref() {
+            "location" => {
+                for (_op, v) in group.values() {
+                    if let Ok(scalar) = v.read_scalar() {
+                        location = scalar.to_u64().ok().map(|x| x as u32);
+                    }
+                }
+            }
+            "attacker" => {
+                for (_op, v) in group.values() {
+                    if let Ok(side_obj) = v.read_object() {
+                        parse_border_war_combat_side(&side_obj, &mut attacker);
+                    }
+                }
+            }
+            "defender" => {
+                for (_op, v) in group.values() {
+                    if let Ok(side_obj) = v.read_object() {
+                        parse_border_war_combat_side(&side_obj, &mut defender);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let location = location
+        .ok_or_else(|| SaveError::Parse("border_war_combat without location".to_string()))?;
+    Ok(BorderWarCombatData {
+        location,
+        attacker,
+        defender,
+    })
+}
+
+/// Fill one side of a [`BorderWarCombatData`]: the same unit/tactic/tag
+/// shape as a land-combat side plus the side's `tag`/`state`/`province`.
+fn parse_border_war_combat_side(
+    obj: &ObjectReader<'_, '_, Encoding>,
+    side: &mut BorderWarCombatSideData,
+) {
+    for (key, group) in obj.field_groups() {
+        match key.read_str().as_ref() {
+            "unit" => {
+                for (_op, v) in group.values() {
+                    if let Some(id) = read_id_from_value(&v) {
+                        side.unit_ids.push(id);
+                    }
+                }
+            }
+            "tactic" => {
+                for (_op, v) in group.values() {
+                    if let Ok(scalar) = v.read_scalar() {
+                        side.tactic = scalar.to_u64().ok().map(|x| x as u32);
+                    }
+                }
+            }
+            "tag" => {
+                for (_op, v) in group.values() {
+                    if let Ok(tag) = v.read_string() {
+                        if !tag.is_empty() {
+                            side.tag = Some(tag);
+                        }
+                    }
+                }
+            }
+            "state" => {
+                for (_op, v) in group.values() {
+                    if let Ok(scalar) = v.read_scalar() {
+                        side.state = scalar.to_u64().ok().map(|x| x as u32);
+                    }
+                }
+            }
+            "province" => {
+                for (_op, v) in group.values() {
+                    if let Ok(scalar) = v.read_scalar() {
+                        side.province = scalar.to_u64().ok().map(|x| x as u32);
+                    }
+                }
+            }
+            "log" => {
+                for (_op, v) in group.values() {
+                    let Ok(log_obj) = v.read_object() else {
+                        continue;
+                    };
+                    for (lk, lg) in log_obj.field_groups() {
+                        if lk.read_str() != "combat_side_data" {
+                            continue;
+                        }
+                        for (_op, csd) in lg.values() {
+                            let Ok(csd_obj) = csd.read_object() else {
+                                continue;
+                            };
+                            for (tk, tg) in csd_obj.field_groups() {
+                                if tk.read_str() != "tags" {
+                                    continue;
+                                }
+                                for (_op, tv) in tg.values() {
+                                    let Ok(arr) = tv.read_array() else { continue };
+                                    for av in arr.values() {
+                                        if let Ok(tag) = av.read_string() {
+                                            if !tag.is_empty() {
+                                                side.tags.push(tag);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Strip the `HOI4txt` header line and reject binary saves.
 fn strip_header(bytes: &[u8]) -> Result<&[u8], SaveError> {
     const BIN_MAGIC: &[u8] = b"HOI4bin";
@@ -567,15 +715,15 @@ pub fn find_divisions_in_province<'a>(
 
 /// Root-level `division_templates = { division_template = { id = {...}
 /// name = "..." regiments = {...} support = {...} } ... }` (real save format).
-fn parse_root_templates(
-    group: &GroupEntry<'_, '_, Encoding>,
-) -> Result<Vec<TemplateData>, SaveError> {
+/// A non-object value degrades to
+/// "no templates" like every other malformed block (§11.3): a division whose
+/// template then resolves nowhere assembles through the §5.3 fallback
+/// instead of the whole save failing to load.
+fn parse_root_templates(group: &GroupEntry<'_, '_, Encoding>) -> Vec<TemplateData> {
     let mut templates = Vec::new();
     for (_op, value) in group.values() {
         let Ok(obj) = value.read_object() else {
-            return Err(SaveError::Parse(
-                "`division_templates` is not an object".to_string(),
-            ));
+            continue;
         };
         for (field_key, field_group) in obj.field_groups() {
             if field_key.read_str() != "division_template" {
@@ -588,7 +736,7 @@ fn parse_root_templates(
             }
         }
     }
-    Ok(templates)
+    templates
 }
 
 fn parse_root_template(value: &ValueReader<'_, '_, Encoding>) -> Result<TemplateData, SaveError> {
@@ -599,8 +747,12 @@ fn parse_root_template(value: &ValueReader<'_, '_, Encoding>) -> Result<Template
     let mut id = None;
     let mut name = String::new();
     let mut division_names_group = None;
+    let mut is_army_hq = false;
     let mut battalions = Vec::new();
     let mut support_companies = Vec::new();
+    // Regimental support companies (1.19) attach exactly like the
+    // divisional support column — merged into the same list.
+    let mut regimental_support = Vec::new();
 
     for (field_key, field_group) in obj.field_groups() {
         match field_key.read_str().as_ref() {
@@ -615,16 +767,24 @@ fn parse_root_template(value: &ValueReader<'_, '_, Encoding>) -> Result<Template
                     division_names_group = Some(read_text(&v));
                 }
             }
+            "is_army_hq" => {
+                for (_op, v) in field_group.values() {
+                    is_army_hq = read_text(&v) == "yes";
+                }
+            }
             "regiments" => battalions = parse_subunits(&field_group),
             "support" => support_companies = parse_subunits(&field_group),
+            "regimental_support" => regimental_support = parse_subunits(&field_group),
             _ => {}
         }
     }
+    support_companies.extend(regimental_support);
 
     Ok(TemplateData {
         id,
         name,
         division_names_group,
+        is_army_hq,
         battalions,
         support_companies,
     })
@@ -642,7 +802,9 @@ fn parse_local_templates(group: &GroupEntry<'_, '_, Encoding>) -> Vec<TemplateDa
             let name = name_key.read_str().to_string();
             let mut battalions = Vec::new();
             let mut support_companies = Vec::new();
+            let mut regimental_support = Vec::new();
             let mut division_names_group = None;
+            let mut is_army_hq = false;
             for (_op, tmpl_value) in name_group.values() {
                 let Ok(tmpl_obj) = tmpl_value.read_object() else {
                     continue;
@@ -651,19 +813,27 @@ fn parse_local_templates(group: &GroupEntry<'_, '_, Encoding>) -> Vec<TemplateDa
                     match section_key.read_str().as_ref() {
                         "regiments" => battalions = parse_subunits(&section_group),
                         "support" => support_companies = parse_subunits(&section_group),
+                        "regimental_support" => regimental_support = parse_subunits(&section_group),
                         "division_names_group" => {
                             for (_op, v) in section_group.values() {
                                 division_names_group = Some(read_text(&v));
+                            }
+                        }
+                        "is_army_hq" => {
+                            for (_op, v) in section_group.values() {
+                                is_army_hq = read_text(&v) == "yes";
                             }
                         }
                         _ => {}
                     }
                 }
             }
+            support_companies.extend(regimental_support);
             templates.push(TemplateData {
                 id: None,
                 name: name.clone(),
                 division_names_group,
+                is_army_hq,
                 battalions,
                 support_companies,
             });
@@ -704,40 +874,80 @@ fn parse_subunits(group: &GroupEntry<'_, '_, Encoding>) -> Vec<BattalionInfo> {
 // Countries and divisions
 // ---------------------------------------------------------------------------
 
+/// A template's resolved composition: line battalions, support companies
+/// (divisional + regimental merged), and the army-HQ flag (§5.3).
+#[derive(Debug, Clone, Default)]
+pub struct TemplateComposition {
+    pub battalions: Vec<BattalionInfo>,
+    pub support_companies: Vec<BattalionInfo>,
+    pub is_army_hq: bool,
+}
+
 type TemplateMaps = (
-    HashMap<String, (Vec<BattalionInfo>, Vec<BattalionInfo>)>,
+    HashMap<String, TemplateComposition>,
+    HashMap<u64, TemplateComposition>,
     HashMap<u64, String>,
     HashMap<u64, Option<String>>,
 );
 
 fn build_template_maps(root_templates: &[TemplateData], local: &[TemplateData]) -> TemplateMaps {
-    let mut by_name: HashMap<String, (Vec<BattalionInfo>, Vec<BattalionInfo>)> = HashMap::new();
+    let mut by_name: HashMap<String, TemplateComposition> = HashMap::new();
+    let mut by_id: HashMap<u64, TemplateComposition> = HashMap::new();
     let mut id_to_name: HashMap<u64, String> = HashMap::new();
     let mut id_to_group: HashMap<u64, Option<String>> = HashMap::new();
     // Root templates first; country-level entries override on name clash.
     for t in root_templates.iter().chain(local.iter()) {
-        // Skip nameless templates (1.19 army-HQ templates carry
-        // `localization_key=` instead of `name=` — 438 of 698 in a 1936
-        // save): inserting them would poison `by_name[""]`, and every
+        let composition = TemplateComposition {
+            battalions: t.battalions.clone(),
+            support_companies: t.support_companies.clone(),
+            is_army_hq: t.is_army_hq,
+        };
+        // Skip nameless templates in the NAME index (1.19 army-HQ templates
+        // carry `localization_key=` instead of `name=` — 434 of 440 in a
+        // 1937 save): inserting them would poison `by_name[""]`, and every
         // division whose resolution fell through would inherit HQ content.
+        // They stay reachable through the id index below — divisions
+        // reference them by `division_template_id`.
         if !t.name.is_empty() {
-            by_name.insert(
-                t.name.clone(),
-                (t.battalions.clone(), t.support_companies.clone()),
-            );
+            by_name.insert(t.name.clone(), composition.clone());
         }
         if let Some(id) = t.id {
+            by_id.insert(id, composition);
             id_to_name.insert(id, t.name.clone());
             id_to_group.insert(id, t.division_names_group.clone());
         }
     }
-    (by_name, id_to_name, id_to_group)
+    (by_name, by_id, id_to_name, id_to_group)
+}
+
+/// Two-level template resolution (§5.3): a country's own templates
+/// override the root pool on name/id clash; the root maps are built ONCE
+/// per save — they are byte-identical for every country, and rebuilding
+/// them per country was ~400k deep `TemplateComposition` clones a parse.
+struct TemplateView<'a> {
+    root: &'a TemplateMaps,
+    local: &'a TemplateMaps,
+}
+
+impl TemplateView<'_> {
+    fn by_name(&self, name: &str) -> Option<&TemplateComposition> {
+        self.local.0.get(name).or_else(|| self.root.0.get(name))
+    }
+    fn by_id(&self, id: u64) -> Option<&TemplateComposition> {
+        self.local.1.get(&id).or_else(|| self.root.1.get(&id))
+    }
+    fn id_to_name(&self, id: u64) -> Option<&String> {
+        self.local.2.get(&id).or_else(|| self.root.2.get(&id))
+    }
+    fn id_to_group(&self, id: u64) -> Option<&Option<String>> {
+        self.local.3.get(&id).or_else(|| self.root.3.get(&id))
+    }
 }
 
 fn parse_country(
     tag: &str,
     group: &GroupEntry<'_, '_, Encoding>,
-    root_templates: &[TemplateData],
+    root_template_maps: &TemplateMaps,
     designs: &HashMap<u64, EquipmentDesign>,
     advisor_roles: &HashMap<u64, Vec<(String, String)>>,
 ) -> Result<CountryData, SaveError> {
@@ -757,9 +967,39 @@ fn parse_country(
             match field_key.read_str().as_ref() {
                 "division_template" => local_templates = parse_local_templates(&field_group),
                 "technologies" => technologies = parse_token_list(&field_group),
-                // 1.19 writes national spirits as `ideas = { tok1 tok2 }`
-                // (bare token list) — parse_token_list's scalar branch reads
-                // exactly that shape.
+                // Real 1.19 saves nest the researched-tech ledger one
+                // level down: the country-level `technology` block's
+                // `technologies` child carries each tech as a KEY with
+                // its own sub-object (`infantry_weapons = { level=1 … }`)
+                // — parse_token_list's object branch collects those keys.
+                "technology" => {
+                    for (_op, tech_value) in field_group.values() {
+                        let Ok(tech_obj) = tech_value.read_object() else {
+                            continue;
+                        };
+                        for (sub_key, sub_group) in tech_obj.field_groups() {
+                            if sub_key.read_str() == "technologies" {
+                                technologies.extend(parse_token_list(&sub_group));
+                            }
+                        }
+                    }
+                }
+                // Real 1.19 saves keep national spirits at
+                // `politics.ideas` — a bare token list, read by
+                // parse_token_list's scalar branch. The flat country-level
+                // keys below stay for synthetic fixtures.
+                "politics" => {
+                    for (_op, pol_value) in field_group.values() {
+                        let Ok(pol_obj) = pol_value.read_object() else {
+                            continue;
+                        };
+                        for (sub_key, sub_group) in pol_obj.field_groups() {
+                            if sub_key.read_str() == "ideas" {
+                                active_ideas.extend(parse_token_list(&sub_group));
+                            }
+                        }
+                    }
+                }
                 "active_ideas" | "ideas" => active_ideas.extend(parse_token_list(&field_group)),
                 // 1.19.2 key is singular `dynamic_modifier`; accept the
                 // plural too (docs/older notes use it).
@@ -768,6 +1008,21 @@ fn parse_country(
                 }
                 "appointed_advisors" => {
                     appointed_advisors.extend(parse_appointed_advisors(&field_group))
+                }
+                // Real 1.19 saves nest the appointments one level down:
+                // `characters = { appointed_advisors = { … } }` — the flat
+                // country-level arm above stays for synthetic fixtures.
+                "characters" => {
+                    for (_op, ch_value) in field_group.values() {
+                        let Ok(ch_obj) = ch_value.read_object() else {
+                            continue;
+                        };
+                        for (sub_key, sub_group) in ch_obj.field_groups() {
+                            if sub_key.read_str() == "appointed_advisors" {
+                                appointed_advisors.extend(parse_appointed_advisors(&sub_group));
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -793,7 +1048,13 @@ fn parse_country(
         })
         .collect();
 
-    let (by_name, id_to_name, id_to_group) = build_template_maps(root_templates, &local_templates);
+    // Root pool built once per save (see the caller); only this country's
+    // local templates are indexed here, overriding the root pool on clash.
+    let local_maps = build_template_maps(&[], &local_templates);
+    let template_view = TemplateView {
+        root: root_template_maps,
+        local: &local_maps,
+    };
 
     // Pass 2: divisions (needs the merged template maps).
     let mut divisions = Vec::new();
@@ -815,9 +1076,7 @@ fn parse_country(
                     }
                     for (_op, div_value) in unit_group.values() {
                         // Skip malformed divisions individually (§11.3).
-                        if let Ok(div) =
-                            parse_division(&div_value, &by_name, &id_to_name, &id_to_group, designs)
-                        {
+                        if let Ok(div) = parse_division(&div_value, &template_view, designs) {
                             divisions.push(div);
                         }
                     }
@@ -1237,9 +1496,7 @@ fn parse_dynamic_modifiers(group: &GroupEntry<'_, '_, Encoding>) -> Vec<(String,
 
 fn parse_division(
     value: &ValueReader<'_, '_, Encoding>,
-    by_name: &HashMap<String, (Vec<BattalionInfo>, Vec<BattalionInfo>)>,
-    id_to_name: &HashMap<u64, String>,
-    id_to_group: &HashMap<u64, Option<String>>,
+    templates: &TemplateView,
     designs: &HashMap<u64, EquipmentDesign>,
 ) -> Result<DivisionData, SaveError> {
     let obj = value
@@ -1264,7 +1521,9 @@ fn parse_division(
     // it to neutral Trained; an explicit `experience=0` is real Green.
     let mut experience: f32 = -1.0;
     let mut entrenchment: f32 = 0.0;
-    let mut supply_status: Option<f32> = None;
+    let mut supply_current: Option<f32> = None;
+    let mut supply_max: Option<f32> = None;
+    let mut fuel: Option<f32> = None;
     let mut equipment: HashMap<String, f32> = HashMap::new();
     let mut equipment_ids: Vec<(u64, f32)> = Vec::new();
 
@@ -1355,10 +1614,24 @@ fn parse_division(
                     }
                 }
             }
-            "supply_status" => {
+            "army_current_supply_ratio" => {
                 for (_op, v) in field_group.values() {
                     if let Ok(scalar) = v.read_scalar() {
-                        supply_status = Some(scalar.to_f64().unwrap_or(1.0) as f32);
+                        supply_current = Some(scalar.to_f64().unwrap_or(0.0) as f32);
+                    }
+                }
+            }
+            "max_supply" => {
+                for (_op, v) in field_group.values() {
+                    if let Ok(scalar) = v.read_scalar() {
+                        supply_max = Some(scalar.to_f64().unwrap_or(0.0) as f32);
+                    }
+                }
+            }
+            "fuel" => {
+                for (_op, v) in field_group.values() {
+                    if let Ok(scalar) = v.read_scalar() {
+                        fuel = Some(scalar.to_f64().unwrap_or(0.0) as f32);
                     }
                 }
             }
@@ -1367,7 +1640,9 @@ fn parse_division(
                 // id-reference form `equipment = { id = { id = N type = 70 }
                 // amount = M }` resolved through the root `equipments`
                 // registry (without it every division parsed
-                // with EMPTY equipment and stats collapsed to zero). The
+                // with EMPTY equipment and stats collapsed to zero). BOTH
+                // accumulate repeated tokens — a save listing the same token
+                // twice holds the sum, never the last value. The
                 // id form ALSO accumulates per-id counts — the design-aware
                 // assembly (§5.3) reads each design's own module picks.
                 for (_op, v) in field_group.values() {
@@ -1377,7 +1652,8 @@ fn parse_division(
                             for (_op, eq_value) in eq_group.values() {
                                 if let Ok(scalar) = eq_value.read_scalar() {
                                     if let Ok(count) = scalar.to_f64() {
-                                        equipment.insert(eq_name.clone(), count as f32);
+                                        *equipment.entry(eq_name.clone()).or_insert(0.0) +=
+                                            count as f32;
                                     }
                                 } else if eq_name == "equipment" {
                                     let Ok(entry) = eq_value.read_object() else {
@@ -1417,24 +1693,31 @@ fn parse_division(
 
     // Resolve template composition: by id FIRST (real saves reference
     // `division_template_id`; the bare `division_template = "name"` field
-    // is a legacy/country-level form), then by name. Never look up an
-    // EMPTY name — 1.19 army-HQ templates have no `name=` and must not be
-    // reachable through `by_name[""]` (every unresolved division would
-    // silently inherit HQ content).
+    // is a legacy/country-level form), then by name. The id index carries
+    // EVERY template, including the nameless 1.19 army-HQ ones — they are
+    // reachable by id only: never look up an EMPTY name through
+    // `by_name("")` (every unresolved division would silently inherit HQ
+    // content).
     let mut template_name = raw_template_name;
-    let mut resolved: Option<&(Vec<BattalionInfo>, Vec<BattalionInfo>)> = None;
-    if let Some(name) = template_id.and_then(|tid| id_to_name.get(&tid)) {
-        if let Some(entry) = by_name.get(name) {
-            template_name = name.clone();
-            resolved = Some(entry);
+    let mut resolved: Option<&TemplateComposition> = None;
+    if let Some(tid) = template_id {
+        if let Some(composition) = templates.by_id(tid) {
+            resolved = Some(composition);
+            if let Some(name) = templates.id_to_name(tid).filter(|n| !n.is_empty()) {
+                template_name = name.clone();
+            }
         }
     }
     if resolved.is_none() && !template_name.is_empty() {
-        resolved = by_name.get(&template_name);
+        resolved = templates.by_name(&template_name);
     }
-    let (battalions, support_companies) = match resolved {
-        Some((b, s)) => (b.clone(), s.clone()),
-        None => (Vec::new(), Vec::new()),
+    let (battalions, support_companies, is_army_hq) = match resolved {
+        Some(composition) => (
+            composition.battalions.clone(),
+            composition.support_companies.clone(),
+            composition.is_army_hq,
+        ),
+        None => (Vec::new(), Vec::new(), false),
     };
 
     // A player rename already IS the final name — suppress the token pair
@@ -1459,7 +1742,7 @@ fn parse_division(
         // pair so downstream resolution can never clobber it.
         name_order: if renamed { None } else { name_order },
         names_group: template_id
-            .and_then(|tid| id_to_group.get(&tid).cloned())
+            .and_then(|tid| templates.id_to_group(tid).cloned())
             .flatten(),
         template_name,
         location,
@@ -1467,11 +1750,14 @@ fn parse_division(
         strength,
         experience,
         entrenchment,
-        supply_status,
+        supply_current,
+        supply_max,
+        fuel,
         equipment,
         equipment_ids,
         battalions,
         support_companies,
+        is_army_hq,
     })
 }
 
@@ -1620,7 +1906,9 @@ countries = {
                 strength = 0.90
                 experience = 0.35
                 entrenchment = 2.0
-                supply_status = 0.75
+                max_supply = 108
+                army_current_supply_ratio = 54
+                fuel = 288
                 equipment = {
                     infantry_equipment_1 = 180
                     light_tank_chassis_1 = 60
@@ -1819,6 +2107,77 @@ combat={
     }
 
     #[test]
+    fn border_war_combat_block_is_parsed() {
+        // Real 1.19.2 shape (probe-verified): `border_war_combat` sits next
+        // to `land_combat` inside the same root `combat` block; each side
+        // carries its own country tag and contested state/province.
+        let text = r#"HOI4txt
+player="JAP"
+combat={
+    land_combat={
+        location=13237
+        attacker={ unit={ id=1115 type=51 } }
+        defender={ unit={ id=1831 type=51 } }
+    }
+    border_war_combat={
+        id={ id=3459 type=4713 }
+        location=11879
+        day=9
+        duration=9
+        attacker={
+            unit={ id=1890 type=51 }
+            front={ id=1890 type=51 }
+            tactic=38
+            log={
+                combat_side_data={
+                    tags={
+                        "JAP"
+                    }
+                }
+            }
+            tag="JAP"
+            state=1028
+            province=6944
+            max_units=6
+        }
+        defender={
+            unit={ id=495 type=51 }
+            tactic=2
+            log={
+                combat_side_data={
+                    tags={
+                        "SOV"
+                    }
+                }
+            }
+            tag="SOV"
+            state=408
+            province=11879
+        }
+        change_state_after_war=no
+    }
+}
+"#;
+        let save = SaveParser::parse_save_from_str(text).unwrap();
+        // The two combat systems land in their own collections.
+        assert_eq!(save.land_combats.len(), 1);
+        assert_eq!(save.border_war_combats.len(), 1);
+        let bw = &save.border_war_combats[0];
+        assert_eq!(bw.location, 11879);
+        assert_eq!(bw.attacker.unit_ids, vec![1890]);
+        assert_eq!(bw.attacker.tactic, Some(38));
+        assert_eq!(bw.attacker.tags, vec!["JAP".to_string()]);
+        assert_eq!(bw.attacker.tag.as_deref(), Some("JAP"));
+        assert_eq!(bw.attacker.state, Some(1028));
+        assert_eq!(bw.attacker.province, Some(6944));
+        assert_eq!(bw.defender.unit_ids, vec![495]);
+        assert_eq!(bw.defender.tags, vec!["SOV".to_string()]);
+        assert_eq!(bw.defender.tag.as_deref(), Some("SOV"));
+        assert_eq!(bw.defender.state, Some(408));
+        assert_eq!(bw.defender.province, Some(11879));
+    }
+
+    #[test]
     fn picked_states_reads_tac_pick_variable() {
         // The state-target entry decision marks the
         // picked battle state with `tac_pick=1` in its `variables` block
@@ -1860,6 +2219,41 @@ combat={
             .find(|b| b.token == "light_armor")
             .unwrap();
         assert_eq!(armor.unit_type, tactical_core::UnitType::LightArmor);
+    }
+
+    #[test]
+    fn non_object_root_blocks_degrade_instead_of_aborting_the_load() {
+        // `division_templates` / `countries` used to abort the whole parse
+        // when their root value was not an object — every other malformed
+        // block degrades silently (§11.3). A hand-mangled save must still
+        // load: the malformed block contributes nothing, the rest parses.
+        let text = r#"
+division_templates = 5
+countries = 5
+"#;
+        let save = SaveParser::parse_save_from_str(text).expect("must degrade, not abort");
+        assert!(save.templates.is_empty());
+        assert!(save.countries.is_empty());
+
+        // A malformed block does not hide the well-formed remainder.
+        let text = r#"
+division_templates = 5
+countries = {
+    GER = {
+        units = {
+            division = {
+                id = 1
+                location = 6334
+                organization = 0.85
+                strength = 0.90
+            }
+        }
+    }
+}
+"#;
+        let save = SaveParser::parse_save_from_str(text).expect("must degrade, not abort");
+        assert!(save.templates.is_empty());
+        assert_eq!(save.countries["GER"].divisions.len(), 1);
     }
 
     #[test]
@@ -1979,14 +2373,12 @@ countries = {
         let save = SaveParser::parse_save_from_str(text).unwrap();
         // Same token, two ids: the frame and the named design coexist.
         let frame = &save.designs[&2180];
-        assert!(frame.is_frame);
         assert_eq!(frame.name, None);
         assert_eq!(
             frame.modules.get("engine_type_slot").map(String::as_str),
             Some("tank_gasoline_engine")
         );
         let ha_go = &save.designs[&2203];
-        assert!(!ha_go.is_frame);
         assert_eq!(ha_go.name.as_deref(), Some("Type 95 Ha-Go"));
         assert_eq!(ha_go.token, "light_tank_chassis_2");
         assert_eq!(
@@ -2019,18 +2411,51 @@ countries = {
     }
 
     #[test]
+    fn repeated_legacy_equipment_tokens_accumulate() {
+        // The legacy `token = count` form sums repeated tokens exactly like
+        // the 1.19 id-reference branch (§5.2) — a save listing one token
+        // twice must hold the total, never just the last value.
+        let text = r#"
+countries = {
+    GER = {
+        units = {
+            division = {
+                id = 1
+                organization = 1.0
+                strength = 1.0
+                equipment = {
+                    infantry_equipment_1 = 180
+                    infantry_equipment_1 = 120
+                    support_equipment = 30
+                }
+            }
+        }
+    }
+}
+"#;
+        let save = SaveParser::parse_save_from_str(text).unwrap();
+        let div = &save.countries["GER"].divisions[0];
+        assert_eq!(div.equipment.get("infantry_equipment_1"), Some(&300.0));
+        assert_eq!(div.equipment.get("support_equipment"), Some(&30.0));
+    }
+
+    #[test]
     fn nameless_templates_do_not_poison_id_resolution() {
         // Regression guard (1.19.2 real saves): army-HQ templates carry
         // `localization_key=` instead of `name=` — 438 of 698 in a 1936
         // save. An empty template name must NOT become a by_name[""] entry
         // that silently captures every unresolved division (CC.NN.
         // divisions resolved to hq_infantry×2 + hq_support_company).
+        // The nameless template must still resolve through the ID index:
+        // divisions reference it by `division_template_id`.
         let text = r#"
 division_templates = {
     division_template = {
         id = { id = 9 type = 52 }
         localization_key = "ARMY_HQ_TEMPLATE_NAME"
+        is_army_hq = yes
         regiments = { hq_infantry = { x = 0 y = 0 } hq_infantry = { x = 0 y = 1 } }
+        support = { hq_support_company = { x = 0 y = 0 } hq_recon = { x = 0 y = 1 } }
     }
     division_template = {
         id = { id = 7 type = 47 }
@@ -2049,6 +2474,13 @@ countries = {
                 organization = 0.9
                 strength = 0.95
             }
+            division = {
+                id = { id = 1119 type = 51 }
+                division_template_id = { id = 9 type = 52 }
+                location = 13251
+                organization = 0.9
+                strength = 0.95
+            }
         }
     }
 }
@@ -2062,6 +2494,82 @@ countries = {
         assert_eq!(div.battalions[0].count, 3);
         assert_eq!(div.support_companies.len(), 1);
         assert_eq!(div.support_companies[0].token, "engineer");
+        assert!(!div.is_army_hq);
+
+        // The nameless army-HQ template resolves by id: the HQ division
+        // fields its real composition and carries the flag, while its
+        // template name stays empty (no `name=` exists to inherit).
+        let hq = &save.countries["ITA"].divisions[1];
+        assert!(hq.is_army_hq);
+        assert_eq!(hq.template_name, "");
+        assert_eq!(hq.battalions.len(), 1);
+        assert_eq!(hq.battalions[0].token, "hq_infantry");
+        assert_eq!(hq.battalions[0].count, 2);
+        assert_eq!(hq.support_companies.len(), 2);
+        assert_eq!(hq.support_companies[0].token, "hq_support_company");
+        assert_eq!(hq.support_companies[1].token, "hq_recon");
+    }
+
+    #[test]
+    fn regimental_support_merges_into_support_companies() {
+        // 1.19 splits support companies into two template groups —
+        // `support` (divisional column) and `regimental_support` (per-
+        // regiment column); both attach the same way, so the parser merges
+        // them (§5.3). Both the root-level and the country-level template
+        // forms read it.
+        let text = r#"
+division_templates = {
+    division_template = {
+        id = { id = 3 type = 47 }
+        name = "Infanterie-Division"
+        regiments = { infantry = { x = 0 y = 0 } }
+        support = { engineer = { x = 0 y = 0 } }
+        regimental_support = { field_guns = { x = 0 y = 0 } field_guns = { x = 1 y = 0 } }
+    }
+}
+countries = {
+    GER = {
+        division_template = {
+            "Landwehr" = {
+                regiments = { militia = { x = 0 y = 0 } }
+                regimental_support = { anti_tank_battery = { x = 0 y = 0 } }
+            }
+        }
+        units = {
+            division = {
+                id = 1
+                division_template_id = { id = 3 type = 47 }
+                organization = 1.0
+                strength = 1.0
+            }
+            division = {
+                id = 2
+                division_template = "Landwehr"
+                organization = 1.0
+                strength = 1.0
+            }
+        }
+    }
+}
+"#;
+        let save = SaveParser::parse_save_from_str(text).unwrap();
+        let root_div = &save.countries["GER"].divisions[0];
+        // Divisional company first, the merged regimental column after it;
+        // repeated keys keep their count.
+        let tokens: Vec<(&str, usize)> = root_div
+            .support_companies
+            .iter()
+            .map(|b| (b.token.as_str(), b.count))
+            .collect();
+        assert_eq!(tokens, [("engineer", 1), ("field_guns", 2)]);
+        assert!(!root_div.is_army_hq);
+        let local_div = &save.countries["GER"].divisions[1];
+        let tokens: Vec<&str> = local_div
+            .support_companies
+            .iter()
+            .map(|b| b.token.as_str())
+            .collect();
+        assert_eq!(tokens, ["anti_tank_battery"]);
     }
 
     #[test]
@@ -2073,7 +2581,9 @@ countries = {
         assert!((div.strength - 0.90).abs() < 1e-4);
         assert!((div.experience - 0.35).abs() < 1e-4);
         assert!((div.entrenchment - 2.0).abs() < 1e-4);
-        assert_eq!(div.supply_status, Some(0.75));
+        assert_eq!(div.supply_current, Some(54.0));
+        assert_eq!(div.supply_max, Some(108.0));
+        assert_eq!(div.fuel, Some(288.0));
         assert_eq!(div.equipment.get("infantry_equipment_1"), Some(&180.0));
         assert_eq!(div.equipment.get("support_equipment"), Some(&30.0));
         // Division without optional fields gets defaults / None.
@@ -2082,7 +2592,9 @@ countries = {
             .iter()
             .find(|d| d.id == 102)
             .unwrap();
-        assert_eq!(div3.supply_status, None);
+        assert_eq!(div3.supply_current, None);
+        assert_eq!(div3.supply_max, None);
+        assert_eq!(div3.fuel, None);
         assert!((div3.organization - 1.0).abs() < 1e-6);
     }
 
@@ -2093,6 +2605,48 @@ countries = {
         assert!(ger.technologies.contains(&"infantry_weapons".to_string()));
         assert!(ger.technologies.contains(&"mobile_warfare".to_string()));
         assert_eq!(ger.active_ideas, vec!["war_economy".to_string()]);
+    }
+
+    #[test]
+    fn nested_technology_block_and_politics_ideas_of_real_saves() {
+        // Real 1.19 shape (verified against a live save): the researched-
+        // tech ledger nests one level down — the country-level `technology`
+        // block's `technologies` child carries each tech as a KEY with its
+        // own sub-object — and national spirits sit at `politics.ideas`
+        // (a bare token list). The flat country-level keys never appear.
+        let text = r#"
+countries = {
+    JAP = {
+        technology = {
+            override_icons_tag = "GER"
+            technologies = {
+                infantry_weapons = { level = 1 research_points = 165 date = "1936.1.1.12" }
+                mobile_warfare = { level = 1 research_points = 90 date = "1936.3.2.12" }
+            }
+        }
+        politics = {
+            ruling_party = neutrality
+            ideas = { JAP_army_faction_tier_2_equal_navy JAP_state_shintoism }
+            elections = no
+        }
+    }
+}
+"#;
+        let save = SaveParser::parse_save_from_str(text).unwrap();
+        let jap = &save.countries["JAP"];
+        assert!(
+            jap.technologies.contains(&"infantry_weapons".to_string()),
+            "technology.technologies keys are the tech tokens: {:?}",
+            jap.technologies
+        );
+        assert!(jap.technologies.contains(&"mobile_warfare".to_string()));
+        assert_eq!(
+            jap.active_ideas,
+            vec![
+                "JAP_army_faction_tier_2_equal_navy".to_string(),
+                "JAP_state_shintoism".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -2292,6 +2846,49 @@ countries = {
             ]
         );
         assert!(save.countries["ETH"].active_advisors.is_empty());
+    }
+
+    #[test]
+    fn appointed_advisors_nest_inside_the_characters_block() {
+        // The real 1.19 shape: appointments live at
+        // `countries.TAG.characters.appointed_advisors` (depth 3), not on
+        // the country object itself.
+        let text = "HOI4txt\ndate=\"1936.1.1.13\"\n".to_owned()
+            + r#"
+character_manager = {
+    historical = {
+        character = {
+            id = { id = 4432 type = 73 }
+            token = "ITA_mario_roatta"
+            country = "ITA"
+            advisors = {
+                advisor = {
+                    slot = "political_advisor"
+                    idea_token = "mario_roatta_political_advisor"
+                }
+            }
+        }
+    }
+}
+countries = {
+    ITA = {
+        characters = {
+            character_status = { }
+            appointed_advisors = {
+                {
+                    slot = "political_advisor"
+                    character = { id = 4432 type = 73 }
+                }
+            }
+        }
+    }
+}
+"#;
+        let save = SaveParser::parse_save_from_str(&text).unwrap();
+        assert_eq!(
+            save.countries["ITA"].active_advisors,
+            vec!["mario_roatta_political_advisor".to_string()]
+        );
     }
 
     #[test]

@@ -91,8 +91,11 @@ pub enum AttackTarget {
 }
 
 /// Outcome of one resolved attack order (one lane of the fire phase).
-/// Damage fields are the amounts actually subtracted, after simultaneous
-/// application — `taken` is the counter-fire the attacker received.
+/// Damage fields are the DELIVERED amounts — pre-reduction (a target's
+/// support multipliers are applied on top; the writeback books the designed
+/// damage for HOI4's `damage_units`) and possibly exceeding what the target
+/// had left (a finishing volley reports the full org it dealt, not the org
+/// that was still there). `taken` is the counter-fire the attacker received.
 #[derive(Debug, Clone, Default)]
 pub struct CombatResult {
     pub attacker_id: usize,
@@ -146,11 +149,20 @@ pub struct CombatEngine {
     /// the division-wide org collapse each caused. Drained by the game loop
     /// via [`Self::take_hq_events`] (log lines, floaters, HOI4 injection).
     last_hq_events: Vec<HqLossEvent>,
+    /// Fire missions that actually left the tube in the most recent fire
+    /// phase (firing unit ID, the battery's OWN hex), for the sound-ranging
+    /// mark the caller stamps into the OPPONENT's fog. Drained by the game
+    /// loop via [`Self::take_fired_missions`].
+    fired_missions: Vec<(usize, HexCoord)>,
     /// §6.8: the battle's deployment zones — the
     /// DEFENDER's routs are scored against its own zone's eastern rim (the
     /// reachable province boundary) instead of the map edge, which stitched
     /// maps can place outside the battle province.
     retreat_zones: Option<(Vec<HexCoord>, Vec<HexCoord>)>,
+    /// Interior battles (§4.2 step 9): the province-boundary rout rim
+    /// overriding the defender zone's east rim — the zone blobs' rims sit
+    /// mid-province, where a "withdrawn" would mean vanishing downtown.
+    retreat_rim: Option<Vec<HexCoord>>,
 }
 
 /// §6.13: record of a division HQ annihilated in the fire phase
@@ -186,7 +198,9 @@ impl CombatEngine {
             rng: XorShift64::new(seed),
             last_shocked: Vec::new(),
             last_hq_events: Vec::new(),
+            fired_missions: Vec::new(),
             retreat_zones: None,
+            retreat_rim: None,
         }
     }
 
@@ -198,6 +212,18 @@ impl CombatEngine {
         self.retreat_zones = zones;
     }
 
+    /// Interior battles: attach the province-boundary rout rim overriding
+    /// the defender zone's east rim (§4.2 step 9). Called once at battle
+    /// start alongside [`Self::set_retreat_zones`].
+    pub fn set_retreat_rim(&mut self, rim: Option<Vec<HexCoord>>) {
+        self.retreat_rim = rim;
+    }
+
+    /// The interior battle's province-boundary rout rim, when attached.
+    pub fn retreat_rim(&self) -> Option<&[HexCoord]> {
+        self.retreat_rim.as_deref()
+    }
+
     pub fn params(&self) -> &CombatParams {
         &self.params
     }
@@ -206,6 +232,14 @@ impl CombatEngine {
     /// recent [`Self::resolve_fire_phase`].
     pub fn take_hq_events(&mut self) -> Vec<HqLossEvent> {
         std::mem::take(&mut self.last_hq_events)
+    }
+
+    /// Drain the fire missions that actually left the tube in the most
+    /// recent [`Self::resolve_fire_phase`], as (firing unit ID, aim hex)
+    /// pairs. Sound ranging (§6.1) turns these into the caller's fog marks —
+    /// the engine itself knows nothing about either side's fog.
+    pub fn take_fired_missions(&mut self) -> Vec<(usize, HexCoord)> {
+        std::mem::take(&mut self.fired_missions)
     }
 
     /// Shock bookkeeping at a side's turn end: a shock inflicted during
@@ -495,6 +529,7 @@ impl CombatEngine {
     ) -> Vec<CombatResult> {
         self.last_shocked.clear();
         self.last_hq_events.clear();
+        self.fired_missions.clear();
         // §6.13: command links are evaluated ONCE on the
         // pre-damage state — a HQ dying this phase still commands for this
         // phase (simultaneous resolution). `hq_alive` snapshots which HQs
@@ -590,6 +625,15 @@ impl CombatEngine {
                 }
                 AttackTarget::FireMission { hex, precise } => {
                     let a = &units[ai];
+                    // Class gate mirroring the assault backstop above:
+                    // a fire mission is indirect-artillery / direct-gun
+                    // business only (§6.3) — registration and the UI gate
+                    // on it, this keeps the resolver total on the same
+                    // rule for a forged order.
+                    if !a.is_indirect_artillery() && !a.is_direct_gun() {
+                        lost(&mut results, 0, hex);
+                        continue;
+                    }
                     let rocket = a.is_rocket();
                     let dist = a.position.distance(hex);
                     if dist == 0
@@ -599,6 +643,16 @@ impl CombatEngine {
                     {
                         lost(&mut results, 0, hex);
                         continue;
+                    }
+                    // §6.1 sound ranging: the shell leaving the tube is what
+                    // gives the battery away, so a LEGAL order ledgers the
+                    // battery's own hex here — an empty-zone fizzle further
+                    // down still counts (the guns went off), the illegal
+                    // orders above never do. The direct-lay counter path
+                    // never ledgers either: a return shot is not a fire
+                    // mission.
+                    if a.is_indirect_artillery() {
+                        self.fired_missions.push((a.id, a.position));
                     }
                     // §6.3 gesture rule: rockets can never be
                     // precise — every launcher order resolves as area fire.
@@ -648,10 +702,17 @@ impl CombatEngine {
                         // friends-only aim still bleeds them.
                         // Every unit in the 7-hex zone, friends at the aim
                         // hex included — the salvo saturates the ground.
+                        // The FIRER is never a victim, exactly as in the
+                        // area branch below (rockets cannot currently aim
+                        // closer than their minimum range, so the case is
+                        // unreachable today — it would become a self-splash
+                        // the moment that range opens up).
                         let affected: Vec<usize> = units
                             .iter()
                             .enumerate()
-                            .filter(|(_, u)| u.position.distance(hex) <= 1 && targetable(u))
+                            .filter(|(j, u)| {
+                                *j != ai && u.position.distance(hex) <= 1 && targetable(u)
+                            })
                             .map(|(j, _)| j)
                             .collect();
                         if affected.is_empty() {
@@ -738,7 +799,19 @@ impl CombatEngine {
                             .max_by(|a, b| units[*a].org.total_cmp(&units[*b].org))
                     });
                     if let Some(reply) = reply {
-                        add_counter(&mut counter_pool, units, reply, ai, dist, &self.params);
+                        // The range gate needs the replier's TRUE distance
+                        // to the firer: on an empty aim hex the answering
+                        // enemy stands on a zone neighbour, up to a hex off
+                        // the aim.
+                        let reply_dist = units[reply].position.distance(units[ai].position);
+                        add_counter(
+                            &mut counter_pool,
+                            units,
+                            reply,
+                            ai,
+                            reply_dist,
+                            &self.params,
+                        );
                     }
                 }
             }
@@ -793,14 +866,16 @@ impl CombatEngine {
         // actually weathered.
         let mut org_by_target: HashMap<usize, f32> = HashMap::new();
         for e in &ledger {
-            *org_by_target.entry(e.dst).or_insert(0.0) += e.org;
+            *org_by_target.entry(e.dst).or_insert(0.0) +=
+                e.org * units[e.dst].support_org_damage_mult();
         }
         let mut shocked: Vec<usize> = Vec::new();
         for e in &ledger {
             let d = &mut units[e.dst];
             let str_final = e.str_ * d.support_str_damage_mult();
+            let org_final = e.org * d.support_org_damage_mult();
             d.strength = (d.strength - str_final).max(0.0);
-            d.org = (d.org - e.org).max(0.0);
+            d.org = (d.org - org_final).max(0.0);
         }
         for (dst, total) in org_by_target {
             let d = &units[dst];
@@ -826,7 +901,12 @@ impl CombatEngine {
             // below never fired, and the corridor stayed blocked forever.
             let d_active = matches!(units[*di].state, UnitState::Active | UnitState::Withdrawn);
             if d_org <= 0.0 && d_active {
-                if detect_encirclement(grid, &units[*di], units) == EncirclementLevel::Full {
+                // §6.4 surrender needs a full ring AND a unit that gives
+                // up — military police hold their host to the death, so it
+                // routs through the standard break flow instead (§6.3).
+                if detect_encirclement(grid, &units[*di], units) == EncirclementLevel::Full
+                    && !units[*di].support_never_surrenders()
+                {
                     units[*di].state = UnitState::Surrendered; // §6.4
                 } else {
                     units[*di].state = UnitState::Retreating; // §6.8
@@ -840,6 +920,7 @@ impl CombatEngine {
                         self.retreat_zones
                             .as_ref()
                             .map(|z| (z.0.as_slice(), z.1.as_slice())),
+                        self.retreat_rim.as_deref(),
                     ) && units[*ai].is_combat_effective()
                     {
                         // Attacker occupies the vacated hex (§6.3).
@@ -867,7 +948,9 @@ impl CombatEngine {
         for di in damaged {
             let d = &units[di];
             if d.org <= 0.0 && d.state == UnitState::Active {
-                if detect_encirclement(grid, d, units) == EncirclementLevel::Full {
+                if detect_encirclement(grid, d, units) == EncirclementLevel::Full
+                    && !d.support_never_surrenders()
+                {
                     units[di].state = UnitState::Surrendered;
                 } else {
                     units[di].state = UnitState::Retreating;
@@ -878,12 +961,24 @@ impl CombatEngine {
         // --- §6.13: command collapse. An HQ ANNIHILATED this
         // phase (retreat/surrender do NOT count) costs every surviving
         // same-division battalion hq_death_org_frac of its max org; units
-        // the collapse breaks follow the standard break/surrender rule. ---
+        // the collapse breaks follow the standard break/surrender rule.
+        // The division identity is the (side, owner tag, division) triple
+        // — the key HQ synthesis and the aura use: a battle can field
+        // same-named divisions under several nations, and each answers to
+        // its own HQ. "Surviving" covers Retreating battalions too (they
+        // are still on the field); an already-routing unit is charged but
+        // never re-broken (a sealed-pocket surrender conversion is the
+        // encirclement pass's job, §6.4). ---
         for hqi in 0..units.len() {
             if !hq_alive[hqi] || units[hqi].state != UnitState::Eliminated {
                 continue;
             }
-            let (hq_id, division) = (units[hqi].id, units[hqi].division.clone());
+            let (hq_id, hq_side, hq_tag, division) = (
+                units[hqi].id,
+                units[hqi].side,
+                units[hqi].tag.clone(),
+                units[hqi].division.clone(),
+            );
             let mut ev = HqLossEvent {
                 hq_id,
                 division: division.clone(),
@@ -891,7 +986,12 @@ impl CombatEngine {
             };
             let mut broke: Vec<usize> = Vec::new();
             for (i, u) in units.iter_mut().enumerate() {
-                if i == hqi || u.division != division || u.state != UnitState::Active {
+                if i == hqi
+                    || u.side != hq_side
+                    || u.tag != hq_tag
+                    || u.division != division
+                    || !matches!(u.state, UnitState::Active | UnitState::Retreating)
+                {
                     continue;
                 }
                 let lost = (u.max_org * self.params.hq_death_org_frac).min(u.org);
@@ -900,12 +1000,14 @@ impl CombatEngine {
                 }
                 u.org -= lost;
                 ev.losses.push((u.id, lost));
-                if u.org <= 0.0 {
+                if u.org <= 0.0 && u.state == UnitState::Active {
                     broke.push(i);
                 }
             }
             for i in broke {
-                if detect_encirclement(grid, &units[i], units) == EncirclementLevel::Full {
+                if detect_encirclement(grid, &units[i], units) == EncirclementLevel::Full
+                    && !units[i].support_never_surrenders()
+                {
                     units[i].state = UnitState::Surrendered;
                 } else {
                     units[i].state = UnitState::Retreating;
@@ -1025,7 +1127,9 @@ impl CombatEngine {
     /// encircled one 5% — paced to the 10-minute turn (§8.1): a static
     /// pocket collapses over strategic hours, not minutes. A unit ground
     /// down to org 0 surrenders when fully encircled, otherwise enters
-    /// involuntary retreat (§6.8).
+    /// involuntary retreat (§6.8). Attachments modulate both halves
+    /// (§6.3): logistics / military-police companies shrink the loss, and
+    /// a military-police host routs where others would surrender.
     ///
     /// The ring is evaluated for every unit still ON the board and
     /// unresolved — `Active` or `Retreating` — NOT only for
@@ -1058,7 +1162,10 @@ impl CombatEngine {
             .collect();
         let mut hits = Vec::new();
         for (u, lvl) in units.iter_mut().zip(levels) {
-            let frac = org_attrition_fraction(lvl, &self.params);
+            // Logistics companies stretch the pocket's supplies,
+            // military police keep the ranks from fraying (§6.3).
+            let frac =
+                org_attrition_fraction(lvl, &self.params) * u.support_encirclement_attrition_mult();
             if frac <= 0.0 {
                 continue;
             }
@@ -1073,7 +1180,7 @@ impl CombatEngine {
                 });
             }
             if u.org <= 0.0 {
-                u.state = if lvl == EncirclementLevel::Full {
+                u.state = if lvl == EncirclementLevel::Full && !u.support_never_surrenders() {
                     UnitState::Surrendered // §6.4: 0 free edges
                 } else {
                     UnitState::Retreating // §6.8 involuntary retreat
@@ -1085,8 +1192,8 @@ impl CombatEngine {
 
     /// §6.13: in-command battalions regenerate
     /// `hq_org_regen_frac` of their max org each FULL turn. Call from the
-    /// full-turn closeout (both sides acted), next to the maintenance
-    /// attachment strength regen. Retreating/eliminated units never recover.
+    /// full-turn closeout (both sides acted).
+    /// Retreating/eliminated units never recover.
     /// Only OUT OF CONTACT — a unit with a
     /// combat-effective enemy adjacent is fighting, not regrouping
     /// (an unconditional front-line regen kept the
@@ -1149,9 +1256,7 @@ fn add_counter(
 /// One disordered retreat step (§6.8): move `unit_id` one hex toward its own
 /// deployment edge — Attacker side falls back to its entry edges
 /// (`grid.attack_dirs`, §4.2 step 9), Defender side to the far (eastern) map
-/// edge. With `toward_own_edge == false` the unit instead steps directly away
-/// from the nearest combat-effective enemy (ties break toward the home edge,
-/// so the unit can't freeze at a local maximum).
+/// edge.
 ///
 /// A unit that starts its step on (or steps onto) its own edge hex leaves the
 /// map (`UnitState::Withdrawn`, §6.8). Retreat steps respect stacking
@@ -1170,26 +1275,127 @@ fn add_counter(
 /// pinned at q57 while the map edge sat at q62, the battle never
 /// converging). [`retreat_step_zoned`] scores the DEFENDER against its own
 /// zone's eastern rim instead.
+///
+/// `toward_own_edge == false` scores the step away from the nearest
+/// combat-effective enemy instead of toward the home edge. No frontend
+/// issues that mode (every call site asks for the home edge), so the
+/// alternate scorers are `#[cfg(test)]` and the parameter is a no-op in a
+/// production build.
 pub fn retreat_step(
     grid: &HexGrid,
     units: &mut Vec<BattalionUnit>,
     unit_id: usize,
     toward_own_edge: bool,
 ) -> bool {
-    retreat_step_zoned(grid, units, unit_id, toward_own_edge, None)
+    retreat_step_zoned(grid, units, unit_id, toward_own_edge, None, None)
+}
+
+/// §6.8: the anti-threat direction the DEFENDER routs toward. The threat
+/// axis comes from the two zone centroids (attacker → defender — the rear
+/// is the direction the attack TRAVELS, so a western attack keeps the
+/// legacy east rim and an eastern one flips it); empty zones fall back to
+/// the `attack_dirs` mean NEGATED (dirs name where the attack comes FROM,
+/// the rear is where it marches TO), and a zero vector to the legacy EAST
+/// (the W-default entry edge).
+fn threat_rear_dir(
+    grid: &HexGrid,
+    attacker_zone: &[HexCoord],
+    defender_zone: &[HexCoord],
+) -> HexDirection {
+    let centroid = |zone: &[HexCoord]| {
+        let n = zone.len() as f32;
+        (
+            zone.iter().map(|h| h.q as f32).sum::<f32>() / n,
+            zone.iter().map(|h| h.r as f32).sum::<f32>() / n,
+        )
+    };
+    let axis = if attacker_zone.is_empty() || defender_zone.is_empty() {
+        let (dx, dy) = grid.attack_dirs.iter().fold((0i32, 0i32), |(sx, sy), d| {
+            let (dq, dr) = d.offset();
+            (sx + dq, sy + dr)
+        });
+        (-(dx as f32), -(dy as f32))
+    } else {
+        let (aq, ar) = centroid(attacker_zone);
+        let (dq, dr) = centroid(defender_zone);
+        (dq - aq, dr - ar)
+    };
+    if axis.0 == 0.0 && axis.1 == 0.0 {
+        return HexDirection::E; // the legacy W-default entry rear
+    }
+    HexDirection::ALL
+        .iter()
+        .copied()
+        .max_by_key(|d| {
+            let (dq, dr) = d.offset();
+            ((axis.0 * dq as f32 + axis.1 * dr as f32) * 1000.0) as i64
+        })
+        .unwrap_or(HexDirection::E)
+}
+
+/// §6.8: the zone's rim in the anti-threat direction — zone hexes whose
+/// neighbour that way lies outside the zone (the deployment-zone edge a
+/// rout can actually reach).
+fn rear_rim(zone: &[HexCoord], rear: HexDirection) -> Vec<HexCoord> {
+    let (dq, dr) = rear.offset();
+    zone.iter()
+        .copied()
+        .filter(|z| !zone.contains(&HexCoord::new(z.q + dq, z.r + dr)))
+        .collect()
+}
+
+/// §6.14: the side's anti-threat rear for the OOB-exit sector filter —
+/// `None` keeps the legacy any-direction preference (interior battles have
+/// no rear; a zone-less frontend never learned one).
+fn side_rear_dir(
+    grid: &HexGrid,
+    side: Side,
+    zones: Option<(&[HexCoord], &[HexCoord])>,
+    interior: bool,
+) -> Option<HexDirection> {
+    if interior {
+        return None;
+    }
+    let (a, d) = zones?;
+    match side {
+        // threat_rear_dir's fallbacks (attack_dirs negated, then compass E)
+        // are all defender-rear semantics.
+        Side::Defender => Some(threat_rear_dir(grid, a, d)),
+        // The attacker's rear is the same axis reversed — from real zone
+        // centroids only: with an empty zone threat_rear_dir falls back to
+        // the DEFENDER-rear encoding and would flip the sign.
+        Side::Attacker if !a.is_empty() && !d.is_empty() => Some(threat_rear_dir(grid, d, a)),
+        Side::Attacker => None,
+    }
+}
+
+/// §6.14: is `h` in the anti-threat rear half-plane as seen from `start` —
+/// the cube-space dot with the rear direction strictly positive (hexes on
+/// the perpendicular seam do not count)?
+fn in_rear_half(start: HexCoord, h: HexCoord, rear: HexDirection) -> bool {
+    let (dq, dr) = rear.offset();
+    let cd = HexCoord::new(dq, dr).to_cube();
+    let (a, b) = (start.to_cube(), h.to_cube());
+    (b.x - a.x) * cd.x + (b.y - a.y) * cd.y + (b.z - a.z) * cd.z > 0
 }
 
 /// [`retreat_step`] with the battle's deployment zones: the DEFENDER's own
-/// edge becomes the eastern rim of its deployment zone (the hexes whose
-/// east neighbor lies outside the zone — i.e. the province boundary the
-/// rout can actually reach, §6.8 "deployment-zone edge"). `zones.1` = the
-/// defender zone; the attacker keeps its entry-edge logic.
+/// edge becomes the REAR rim of its deployment zone (the zone hexes whose
+/// anti-threat neighbour lies outside the zone — the direction the attack
+/// travels, §6.8 "deployment-zone edge"; the legacy compass-EAST rim only
+/// ever matched a western attack). `zones.1` = the defender zone; the
+/// attacker keeps its `attack_dirs` entry-edge logic, already
+/// direction-aware. `rim_override` (interior battles, §4.2 step 9) replaces
+/// the computed rim with the whole province boundary — in the interleaved
+/// melee there is no rear, so the nearest boundary hex wins with no sector
+/// filter.
 pub fn retreat_step_zoned(
     grid: &HexGrid,
     units: &mut Vec<BattalionUnit>,
     unit_id: usize,
     toward_own_edge: bool,
     zones: Option<(&[HexCoord], &[HexCoord])>,
+    rim_override: Option<&[HexCoord]>,
 ) -> bool {
     let Some(idx) = units.iter().position(|u| u.id == unit_id) else {
         return false;
@@ -1199,20 +1405,15 @@ pub fn retreat_step_zoned(
     }
     let (pos, side) = (units[idx].position, units[idx].side);
     let view: &[BattalionUnit] = units;
-    // The defender's own-edge target set: the eastern rim of its zone
-    // (computed once per call — shared by every score evaluation).
-    let defender_rim: Vec<HexCoord> = zones
-        .map(|(_, d)| d)
-        .map(|zone| {
-            zone.iter()
-                .copied()
-                .filter(|z| {
-                    let east = HexCoord::new(z.q + 1, z.r);
-                    !zone.contains(&east)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // The defender's own-edge target set: the rear rim of its zone relative
+    // to the threat axis (computed once per call — shared by every score
+    // evaluation), or the interior battle's province-boundary rim outright.
+    let defender_rim: Vec<HexCoord> = match rim_override {
+        Some(rim) => rim.to_vec(),
+        None => zones
+            .map(|(a, d)| rear_rim(d, threat_rear_dir(grid, a, d)))
+            .unwrap_or_default(),
+    };
     // The greedy 1-step descent froze on plateaus of
     // the cube-distance field (a diagonal rim: stepping east alone never
     // reduced the score) and in terrain dead-ends, so routed units sat
@@ -1220,8 +1421,11 @@ pub fn retreat_step_zoned(
     // REAL path: BFS to the side's own-edge target set and take its first
     // step. Falls back to the greedy when no path exists (genuinely
     // enclosed pocket — no escape) or when `toward_own_edge` is false.
+    // §6.14: the OOB preference only takes REAR-half exits (the sector
+    // filter) — attacker-ward ring land is the last resort, never the lure.
+    let rear = side_rear_dir(grid, side, zones, rim_override.is_some());
     if toward_own_edge {
-        if let Some(step) = bfs_edge_step(grid, view, idx, side, &defender_rim) {
+        if let Some(step) = bfs_edge_step(grid, view, idx, side, &defender_rim, rear) {
             let withdraws = is_own_edge(step, side, grid, &defender_rim);
             units[idx].position = step;
             if withdraws {
@@ -1234,19 +1438,11 @@ pub fn retreat_step_zoned(
     }
     // Lower score = closer to safety.
     let score = |h: HexCoord| -> i32 {
-        if toward_own_edge {
-            own_edge_distance(grid, side, h, &defender_rim)
-        } else {
-            // Away-from-enemy mode: enemy distance dominates (×1024 keeps it
-            // decisive on a ≤512-wide grid), ties break toward the home edge
-            // (P2). The old pure-distance score froze the unit at ANY local
-            // maximum — and with no enemies left (constant MAX/2 distance)
-            // every hex scored equal, so it never moved at all. The MAX/2
-            // fallback × 1024 overflows i32 — saturate instead (debug builds
-            // panicked here).
-            -nearest_enemy_distance(h, side, unit_id, view).saturating_mul(1024)
-                + own_edge_distance(grid, side, h, &defender_rim)
+        #[cfg(test)]
+        if !toward_own_edge {
+            return away_from_enemy_score(h, grid, side, unit_id, view, &defender_rim);
         }
+        own_edge_distance(grid, side, h, &defender_rim)
     };
 
     if toward_own_edge && score(pos) == 0 {
@@ -1288,6 +1484,26 @@ fn targetable(u: &BattalionUnit) -> bool {
     u.is_targetable()
 }
 
+/// Lower score = safer, for the test-only away-from-enemy retreat mode:
+/// enemy distance dominates (×1024 keeps it decisive on a ≤512-wide grid),
+/// ties break toward the home edge, so the unit cannot freeze at a local
+/// maximum. The old pure-distance score froze the unit at ANY local
+/// maximum — and with no enemies left (constant MAX/2 distance) every hex
+/// scored equal, so it never moved at all. The MAX/2 fallback × 1024
+/// overflows i32 — saturate instead (debug builds panicked here).
+#[cfg(test)]
+fn away_from_enemy_score(
+    h: HexCoord,
+    grid: &HexGrid,
+    side: Side,
+    unit_id: usize,
+    view: &[BattalionUnit],
+    defender_rim: &[HexCoord],
+) -> i32 {
+    -nearest_enemy_distance(h, side, unit_id, view).saturating_mul(1024)
+        + own_edge_distance(grid, side, h, defender_rim)
+}
+
 /// Distance in hexes from `h` to the side's own deployment edge (§6.8, §4.2).
 /// Attacker entry edges come from `grid.attack_dirs` (defaults to the western
 /// edge); the Defender falls back to the far (eastern) edge — or, when the
@@ -1321,6 +1537,10 @@ fn own_edge_distance(grid: &HexGrid, side: Side, h: HexCoord, defender_rim: &[He
     }
 }
 
+/// Nearest combat-effective enemy distance, or a large constant when the
+/// field holds none. Only the test-only away-from-enemy retreat mode scores
+/// against it; production routs all aim at the home edge.
+#[cfg(test)]
 fn nearest_enemy_distance(h: HexCoord, side: Side, unit_id: usize, units: &[BattalionUnit]) -> i32 {
     units
         .iter()
@@ -1353,12 +1573,20 @@ fn is_own_edge(h: HexCoord, side: Side, grid: &HexGrid, defender_rim: &[HexCoord
 /// of parking as a corridor-clogging Withdrawn remnant. The deployment edge
 /// (§6.8 Withdrawn) stays as the fallback for water-locked maps where no
 /// out-of-bounds land is reachable.
+///
+/// Sector filter (§6.14): the ring preference only takes REAR-half exits —
+/// hexes in the anti-threat half-plane as seen from the unit (`rear` from
+/// [`side_rear_dir`], `None` = no filter). Fleeing INTO the attacker's face
+/// is no exit at all; attacker-ward ring land only opens when neither a
+/// rear exit nor the deployment rim is reachable (a sealed pocket still
+/// slips away rather than freezing forever).
 fn bfs_edge_step(
     grid: &HexGrid,
     units: &[BattalionUnit],
     idx: usize,
     side: Side,
     defender_rim: &[HexCoord],
+    rear: Option<HexDirection>,
 ) -> Option<HexCoord> {
     use std::collections::{HashSet, VecDeque};
     let start = units[idx].position;
@@ -1402,9 +1630,12 @@ fn bfs_edge_step(
         }
         None
     };
-    // §6.14: nearest out-of-bounds exit first, the §6.8 deployment edge only
-    // when the ring cannot be reached at all.
-    bfs(&oob).or_else(|| bfs(&|h| is_own_edge(h, side, grid, defender_rim)))
+    // §6.14: nearest REAR-half out-of-bounds exit first, then the §6.8
+    // deployment edge, and only when both are unreachable the nearest ring
+    // hex of ANY direction (the sealed-pocket last resort).
+    bfs(&|h| oob(h) && rear.map_or(true, |d| in_rear_half(start, h, d)))
+        .or_else(|| bfs(&|h| is_own_edge(h, side, grid, defender_rim)))
+        .or_else(|| bfs(&oob))
 }
 
 // ── §6.14 out-of-bounds leaving ─────────────────────────────────────────────
@@ -1686,7 +1917,10 @@ mod tests {
         let zone: Vec<HexCoord> = (0..8)
             .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
             .collect();
-        let zones = (vec![HexCoord::ZERO], zone);
+        // Attacker strip on the WEST edge — the threat axis points east,
+        // so the remnant is pushed east off the corridor.
+        let attacker: Vec<HexCoord> = (0..8).map(|r| HexCoord::new(0, r)).collect();
+        let zones = (attacker, zone);
         let mut d = inf(1, Side::Defender, HexCoord::new(3, 1));
         d.org = 0.0;
         d.state = UnitState::Withdrawn;
@@ -1726,7 +1960,10 @@ mod tests {
         let zone: Vec<HexCoord> = (0..5)
             .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
             .collect();
-        let zones = (vec![HexCoord::ZERO], zone.clone());
+        // Attacker strip on the WEST edge — the threat axis points east,
+        // so the rear rim is the zone's eastern rim (q=5).
+        let attacker: Vec<HexCoord> = (0..8).map(|r| HexCoord::new(0, r)).collect();
+        let zones = (attacker, zone.clone());
         let mut d = inf(1, Side::Defender, HexCoord::new(4, 4));
         d.org = 0.0;
         d.state = UnitState::Retreating;
@@ -1737,7 +1974,8 @@ mod tests {
             &mut units,
             1,
             true,
-            Some((&zones.0, &zones.1))
+            Some((&zones.0, &zones.1)),
+            None,
         ));
         assert_eq!(units[0].state, UnitState::Withdrawn);
         // Without the zones the old map-edge logic applies: q4 of a 12-wide
@@ -1755,13 +1993,150 @@ mod tests {
         d3.state = UnitState::Retreating;
         let mut units3 = vec![d3];
         for _ in 0..4 {
-            retreat_step_zoned(&g, &mut units3, 3, true, Some((&zones.0, &zones.1)));
+            retreat_step_zoned(&g, &mut units3, 3, true, Some((&zones.0, &zones.1)), None);
         }
         assert_eq!(
             units3[0].state,
             UnitState::Withdrawn,
             "reached the zone rim"
         );
+    }
+
+    #[test]
+    fn interior_battle_rout_uses_the_province_rim_override() {
+        // Interior battle: the defender zone is a mid-map blob whose own
+        // east rim sits downtown; the override rim (the province
+        // boundary) is the real way out — withdrawing mid-map would be a
+        // garrison vanishing between the flag and the front.
+        let g = grid(12, 8);
+        // Blob zone (q 4..=6, r 3..=5) — its east rim (q=6) is mid-map.
+        let blob: Vec<HexCoord> = (4..=6)
+            .flat_map(|q| (3..=5).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        // Override rim: the grid's east boundary column.
+        let rim: Vec<HexCoord> = (0..8).map(|r| HexCoord::new(11, r)).collect();
+        let zones = (vec![HexCoord::ZERO], blob);
+        let mut d = inf(1, Side::Defender, HexCoord::new(4, 4));
+        d.org = 0.0;
+        d.state = UnitState::Retreating;
+        let mut units = vec![d];
+        for _ in 0..12 {
+            if units[0].state == UnitState::Withdrawn {
+                break;
+            }
+            assert!(retreat_step_zoned(
+                &g,
+                &mut units,
+                1,
+                true,
+                Some((&zones.0, &zones.1)),
+                Some(&rim),
+            ));
+        }
+        assert_eq!(units[0].state, UnitState::Withdrawn);
+        assert_eq!(units[0].position.q, 11, "withdraws at the override rim");
+        // Same setup WITHOUT the override: the blob's east rim (q=6) is
+        // the withdrawal edge — pinned mid-map by comparison.
+        let mut d2 = inf(2, Side::Defender, HexCoord::new(4, 4));
+        d2.org = 0.0;
+        d2.state = UnitState::Retreating;
+        let mut units2 = vec![d2];
+        for _ in 0..4 {
+            retreat_step_zoned(&g, &mut units2, 2, true, Some((&zones.0, &zones.1)), None);
+        }
+        assert_eq!(units2[0].state, UnitState::Withdrawn);
+        assert_eq!(units2[0].position.q, 6, "blob rim without the override");
+    }
+
+    #[test]
+    fn rear_rim_follows_the_threat_axis() {
+        let g = grid(12, 8);
+        let defender: Vec<HexCoord> = (2..=6)
+            .flat_map(|q| (2..=5).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        // Western attack (the legacy default): rear = E — the east rim.
+        let western: Vec<HexCoord> = (0..8).map(|r| HexCoord::new(0, r)).collect();
+        assert_eq!(threat_rear_dir(&g, &western, &defender), HexDirection::E);
+        // Eastern attack: the rear flips to W — the old compass-east rim
+        // would have marched the rout into the attackers.
+        let eastern: Vec<HexCoord> = (0..8).map(|r| HexCoord::new(11, r)).collect();
+        assert_eq!(threat_rear_dir(&g, &eastern, &defender), HexDirection::W);
+        // Diagonal (attacker from the NE corner): the rear points SW.
+        let north_east: Vec<HexCoord> = (10..=11)
+            .flat_map(|q| (0..=1).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        assert_eq!(
+            threat_rear_dir(&g, &north_east, &defender),
+            HexDirection::SW
+        );
+        // Empty attacker zone: the negated attack_dirs mean — dirs=[E]
+        // (the attack comes FROM the east) puts the rear WEST.
+        let mut g2 = grid(12, 8);
+        g2.attack_dirs = vec![HexDirection::E];
+        assert_eq!(threat_rear_dir(&g2, &[], &defender), HexDirection::W);
+        // Zero vector: the legacy east default.
+        assert_eq!(threat_rear_dir(&g, &[], &defender), HexDirection::E);
+    }
+
+    #[test]
+    fn defender_rout_exits_at_the_rear_rim_for_an_east_attack() {
+        // Attacker zone on the EAST edge: the attack travels westward, so
+        // the defender's rear is the WEST rim.
+        let g = grid(12, 8);
+        let attacker: Vec<HexCoord> = (0..8).map(|r| HexCoord::new(11, r)).collect();
+        let defender: Vec<HexCoord> = (0..5)
+            .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let zones = (attacker, defender);
+        let mut d = inf(1, Side::Defender, HexCoord::new(4, 4));
+        d.org = 0.0;
+        d.state = UnitState::Retreating;
+        let mut units = vec![d];
+        for _ in 0..8 {
+            if units[0].state == UnitState::Withdrawn {
+                break;
+            }
+            assert!(retreat_step_zoned(
+                &g,
+                &mut units,
+                1,
+                true,
+                Some((&zones.0, &zones.1)),
+                None,
+            ));
+        }
+        assert_eq!(units[0].state, UnitState::Withdrawn);
+        assert_eq!(units[0].position.q, 0, "withdraws at the west (rear) rim");
+    }
+
+    #[test]
+    fn an_encircled_rout_stays_pinned() {
+        // No path to any rim: ringed by enemies the rout keeps its hex
+        // (§6.8 accepts a pinned rout; §6.4 decides surrender separately).
+        let g = grid(12, 8);
+        let defender: Vec<HexCoord> = (0..12)
+            .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let zones = (vec![HexCoord::ZERO], defender);
+        let mut d = inf(1, Side::Defender, HexCoord::new(5, 4));
+        d.org = 0.0;
+        d.state = UnitState::Retreating;
+        let mut units = vec![d];
+        for (i, n) in HexCoord::new(5, 4).neighbors().into_iter().enumerate() {
+            let mut e = inf(10 + i, Side::Attacker, n);
+            e.org = 1.0;
+            units.push(e);
+        }
+        assert!(!retreat_step_zoned(
+            &g,
+            &mut units,
+            1,
+            true,
+            Some((&zones.0, &zones.1)),
+            None,
+        ));
+        assert_eq!(units[0].position, HexCoord::new(5, 4));
+        assert_eq!(units[0].state, UnitState::Retreating);
     }
 
     #[test]
@@ -1791,7 +2166,8 @@ mod tests {
             &mut units,
             1,
             true,
-            Some((&zones.0, &zones.1))
+            Some((&zones.0, &zones.1)),
+            None,
         ));
         assert_eq!(units[0].state, UnitState::Withdrawn);
         // Case 2: stuck inside the q8-9 dead-end pocket whose only exit is
@@ -1801,7 +2177,7 @@ mod tests {
         d2.state = UnitState::Retreating;
         let mut units2 = vec![d2];
         for _ in 0..5 {
-            retreat_step_zoned(&g, &mut units2, 2, true, Some((&zones.0, &zones.1)));
+            retreat_step_zoned(&g, &mut units2, 2, true, Some((&zones.0, &zones.1)), None);
         }
         assert_eq!(
             units2[0].state,
@@ -1813,12 +2189,13 @@ mod tests {
 
     #[test]
     fn retreat_step_without_enemies_does_not_overflow() {
-        // No combat-effective enemy on the field: nearest_enemy_distance
-        // falls back to i32::MAX/2 and the ×1024 score weight must SATURATE
-        // (debug builds panicked on the overflow). The
-        // enemy-distance term is then constant across hexes, so the
-        // tie-break walks the unit toward its own edge (attacker with empty
-        // attack_dirs: the western edge, q decreasing).
+        // The only caller of the away-from-enemy mode. No combat-effective
+        // enemy on the field: nearest_enemy_distance falls back to
+        // i32::MAX/2 and the ×1024 score weight must SATURATE (debug builds
+        // panicked on the overflow). The enemy-distance term is then
+        // constant across hexes, so the tie-break walks the unit toward its
+        // own edge (attacker with empty attack_dirs: the western edge, q
+        // decreasing).
         let g = grid(8, 8);
         let mut units = vec![inf(0, Side::Attacker, HexCoord::new(3, 3))];
         assert!(retreat_step(&g, &mut units, 0, false));
@@ -1827,6 +2204,12 @@ mod tests {
             "tie-break steps toward the own (western) edge: {:?}",
             units[0].position
         );
+        // The production mode ignores the flag: with `true` the same unit
+        // walks the same way (the home edge), and the away-mode scorer is
+        // not even compiled into the frontend build.
+        let mut units2 = vec![inf(0, Side::Attacker, HexCoord::new(3, 3))];
+        assert!(retreat_step(&g, &mut units2, 0, true));
+        assert!(units2[0].position.q < 3, "{:?}", units2[0].position);
     }
 
     // ── §6.14 out-of-bounds leaving ────────────────────────────────────────
@@ -1929,7 +2312,8 @@ mod tests {
             &mut units,
             1,
             true,
-            Some((&zones.0, &zones.1))
+            Some((&zones.0, &zones.1)),
+            None,
         ));
         let pos = units[0].position;
         assert!(
@@ -1943,10 +2327,103 @@ mod tests {
             &mut units,
             1,
             true,
-            Some((&zones.0, &zones.1))
+            Some((&zones.0, &zones.1)),
+            None,
         ));
         assert_eq!(units[0].position, pos);
         assert_eq!(units[0].state, UnitState::Retreating);
+    }
+
+    #[test]
+    fn rout_snubs_attacker_ward_oob_for_the_rear_rim() {
+        // §6.14 sector filter: the ring on the ATTACKER's side is no exit —
+        // the rout walks past it to the rear deployment rim (the Warsaw
+        // report: Poles fleeing west into the German rear).
+        let mut g = grid(12, 8);
+        for r in 0..8 {
+            g.cell_mut(HexCoord::new(0, r)).unwrap().out_of_bounds = true;
+        }
+        // Attacker strip west, defender zone east — the threat rear is E.
+        let attacker: Vec<HexCoord> = (0..8)
+            .flat_map(|r| [HexCoord::new(1, r), HexCoord::new(2, r)])
+            .collect();
+        let zone: Vec<HexCoord> = (6..=10)
+            .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let zones = (attacker, zone);
+        let mut d = inf(1, Side::Defender, HexCoord::new(6, 4));
+        d.org = 0.0;
+        d.state = UnitState::Retreating;
+        let mut units = vec![d];
+        retreat_step_zoned(&g, &mut units, 1, true, Some((&zones.0, &zones.1)), None);
+        assert_eq!(
+            units[0].position.q, 7,
+            "steps AWAY from the west ring, toward the rear rim"
+        );
+        for _ in 0..4 {
+            if units[0].state == UnitState::Withdrawn {
+                break;
+            }
+            retreat_step_zoned(&g, &mut units, 1, true, Some((&zones.0, &zones.1)), None);
+        }
+        assert_eq!(units[0].state, UnitState::Withdrawn);
+        assert_eq!(units[0].position.q, 10, "withdrew at the zone's east rim");
+        assert!(!g.cell(units[0].position).unwrap().out_of_bounds);
+    }
+
+    #[test]
+    fn attacker_ward_oob_is_the_sealed_pockets_last_resort() {
+        // The sector filter's escape clause: the rear rim is walled off by
+        // enemy bodies and no rear-half ring exists — the attacker-ward
+        // ring still opens rather than pinning the rout forever.
+        let mut g = grid(12, 8);
+        for r in 0..8 {
+            g.cell_mut(HexCoord::new(0, r)).unwrap().out_of_bounds = true;
+        }
+        let wall: Vec<HexCoord> = (0..8).map(|r| HexCoord::new(4, r)).collect();
+        let zone: Vec<HexCoord> = (6..=10)
+            .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let zones = (wall.clone(), zone);
+        let mut units: Vec<BattalionUnit> = wall
+            .iter()
+            .enumerate()
+            .map(|(i, &h)| inf(10 + i, Side::Attacker, h))
+            .collect();
+        let mut d = inf(1, Side::Defender, HexCoord::new(3, 4));
+        d.org = 0.0;
+        d.state = UnitState::Retreating;
+        units.push(d);
+        retreat_step_zoned(&g, &mut units, 1, true, Some((&zones.0, &zones.1)), None);
+        let pos = units.iter().find(|u| u.id == 1).unwrap().position;
+        assert_eq!(
+            pos.q, 2,
+            "rim unreachable, no rear ring — the west ring opens as the last resort"
+        );
+    }
+
+    #[test]
+    fn attacker_rout_also_filters_by_its_own_rear() {
+        // Symmetric filter: the attacker's rear is its entry side (W here) —
+        // a routed attacker snubs the ring behind the DEFENDER's lines.
+        let mut g = grid(12, 8);
+        for r in 0..8 {
+            g.cell_mut(HexCoord::new(11, r)).unwrap().out_of_bounds = true;
+        }
+        let attacker_zone: Vec<HexCoord> = (0..8).map(|r| HexCoord::new(0, r)).collect();
+        let defender_zone: Vec<HexCoord> = (8..=10)
+            .flat_map(|q| (0..8).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let zones = (attacker_zone, defender_zone);
+        let mut a = inf(1, Side::Attacker, HexCoord::new(2, 4));
+        a.org = 0.0;
+        a.state = UnitState::Retreating;
+        let mut units = vec![a];
+        retreat_step_zoned(&g, &mut units, 1, true, Some((&zones.0, &zones.1)), None);
+        assert_eq!(
+            units[0].position.q, 1,
+            "routs back toward its entry edge, not the ring behind enemy lines"
+        );
     }
 
     #[test]
@@ -2182,6 +2659,254 @@ mod tests {
             close(res[0].org_damage_taken, 3.0),
             "{}",
             res[0].org_damage_taken
+        );
+    }
+
+    #[test]
+    fn fire_mission_from_non_artillery_fizzles() {
+        // Resolver backstop mirroring the assault gate: a fire mission
+        // is artillery / direct-gun business only (§6.3) — a forged
+        // infantry barrage fizzles target-lost instead of resolving a
+        // full 7-hex strike.
+        let g = grid(8, 8);
+        let mut units = vec![
+            inf(0, Side::Attacker, HexCoord::new(2, 2)),
+            inf(1, Side::Defender, HexCoord::new(3, 2)),
+        ];
+        let mut e = engine(1);
+        let res = e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(3, 2),
+                    precise: false,
+                },
+            }],
+        );
+        assert_eq!(res.len(), 1);
+        assert!(res[0].target_lost);
+        assert_eq!(res[0].org_damage_dealt, 0.0);
+        assert_eq!(res[0].org_damage_taken, 0.0);
+        assert_eq!(units[1].org, units[1].max_org);
+    }
+
+    /// §6.1 sound ranging: a fire mission that left the tube ledgers the
+    /// battery's OWN hex — including the empty-zone fizzle (the report says
+    /// "target lost", the guns still went off). Rocket salvos mark like tube
+    /// artillery; the drain empties the ledger.
+    #[test]
+    fn fired_missions_ledger_a_shot_that_left_the_tube() {
+        let g = grid(14, 6);
+        let mut units = vec![
+            artillery(0, Side::Attacker, HexCoord::new(1, 1)),
+            inf(1, Side::Defender, HexCoord::new(9, 1)),
+        ];
+        let mut e = engine(1);
+        let res = e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(9, 1),
+                    precise: true,
+                },
+            }],
+        );
+        assert!(!res[0].target_lost);
+        assert_eq!(e.take_fired_missions(), vec![(0, HexCoord::new(1, 1))]);
+        assert!(e.take_fired_missions().is_empty(), "the drain empties it");
+
+        // Empty zone: target-lost for the report, ledgered all the same.
+        // The battery carries id 9 at vec index 0 — the ledger holds the
+        // unit ID, the handle every other consumer looks units up by.
+        let mut units = vec![artillery(9, Side::Attacker, HexCoord::new(1, 1))];
+        let mut e = engine(1);
+        let res = e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 9,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(6, 1),
+                    precise: false,
+                },
+            }],
+        );
+        assert!(res[0].target_lost, "nothing in the zone");
+        assert_eq!(e.take_fired_missions(), vec![(9, HexCoord::new(1, 1))]);
+
+        // Rockets are indirect artillery too — the salvo gives them away.
+        let mut rocket = BattalionUnit::new(
+            0,
+            "Rk",
+            UnitType::RocketArtillery,
+            Side::Attacker,
+            HexCoord::new(1, 1),
+        );
+        rocket.is_emplaced = true;
+        let mut units = vec![rocket, inf(1, Side::Defender, HexCoord::new(5, 1))];
+        let mut e = engine(1);
+        e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(5, 1),
+                    precise: false,
+                },
+            }],
+        );
+        assert_eq!(e.take_fired_missions(), vec![(0, HexCoord::new(1, 1))]);
+    }
+
+    /// No shot, no mark: an illegal order never ledgers — the battery fired
+    /// nothing — and a DIRECT gun's mission never does either (only indirect
+    /// artillery gives its position away, §6.1).
+    #[test]
+    fn fired_missions_skip_illegal_orders_and_direct_guns() {
+        let g = grid(16, 6);
+        // Out of range: tube range 9, the aim hex sits 12 hexes out.
+        let mut units = vec![artillery(0, Side::Attacker, HexCoord::new(1, 1))];
+        let mut e = engine(1);
+        let res = e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(13, 1),
+                    precise: false,
+                },
+            }],
+        );
+        assert!(res[0].target_lost);
+        assert!(e.take_fired_missions().is_empty(), "out of range");
+
+        // Limbered towed battery: can_fire_support is false until emplaced.
+        let mut limbered = artillery(0, Side::Attacker, HexCoord::new(1, 1));
+        limbered.is_emplaced = false;
+        let mut units = vec![limbered, inf(1, Side::Defender, HexCoord::new(5, 1))];
+        let mut e = engine(1);
+        let res = e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(5, 1),
+                    precise: true,
+                },
+            }],
+        );
+        assert!(res[0].target_lost);
+        assert!(e.take_fired_missions().is_empty(), "limbered");
+
+        // Direct gun (AT): the class gate lets the mission resolve, the
+        // sound-ranging gate does not — a flat trajectory is not heard.
+        let mut units = vec![
+            at_gun(0, Side::Attacker, HexCoord::new(1, 1)),
+            inf(1, Side::Defender, HexCoord::new(3, 1)),
+        ];
+        let mut e = engine(1);
+        let res = e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(3, 1),
+                    precise: false,
+                },
+            }],
+        );
+        assert!(!res[0].target_lost, "the direct gun's mission resolves");
+        assert!(e.take_fired_missions().is_empty(), "…but never ledgers");
+    }
+
+    /// The direct-lay counter path never ledgers: return fire is aimed, not
+    /// a fire mission — an artillery duel marks only the mission itself.
+    #[test]
+    fn direct_lay_counters_never_ledger() {
+        let g = grid(6, 4);
+        let mut units = vec![
+            artillery(0, Side::Attacker, HexCoord::new(1, 1)),
+            artillery(1, Side::Defender, HexCoord::new(3, 1)),
+        ];
+        let mut e = engine(1);
+        let res = e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(3, 1),
+                    precise: true,
+                },
+            }],
+        );
+        assert!(res[0].org_damage_taken > 0.0, "direct-lay counter expected");
+        assert_eq!(
+            e.take_fired_missions(),
+            vec![(0, HexCoord::new(1, 1))],
+            "the mission ledgers the firer's own hex, the counter does not"
+        );
+    }
+
+    #[test]
+    fn counter_battery_reply_gates_on_the_repliers_true_distance() {
+        // Area fire on an EMPTY aim hex: the zone's strongest enemy
+        // answers — but the range gate must use the replier→firer
+        // distance, not the firer→aim-hex one (a zone neighbour sits a
+        // hex off the aim). Here the AT gun (reply range 2) stands 3
+        // hexes from the battery on the far side of the aim hex: no
+        // reply. A gun on the near neighbour (true distance 1) does.
+        let g = grid(8, 4);
+        let mut units = vec![
+            artillery(0, Side::Attacker, HexCoord::new(1, 1)),
+            at_gun(1, Side::Defender, HexCoord::new(4, 1)),
+        ];
+        let mut e = engine(1);
+        let res = e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(3, 1),
+                    precise: false,
+                },
+            }],
+        );
+        assert_eq!(res.len(), 1);
+        assert!(res[0].org_damage_dealt > 0.0, "zone splash still lands");
+        assert_eq!(
+            res[0].org_damage_taken, 0.0,
+            "3 > reply range 2: no counter"
+        );
+
+        let mut units = vec![
+            artillery(0, Side::Attacker, HexCoord::new(1, 1)),
+            at_gun(1, Side::Defender, HexCoord::new(2, 1)),
+        ];
+        let mut e = engine(1);
+        let res = e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(3, 1),
+                    precise: false,
+                },
+            }],
+        );
+        assert!(
+            res[0].org_damage_taken > 0.0,
+            "1 <= reply range 2: counter expected"
         );
     }
 
@@ -2568,6 +3293,27 @@ mod tests {
     }
 
     #[test]
+    fn rocket_salvo_cannot_reach_its_own_hex_today() {
+        // The firer-exclusion filter in the salvo branch is unreachable at
+        // the shipped constants: a rocket's minimum range (3) is wider than
+        // the strike zone (ring 1), so the launcher can never sit inside
+        // the zone it aims at. Pin that spacing down: the day the minimum
+        // range opens up, this test fails and the exclusion becomes live
+        // (that is the point of carrying it).
+        let rkt = BattalionUnit::new(
+            3,
+            "Rk3",
+            UnitType::MotRocketArtillery,
+            Side::Attacker,
+            HexCoord::new(1, 1),
+        );
+        assert!(
+            rkt.min_attack_range() > 1,
+            "a zone-reachable launcher would make the salvo a self-splash"
+        );
+    }
+
+    #[test]
     fn rocket_salvo_hits_zone_when_aim_hex_is_empty() {
         // Zone rule ("圈内任敌即可"): a salvo aimed at an EMPTY centre still
         // saturates the whole zone — enemy neighbours take full-strength
@@ -2811,6 +3557,170 @@ mod tests {
         assert_eq!(hits[0].side, Side::Defender);
         assert!(close(hits[0].org_lost, 3.0), "{}", hits[0].org_lost);
         assert!(close(units[0].org, 27.0), "{}", units[0].org);
+    }
+
+    /// Military-police attachment riding with an infantry fixture (§6.3).
+    fn with_mp(u: &mut BattalionUnit) {
+        u.attach(tactical_core::SupportAttachment {
+            kind: tactical_core::SupportKind::MilitaryPolice,
+            name: "MP".to_string(),
+            token: "military_police".to_string(),
+        });
+    }
+
+    fn with_kind(u: &mut BattalionUnit, kind: tactical_core::SupportKind, token: &str) {
+        u.attach(tactical_core::SupportAttachment {
+            kind,
+            name: "S".to_string(),
+            token: token.to_string(),
+        });
+    }
+
+    #[test]
+    fn military_police_host_breaks_but_never_surrenders() {
+        // Full ring + assault break (§6.4): without MPs the broken
+        // defender surrenders; with MPs it routs through the standard
+        // break flow instead — only annihilation clears it (§6.3).
+        let g = grid(10, 10);
+        let build = |mp: bool| {
+            let mut d = inf(0, Side::Defender, HexCoord::new(5, 5));
+            d.org = 0.5; // any hit breaks
+            if mp {
+                with_mp(&mut d);
+            }
+            let mut units = vec![d];
+            for (i, n) in HexCoord::new(5, 5).neighbors().into_iter().enumerate() {
+                units.push(inf(10 + i, Side::Attacker, n));
+            }
+            units
+        };
+        let order = [AttackOrder {
+            attacker: 10,
+            target: AttackTarget::Assault(0),
+        }];
+        let mut units = build(false);
+        engine(1).resolve_fire_phase(&g, &mut units, &order);
+        assert_eq!(units[0].state, UnitState::Surrendered, "no escort gives up");
+        let mut units = build(true);
+        engine(1).resolve_fire_phase(&g, &mut units, &order);
+        assert_eq!(
+            units[0].state,
+            UnitState::Retreating,
+            "military police hold their host to the death"
+        );
+    }
+
+    #[test]
+    fn military_police_rout_sealed_in_a_pocket_never_surrenders() {
+        // Mirror of a_broken_rout_sealed_in_a_pocket_surrenders with an
+        // MP attachment: the host routs where an unescorted unit gives up.
+        let g = grid(10, 10);
+        let mut broken = inf(0, Side::Defender, HexCoord::new(5, 5));
+        broken.org = 0.0;
+        broken.state = UnitState::Retreating;
+        with_mp(&mut broken);
+        let mut units = vec![broken];
+        for (i, n) in HexCoord::new(5, 5).neighbors().into_iter().enumerate() {
+            units.push(inf(10 + i, Side::Attacker, n));
+        }
+        engine(1).apply_encirclement_attrition(&g, &mut units);
+        assert_eq!(units[0].state, UnitState::Retreating);
+    }
+
+    #[test]
+    fn logistics_and_military_police_shave_pocket_attrition() {
+        // Same full-ring fixture as attrition_reports_the_org_it_grinds_off
+        // (5% of 60 = 3.0): logistics halves it, MP shave it to ×0.9,
+        // both stack multiplicatively to ×0.45 (§6.3/§6.4).
+        let g = grid(10, 10);
+        let grind = |deck: &[(tactical_core::SupportKind, &str)]| {
+            let mut pocket = inf(0, Side::Defender, HexCoord::new(5, 5));
+            pocket.org = 30.0;
+            for (kind, token) in deck {
+                with_kind(&mut pocket, *kind, token);
+            }
+            let mut units = vec![pocket];
+            for (i, n) in HexCoord::new(5, 5).neighbors().into_iter().enumerate() {
+                units.push(inf(10 + i, Side::Attacker, n));
+            }
+            let hits = engine(1).apply_encirclement_attrition(&g, &mut units);
+            assert_eq!(hits.len(), 1);
+            hits[0].org_lost
+        };
+        use tactical_core::SupportKind as K;
+        assert!(close(grind(&[]), 3.0));
+        assert!(close(grind(&[(K::Logistics, "logistics_company")]), 1.5));
+        assert!(close(grind(&[(K::MilitaryPolice, "military_police")]), 2.7));
+        assert!(
+            close(
+                grind(&[
+                    (K::Logistics, "logistics_company"),
+                    (K::MilitaryPolice, "military_police"),
+                ]),
+                1.35
+            ),
+            "logistics × MP stack to ×0.45"
+        );
+    }
+
+    #[test]
+    fn military_police_shave_org_damage_taken() {
+        // The lone-assault lane of the formula-chain test: the ledger
+        // amount is unchanged, the MP host applies it at ×0.9 (§6.3).
+        let g = grid(8, 8);
+        let mut d = inf(1, Side::Defender, HexCoord::new(2, 1));
+        with_mp(&mut d);
+        let mut units = vec![inf(0, Side::Attacker, HexCoord::new(1, 1)), d];
+        let mut e = engine(1);
+        e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::Assault(1),
+            }],
+        );
+        let expect = 6.0 * (0.1 + 0.3 * 6.0 / 28.0) * 0.9;
+        assert!(
+            close(60.0 - units[1].org, expect),
+            "{} vs {}",
+            60.0 - units[1].org,
+            expect
+        );
+    }
+
+    #[test]
+    fn maintenance_escort_reduces_strength_damage_taken() {
+        // Parallel runs of the same lane, with and without the
+        // maintenance attachment: the strength actually lost scales by
+        // ×0.85 — the ledger amount is untouched (§6.3 writeback-safe:
+        // less damage taken, never mid-battle recovery).
+        let g = grid(8, 8);
+        let run = |maintenance: bool| {
+            let mut d = inf(1, Side::Defender, HexCoord::new(2, 1));
+            if maintenance {
+                with_kind(
+                    &mut d,
+                    tactical_core::SupportKind::Maintenance,
+                    "maintenance_company",
+                );
+            }
+            let mut units = vec![inf(0, Side::Attacker, HexCoord::new(1, 1)), d];
+            engine(1).resolve_fire_phase(
+                &g,
+                &mut units,
+                &[AttackOrder {
+                    attacker: 0,
+                    target: AttackTarget::Assault(1),
+                }],
+            );
+            let max = units[1].max_strength;
+            max - units[1].strength
+        };
+        let base = run(false);
+        let escorted = run(true);
+        assert!(base > 0.0);
+        assert!(close(escorted, base * 0.85), "{escorted} vs {base} × 0.85");
     }
 
     #[test]
@@ -3378,6 +4288,102 @@ mod tests {
         assert_eq!(events[0].losses.len(), 2);
         assert_eq!(events[0].broke, vec![2usize]);
         assert_eq!(units[2].state, UnitState::Retreating);
+    }
+
+    #[test]
+    fn hq_collapse_matches_side_tag_and_division() {
+        // Three divisions share the NAME "2. Inf": the victim
+        // (Defender/GER), an allied Defender/ITA, and an Attacker/GER
+        // namesake. The division identity is the (side, tag, division)
+        // triple (§6.13 — the same key the aura and HQ synthesis use):
+        // only the victim's battalions take the collapse.
+        let g = grid(8, 8);
+        let mut killer = tank(0, Side::Attacker, HexCoord::new(1, 1));
+        killer.soft_attack = 30.0;
+        killer.division = "Atk".to_string();
+        killer.tag = "GER".to_string();
+        let mut victim = inf_div(1, Side::Defender, HexCoord::new(4, 4), "2. Inf");
+        victim.tag = "GER".to_string();
+        let mut ally = inf_div(2, Side::Defender, HexCoord::new(5, 5), "2. Inf");
+        ally.tag = "ITA".to_string();
+        let mut foe_namesake = inf_div(3, Side::Attacker, HexCoord::new(5, 6), "2. Inf");
+        foe_namesake.tag = "GER".to_string();
+        let mut units = vec![killer, victim, ally, foe_namesake];
+        add_hq(&mut units, Side::Defender, HexCoord::new(2, 1));
+        // One HQ per (tag, division): the GER one is the target.
+        let ger_hq = units
+            .iter()
+            .position(|u| u.is_hq() && u.tag == "GER")
+            .unwrap();
+        units[ger_hq].strength = 0.05; // pre-weakened: annihilation path
+        let ger_hq_id = units[ger_hq].id;
+        let mut e = engine(1);
+        e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::Assault(ger_hq_id),
+            }],
+        );
+        assert_eq!(units[ger_hq].state, UnitState::Eliminated);
+        // Victim battalion: 60 − 12 (20% of max org) = 48.
+        assert!(close(units[1].org, 48.0), "victim org {}", units[1].org);
+        // The allied and enemy namesakes answer to their own chains of
+        // command — untouched.
+        assert!(
+            close(units[2].org, 60.0),
+            "allied namesake {}",
+            units[2].org
+        );
+        assert!(close(units[3].org, 60.0), "enemy namesake {}", units[3].org);
+        let events = e.take_hq_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].losses.len(), 1, "only the victim loses org");
+    }
+
+    #[test]
+    fn hq_collapse_charges_retreating_survivors_too() {
+        // §6.13 charges EVERY SURVIVING same-division battalion — a broken
+        // (Retreating) one included. It takes the 20% hit but is not
+        // re-broken: it already routs, and a sealed-pocket surrender
+        // conversion is the encirclement pass's job (§6.4).
+        let g = grid(8, 8);
+        let mut killer = tank(0, Side::Attacker, HexCoord::new(1, 1));
+        killer.soft_attack = 30.0;
+        killer.division = "Atk".to_string();
+        let standing = inf_div(1, Side::Defender, HexCoord::new(4, 4), "Def");
+        let mut broken = inf_div(2, Side::Defender, HexCoord::new(5, 5), "Def");
+        broken.org = 30.0;
+        broken.state = UnitState::Retreating;
+        let mut units = vec![killer, standing, broken];
+        add_hq(&mut units, Side::Defender, HexCoord::new(2, 1));
+        let hqi = units.iter().position(|u| u.is_hq()).unwrap();
+        units[hqi].strength = 0.05;
+        let hq_id = units[hqi].id;
+        let mut e = engine(1);
+        e.resolve_fire_phase(
+            &g,
+            &mut units,
+            &[AttackOrder {
+                attacker: 0,
+                target: AttackTarget::Assault(hq_id),
+            }],
+        );
+        assert_eq!(units[hqi].state, UnitState::Eliminated);
+        assert!(close(units[1].org, 48.0), "standing {}", units[1].org);
+        assert!(
+            close(units[2].org, 18.0),
+            "retreating survivor also pays 20% of max org: {}",
+            units[2].org
+        );
+        assert_eq!(units[2].state, UnitState::Retreating, "not re-broken");
+        let events = e.take_hq_events();
+        assert_eq!(events[0].losses.len(), 2);
+        assert!(
+            !events[0].broke.contains(&2),
+            "an already-routing unit is not reported as freshly broken"
+        );
     }
 
     #[test]

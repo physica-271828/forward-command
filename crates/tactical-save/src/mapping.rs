@@ -233,6 +233,10 @@ pub struct UnitNaming {
     tokens: std::collections::HashMap<&'static str, String>,
     /// Per-support-kind attachment tag (OOB / hover card).
     support: std::collections::HashMap<tactical_core::SupportKind, String>,
+    /// Per-token support-company names for the companies that attach with
+    /// a no-bonus kind (their vanilla effect is not modelled — §5.3): the
+    /// kind tag would mislabel a flame-tank company as MPs.
+    support_names: std::collections::HashMap<&'static str, String>,
 }
 
 impl Default for UnitNaming {
@@ -242,11 +246,20 @@ impl Default for UnitNaming {
             .into_iter()
             .map(|ut| (ut, unit_type_abbrev(ut).to_string()))
             .collect();
+        // The army-HQ family (§6.13) is labelled as staff for the same
+        // reason the folded types are: an HQ formation fields those
+        // battalions normally, and the plain type label made the general's
+        // guard indistinguishable from a line battalion in the OOB.
         let tokens = [
             ("militia", "Mil"),
             ("irregular_infantry", "Irr"),
             ("penal_battalion", "Pen"),
             ("hq_infantry", "HQ Inf"),
+            ("hq_paratrooper", "HQ Para"),
+            ("hq_motorized", "HQ Mot"),
+            ("hq_light_armor", "HQ L Arm"),
+            ("hq_medium_armor", "HQ M Arm"),
+            ("hq_heavy_armor", "HQ H Arm"),
         ]
         .into_iter()
         .map(|(k, v)| (k, v.to_string()))
@@ -267,10 +280,28 @@ impl Default for UnitNaming {
         .into_iter()
         .map(|(k, v)| (k, v.to_string()))
         .collect();
+        // English short names for the no-modelled-effect companies (the
+        // `support_name.*` locale keys carry the same strings for English).
+        let support_names = [
+            ("light_flame_tank", "L. Flame"),
+            ("medium_flame_tank", "M. Flame"),
+            ("heavy_flame_tank", "H. Flame"),
+            ("super_heavy_armor", "SH Tank"),
+            ("land_cruiser", "Land Cruiser"),
+            ("helicopter_brigade", "Helicopter"),
+            ("blackshirt_assault_battalion", "Blackshirt"),
+            ("sturmtruppe_battalion", "Stosstruppen"),
+            ("hq_support_company", "HQ Staff"),
+            ("hq_specops", "SpecOps"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k, v.to_string()))
+        .collect();
         UnitNaming {
             types,
             tokens,
             support,
+            support_names,
         }
     }
 }
@@ -288,6 +319,11 @@ impl UnitNaming {
     pub fn set_support(&mut self, kind: tactical_core::SupportKind, label: String) {
         self.support.insert(kind, label);
     }
+    /// Override one no-modelled-effect company's display name (localized
+    /// pass) — see the `support_names` field doc.
+    pub fn set_support_name(&mut self, token: &'static str, label: String) {
+        self.support_names.insert(token, label);
+    }
 
     /// The label piece after the running number ("1. Inf" → "Inf"): distinct
     /// tokens keep their distinct label, everything else uses the type's.
@@ -304,6 +340,15 @@ impl UnitNaming {
     /// Attachment tag for a support kind (OOB / hover card).
     pub fn support_tag(&self, kind: tactical_core::SupportKind) -> String {
         self.support.get(&kind).cloned().unwrap_or_default()
+    }
+
+    /// Display name for one support company: the token's own name when it
+    /// carries one (the no-modelled-effect companies), else its kind tag.
+    pub fn support_name(&self, token: &str, kind: tactical_core::SupportKind) -> String {
+        if let Some(t) = self.support_names.get(token) {
+            return t.clone();
+        }
+        self.support_tag(kind)
     }
 
     /// Synthesized-HQ label (§6.13) — the Headquarters type entry.
@@ -352,27 +397,88 @@ pub(crate) fn canonical_template_key(ut: UnitType) -> &'static str {
 
 /// Map a HOI4 support-company token to its attachment kind.
 /// Only support companies reach here — line-battalion artillery/AT/AA (the
-/// `*_brigade` forms) stay independent map units. Unmapped tokens fall back
-/// to MilitaryPolice, which carries no bonuses (a safe no-op placeholder).
+/// `*_brigade` forms) stay independent map units. Tokens outside
+/// [`support_kind`]'s table (modded content) fall back to MilitaryPolice,
+/// which carries no bonuses (a safe no-op placeholder); the assembly logs
+/// them so new vanilla companies surface instead of silently attaching.
 pub fn map_support_kind(token: &str) -> tactical_core::SupportKind {
+    support_kind(token).unwrap_or(tactical_core::SupportKind::MilitaryPolice)
+}
+
+/// The explicit token → kind table behind [`map_support_kind`]: every
+/// support company of the vanilla land roster (§5.4 `support_companies`
+/// bucket), including the regimental-support column and the army-HQ `hq_*`
+/// companies. The companies whose vanilla effect FC does not model (flame
+/// tanks, super-heavy armor, land cruiser, the helicopter/specops/assault
+/// companies, the HQ staff company) still list here with the no-bonus
+/// MilitaryPolice kind — the honest zero-effect semantic — and keep their
+/// own display name through [`UnitNaming::support_name`]. Returns `None`
+/// for tokens outside the table.
+pub fn support_kind(token: &str) -> Option<tactical_core::SupportKind> {
     use tactical_core::SupportKind as K;
-    match token {
-        "anti_tank" | "tank_destroyer" => K::AntiTank,
-        "anti_air" => K::AntiAir,
-        "artillery" | "rocket_artillery" => K::Artillery,
-        "engineer" => K::Engineer,
+    Some(match token {
+        "artillery"
+        | "rocket_artillery"
+        | "super_heavy_artillery"
+        | "self_propelled_super_heavy_artillery"
+        | "super_heavy_sp_artillery_brigade"
+        | "fire_support"
+        | "mot_fire_support"
+        | "field_guns"
+        | "rocket_battery" => K::Artillery,
+        "anti_tank"
+        | "anti_tank_battery"
+        | "super_heavy_tank_destroyer_brigade"
+        | "light_tank_destroyer_support"
+        | "medium_tank_destroyer_support"
+        | "heavy_tank_destroyer_support"
+        | "modern_tank_destroyer_support" => K::AntiTank,
+        "anti_air"
+        | "anti_air_battery"
+        | "super_heavy_sp_anti_air_brigade"
+        | "light_sp_anti_air_support"
+        | "medium_sp_anti_air_support"
+        | "heavy_sp_anti_air_support"
+        | "modern_sp_anti_air_support" => K::AntiAir,
+        "engineer"
+        | "pioneer_support"
+        | "jungle_pioneers_support"
+        | "assault_engineer"
+        | "armored_engineer"
+        | "hq_engineer" => K::Engineer,
         "recon"
-        | "armored_car_recon"
         | "mot_recon"
-        | "light_armor_recon"
-        | "long_range_patrol_support" => K::Recon,
-        "field_hospital" => K::FieldHospital,
-        "signal_company" | "hq_signal" | "hq_naval" | "hq_air_liaison" => K::Signal,
-        "maintenance_company" => K::Maintenance,
-        "logistics_company" | "logistics_support" | "winter_logistics_support" => K::Logistics,
-        "military_police" => K::MilitaryPolice,
-        _ => K::MilitaryPolice,
-    }
+        | "armored_car_recon"
+        | "light_tank_recon"
+        | "airborne_light_armor"
+        | "rangers_support"
+        | "northern_territory_recon_support"
+        | "long_range_patrol_support"
+        | "helicopter_recon"
+        | "hq_recon" => K::Recon,
+        "field_hospital" | "helicopter_field_hospital" | "hq_field_hospital" => K::FieldHospital,
+        "signal_company" | "armored_signal" | "hq_signal" | "hq_naval_liaison"
+        | "hq_air_liaison" => K::Signal,
+        "maintenance_company" | "armored_maintenance" | "hq_maintenance" => K::Maintenance,
+        "logistics_company"
+        | "winter_logistics_support"
+        | "helicopter_transport"
+        | "hq_logistics" => K::Logistics,
+        "military_police" | "motorized_military_police" | "hq_military_police" => K::MilitaryPolice,
+        // No modelled vanilla effect — attached with the no-bonus kind,
+        // distinguished by their display name (§5.3).
+        "light_flame_tank"
+        | "medium_flame_tank"
+        | "heavy_flame_tank"
+        | "super_heavy_armor"
+        | "land_cruiser"
+        | "helicopter_brigade"
+        | "blackshirt_assault_battalion"
+        | "sturmtruppe_battalion"
+        | "hq_support_company"
+        | "hq_specops" => K::MilitaryPolice,
+        _ => return None,
+    })
 }
 
 /// Equipment archetype a unit type draws from (HOI4 data-name quirk: tank
@@ -441,6 +547,24 @@ pub(crate) fn fallback_equipment_target(ut: UnitType) -> f32 {
         | UnitType::MilitaryPolice => 30.0,
         // §6.13: synthesized, never draws equipment.
         UnitType::Headquarters => 30.0,
+    }
+}
+
+/// Equipment archetype a chassis draws its MOBILITY from (§5.3 mobility
+/// shortfall): trucks for the wheeled / truck-towed classes, halftracks
+/// for mechanized infantry, the tank chassis archetype for armored weight
+/// classes. Foot and horse-towed classes have no mobility equipment —
+/// they never slow for want of it.
+pub(crate) fn mobility_equipment_archetype(chassis: Chassis, ut: UnitType) -> Option<&'static str> {
+    match chassis {
+        Chassis::None | Chassis::Towed => None,
+        Chassis::TruckTowed | Chassis::Wheeled => Some("motorized_equipment"),
+        Chassis::Halftrack => Some("mechanized_equipment"),
+        Chassis::Light
+        | Chassis::Medium
+        | Chassis::Heavy
+        | Chassis::SuperHeavy
+        | Chassis::Modern => Some(fallback_equipment_archetype(ut)),
     }
 }
 
@@ -578,5 +702,23 @@ mod tests {
         assert_eq!(unit_type_abbrev(UnitType::Infantry), "Inf");
         assert_eq!(unit_type_abbrev(UnitType::ArtilleryBrigade), "Art");
         assert_eq!(unit_type_abbrev(UnitType::Engineer), "Eng");
+    }
+
+    #[test]
+    fn army_hq_tokens_carry_staff_labels() {
+        // §6.13: the army-HQ formation's battalions are staff, not line —
+        // every `hq_*` subunit token carries its own label, or the OOB
+        // reads the general's guard as just another combat battalion.
+        let naming = UnitNaming::default();
+        for (token, ut, label) in [
+            ("hq_infantry", UnitType::Infantry, "HQ Inf"),
+            ("hq_paratrooper", UnitType::Paratrooper, "HQ Para"),
+            ("hq_motorized", UnitType::Motorized, "HQ Mot"),
+            ("hq_light_armor", UnitType::LightArmor, "HQ L Arm"),
+            ("hq_medium_armor", UnitType::MediumArmor, "HQ M Arm"),
+            ("hq_heavy_armor", UnitType::HeavyArmor, "HQ H Arm"),
+        ] {
+            assert_eq!(naming.subunit_abbrev(token, ut), label, "token {token}");
+        }
     }
 }

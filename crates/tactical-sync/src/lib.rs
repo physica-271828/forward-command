@@ -157,6 +157,8 @@ impl DamageSummary {
         }
     }
 
+    /// No production reader yet (tests only) — kept for the summary
+    /// display work (§9.1 reports an hour that changed nothing).
     pub fn is_zero(&self) -> bool {
         self.attacker_org_lost == 0.0
             && self.attacker_str_lost == 0.0
@@ -418,6 +420,8 @@ pub struct BattleSession {
     /// Full turns completed within the current strategic hour.
     turns_in_current_hour: u32,
     /// Sealed per-hour summaries, one entry per completed sync (§8.2).
+    /// Collected but not yet read outside tests — the per-hour battle-log
+    /// table is the reader this waits for; the cost is 16 bytes/hour.
     hourly_history: Vec<DamageSummary>,
     /// §6.11: the battle's flag board — zones + capture progress.
     /// `None` = no flag zones, the annihilation path is the only conclusion.
@@ -782,11 +786,14 @@ impl BattleSession {
     }
 
     /// Sealed summaries of completed hours, oldest first (§8.2).
+    /// No production reader yet (tests only) — see the field doc.
     pub fn damage_history(&self) -> &[DamageSummary] {
         &self.hourly_history
     }
 
     /// Full turns completed within the current strategic hour (0..turns_per_hour).
+    /// The batch builders read the field directly; the accessor serves
+    /// tests and the UI status line.
     pub fn turns_in_current_hour(&self) -> u32 {
         self.turns_in_current_hour
     }
@@ -810,9 +817,10 @@ impl BattleSession {
     }
 
     /// §6.11: the defender collapse fired and its org-zeroing injection has
-    /// not been sent yet — the next sync/end batch must carry it. Cleared by
-    /// the `take_*` batch takers, and only when the batch that went out
-    /// actually contained the lines.
+    /// not been sent yet — the next sync/end batch must carry it. The
+    /// `take_*` batch takers clear it through [`Self::collapse_rides`], i.e.
+    /// only when the batch that went out actually contained the lines; the
+    /// public read serves the UI badge and the tests.
     pub fn flag_collapse_pending(&self) -> bool {
         self.flags.as_ref().map(|f| f.collapsed).unwrap_or(false) && !self.collapse_injected
     }
@@ -831,6 +839,12 @@ impl BattleSession {
     /// `damage_units` with `province=`+`limit` is scope-robust.
     fn collapse_lines(&self) -> Vec<String> {
         if !self.flag_collapse_pending() {
+            return Vec::new();
+        }
+        // Sandbox mode (§3.2 `off`) writes NOTHING back — a flag capture
+        // then only ends the tactical battle, same mode gate as
+        // [`Self::damage_lines`].
+        if self.writeback_mode == WritebackMode::Off {
             return Vec::new();
         }
         let Some(ctx) = &self.battle_ctx else {
@@ -881,9 +895,17 @@ impl BattleSession {
                 .get(tag)
                 .copied()
                 .unwrap_or((0.0, 0.0));
-            let (max_org, max_str) = ctx.defender_max.get(tag).copied().unwrap_or((0.0, 0.0));
-            let d_org = d_org_pts / max_org.max(1.0);
-            let d_str = d_str_pts / max_str.max(1.0);
+            // A tag without a sane maxima pool (degenerate roster sync)
+            // must NOT degrade to a ÷1 ratio — battalion-scale points
+            // would read as a near-total wipe. Skip the line instead.
+            let Some(&(max_org, max_str)) = ctx.defender_max.get(tag) else {
+                continue;
+            };
+            if max_org <= 0.0 || max_str <= 0.0 {
+                continue;
+            }
+            let d_org = d_org_pts / max_org;
+            let d_str = d_str_pts / max_str;
             if d_org >= DAMAGE_EPS || d_str >= DAMAGE_EPS {
                 out.push(damage_line(ctx.contested_province, tag, d_org, d_str));
             }
@@ -897,18 +919,18 @@ impl BattleSession {
                     .and_then(|m| m.get(tag))
                     .copied()
                     .unwrap_or((0.0, 0.0));
-                let a_org = a_org_pts
-                    / ap.participants_max_org
-                        .get(tag)
-                        .copied()
-                        .unwrap_or(0.0)
-                        .max(1.0);
-                let a_str = a_str_pts
-                    / ap.all_max_str
-                        .get(tag)
-                        .copied()
-                        .unwrap_or(0.0)
-                        .max(1.0);
+                // Same hardening as the defender side: no pool, no line.
+                let (Some(&max_org), Some(&max_str)) = (
+                    ap.participants_max_org.get(tag),
+                    ap.all_max_str.get(tag),
+                ) else {
+                    continue;
+                };
+                if max_org <= 0.0 || max_str <= 0.0 {
+                    continue;
+                }
+                let a_org = a_org_pts / max_org;
+                let a_str = a_str_pts / max_str;
                 if a_org >= DAMAGE_EPS || a_str >= DAMAGE_EPS {
                     out.push(damage_line(ap.province, tag, a_org, a_str));
                 }
@@ -995,20 +1017,30 @@ impl BattleSession {
 
     // ── latch-guarded batch takers (§3.2/§6.11) ─────────────────────────────
 
+    /// Did the batch the builders are about to produce actually CARRY the
+    /// collapse? Asked through [`BattleSession::collapse_lines`] — the
+    /// builders' own source of truth — so a payload emptied by a missing
+    /// battle context (`battle_ctx = None`) or sandbox mode
+    /// ([`WritebackMode::Off`]) leaves the latch pending. Re-deriving the
+    /// fact from [`BattleSession::flag_collapse_pending`] alone would clear
+    /// a latch whose lines never left the building.
+    fn collapse_rides(&self) -> bool {
+        !self.collapse_lines().is_empty()
+    }
+
     /// The hourly Sync as the GUI issues it: build the batch, advance the
     /// session, and clear the pending-collapse latch ONLY when the batch
     /// that is about to go out carried its lines.
     ///
     /// The builders above stay pure reads (a batch is built before its
-    /// transition so a failed transition injects nothing), so the "did this
-    /// batch carry the collapse" fact has to travel with the take. Clearing
-    /// the latch blind is what once killed every flag-capture write-back: a
+    /// transition so a failed transition injects nothing). Clearing the
+    /// latch blind is what once killed every flag-capture write-back: a
     /// capture forces [`BattlePhase::ReadyToEnd`] on the very turn it fires,
     /// so the collapse can only ever ride an END batch — an earlier sync
     /// that cleared the latch dropped the org-zeroing for good and left the
     /// defender's org (and the strategic battle) untouched.
     pub fn take_sync_batch(&mut self) -> Result<InjectionBatch, TransitionError> {
-        let collapse_riding = self.flag_collapse_pending();
+        let collapse_riding = self.collapse_rides();
         let batch = self.build_sync_batch();
         self.start_sync().and_then(|_| self.complete_sync())?;
         if collapse_riding {
@@ -1020,7 +1052,7 @@ impl BattleSession {
     /// [Apply & Exit] (§3.2): the end batches under the same latch rule as
     /// [`BattleSession::take_sync_batch`].
     pub fn take_end_batch(&mut self) -> Result<EndBatches, TransitionError> {
-        let collapse_riding = self.flag_collapse_pending();
+        let collapse_riding = self.collapse_rides();
         let batches = self.build_end_batch();
         self.complete_end().and_then(|_| self.finish())?;
         if collapse_riding {
@@ -1033,7 +1065,7 @@ impl BattleSession {
     /// `carry = false` (abandon) sends no lines at all, so the latch stays
     /// untouched by construction.
     pub fn take_early_exit_batch(&mut self, carry: bool) -> Result<EndBatches, TransitionError> {
-        let collapse_riding = carry && self.flag_collapse_pending();
+        let collapse_riding = carry && self.collapse_rides();
         let batches = self.build_early_exit_batch(carry);
         self.complete_end().and_then(|_| self.finish())?;
         if collapse_riding {
@@ -1874,6 +1906,47 @@ mod tests {
         );
     }
 
+    /// Sandbox mode (`writeback = off`) writes NOTHING back (§3.2): a
+    /// flag capture only ends the tactical battle — the collapse org-wipe
+    /// is damage like any other and must not ride the end batch.
+    #[test]
+    fn collapse_lines_off_mode_emit_nothing() {
+        use tactical_core::FlagState;
+        let mut s = session_at(BattlePhase::ReadyToEnd);
+        s.country_tag = "ITA".to_string();
+        s.battle_ctx = Some(live_ctx());
+        s.writeback_mode = WritebackMode::Off;
+        s.set_flags(Some(FlagState::default()));
+        s.flags_mut().unwrap().collapsed = true;
+        let end = s.build_end_batch();
+        assert!(
+            !end.phase1.iter().any(|l| l.contains("damage_units")),
+            "sandbox mode must not org-wipe the province: {:?}",
+            end.phase1
+        );
+    }
+
+    /// Hardening: a tag with damage points but no maxima pool (degenerate
+    /// roster sync) must be SKIPPED — battalion-scale points against a
+    /// ÷1 fallback would clamp to a full org-wipe line.
+    #[test]
+    fn damage_lines_skip_a_tag_without_a_pool() {
+        let mut s = active_session();
+        s.country_tag = "ITA".to_string();
+        let mut ctx = live_ctx();
+        ctx.defender_max.remove("ETH");
+        s.battle_ctx = Some(ctx);
+        s.record_damage(Side::Defender, "ETH", Some(13237), 12.0, 15.0, 60.0, 30.0);
+        let batch = s.build_sync_batch();
+        assert_eq!(
+            batch,
+            vec![
+                "eval_effect ITA = { d_tac_sync_hourly = yes }",
+                "pause_in_hours 1"
+            ]
+        );
+    }
+
     #[test]
     fn end_batch_splits_damage_clock_and_cleanup_into_two_phases() {
         // §8.4: phase 1 = damage (+ collapse + clock advance);
@@ -2068,6 +2141,28 @@ mod tests {
         let sync = s.take_sync_batch().unwrap();
         assert!(sync[0].contains("org_damage = 1.000"));
         assert!(!s.flag_collapse_pending());
+    }
+
+    #[test]
+    fn a_batch_that_carried_no_collapse_lines_leaves_the_latch_pending() {
+        // The builders can come out with no collapse lines while
+        // `flags.collapsed` stays true — a battle without a context (demo/
+        // script) has no injector to write into. The latch must then survive
+        // the take, so a later batch that CAN carry it still will.
+        use tactical_core::FlagState;
+        let mut s = active_session();
+        s.country_tag = "ITA".to_string();
+        s.battle_ctx = None;
+        s.set_flags(Some(FlagState::default()));
+        s.flags_mut().unwrap().collapsed = true;
+        assert!(s.flag_collapse_pending());
+        run_full_turns(&mut s, 6);
+        let sync = s.take_sync_batch().unwrap();
+        assert!(!sync.iter().any(|l| l.contains("org_damage = 1.000")));
+        assert!(
+            s.flag_collapse_pending(),
+            "the latch was cleared by a batch that carried nothing"
+        );
     }
 
     #[test]

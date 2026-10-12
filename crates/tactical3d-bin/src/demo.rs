@@ -664,22 +664,38 @@ pub fn demo_scenario() -> (HexGrid, Vec<BattalionUnit>, (Vec<HexCoord>, Vec<HexC
             u.attach(SupportAttachment {
                 kind: SupportKind::Recon,
                 name: "Aufkl".to_string(),
+                token: String::new(),
             });
         } else if u.name == "1.Inf" {
             u.attach(SupportAttachment {
                 kind: SupportKind::AntiTank,
                 name: "1. AT".to_string(),
+                token: String::new(),
             });
         } else if u.name == "2.Inf" {
             u.attach(SupportAttachment {
                 kind: SupportKind::Engineer,
                 name: "1. Eng".to_string(),
+                token: String::new(),
             });
         }
     }
 
     // Deployment zones: attacker west strip, defender east strip.
     let zones = arena_zones(&grid);
+    snap_into_zones(&mut units, &zones);
+    // §6.13: every assembly path fields one HQ per division — the demo is
+    // the no-HOI4 showcase, so it must carry the command chain too (HQs
+    // are placed at their division's first battalion and are picked up by
+    // the same auto-deploy).
+    for side in [Side::Attacker, Side::Defender] {
+        let anchor = units
+            .iter()
+            .find(|u| u.side == side)
+            .map(|u| u.position)
+            .unwrap_or(HexCoord::ZERO);
+        tactical_core::synthesize_hqs(&mut units, &mut id, side, |_| anchor);
+    }
     snap_into_zones(&mut units, &zones);
     (grid, units, zones)
 }

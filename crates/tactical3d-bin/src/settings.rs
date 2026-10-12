@@ -7,7 +7,33 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use tactical_inject::Injector;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadWarning {
+    /// an existing settings.json could not be parsed and was renamed aside.
+    Corrupt {
+        error: String,
+        backup: Option<String>,
+    },
+}
+
+/// Load the settings for the resident menu: [`AppSettings::load_checked`]
+/// plus the localized status line when the file had to be set aside.
+pub fn load_for_menu() -> (AppSettings, Option<String>) {
+    let (settings, warning) = AppSettings::load_checked();
+    let loc = tactical_locale::Locale::load(settings.language());
+    let line = warning.map(|w| match w {
+        LoadWarning::Corrupt { error, backup } => match backup {
+            Some(name) => loc.trf(
+                "menu.status.settings_reset",
+                &[("error", &error), ("backup", &name)],
+            ),
+            None => loc.trf("menu.status.settings_reset_nobackup", &[("error", &error)]),
+        },
+    });
+    (settings, line)
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     /// HOI4 install root (contains `map/provinces.bmp`).
@@ -19,9 +45,9 @@ pub struct AppSettings {
     /// Full path to `game.log` (tac_start trigger channel, §3).
     #[serde(default)]
     pub log_path: String,
-    /// UI language: "en" / "zh" (unknown/blank → SimpChinese — the primary
-    /// audience is Chinese-speaking). Switched on the Settings page; battle
-    /// child processes read it at startup (DESIGN §15).
+    /// UI language: "en" / "zh" / "ru" (unknown/blank → SimpChinese — the
+    /// primary audience is Chinese-speaking). Switched on the Settings page;
+    /// battle child processes read it at startup (DESIGN §15).
     #[serde(default)]
     pub language: String,
     /// MSAA sample count: 4 / 2 / 1 (= off). Default 2: on weak GPUs (e.g.
@@ -141,6 +167,35 @@ pub fn settings_file_exists() -> bool {
     settings_path().is_file()
 }
 
+/// Parse one settings file. An unparsable file is moved aside —
+/// `settings.json` → `settings.json.bad` — so the hand-edited original
+/// survives the next `save()` (which would otherwise persist the defaults
+/// over it) and the caller can name the file in its status line.
+fn read_settings_file(path: &Path) -> (AppSettings, Option<LoadWarning>) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(_) => return (AppSettings::default(), None),
+    };
+    match serde_json::from_str(&text) {
+        Ok(s) => (s, None),
+        Err(e) => {
+            let backup = path.with_extension("json.bad");
+            let moved = std::fs::rename(path, &backup).is_ok();
+            let name = backup
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            (
+                AppSettings::default(),
+                Some(LoadWarning::Corrupt {
+                    error: e.to_string(),
+                    backup: moved.then_some(name),
+                }),
+            )
+        }
+    }
+}
+
 impl AppSettings {
     /// Load from settings.json; missing file/fields fall back to
     /// auto-detected defaults (so a fresh install "just works"). A
@@ -150,12 +205,19 @@ impl AppSettings {
     /// into the Chinese UI. An existing file keeps its stored language
     /// untouched (older files without the key still fall back to
     /// Simplified Chinese via [`Self::language`]).
+    ///
+    /// A file that fails to PARSE is moved aside ([`LoadWarning::Corrupt`])
+    /// instead of being silently replaced by the defaults: the caller shows
+    /// the line, and the hand-edited original survives the next `save()`.
     pub fn load() -> Self {
+        Self::load_checked().0
+    }
+
+    /// [`Self::load`] plus the file's condition: `Some(..)` when an existing
+    /// settings.json could not be parsed and was renamed aside.
+    pub fn load_checked() -> (Self, Option<LoadWarning>) {
         let fresh = !settings_file_exists();
-        let mut s: AppSettings = std::fs::read_to_string(settings_path())
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
+        let (mut s, warning) = read_settings_file(&settings_path());
         if s.hoi4_dir.is_empty() {
             s.hoi4_dir = tactical_map::detect_hoi4_dir()
                 .map(|p| p.display().to_string())
@@ -174,7 +236,7 @@ impl AppSettings {
         if fresh {
             s.language = detect_first_run_language().settings_tag().to_string();
         }
-        s
+        (s, warning)
     }
 
     /// Store a chosen interface language's settings tag (pure field
@@ -297,17 +359,18 @@ impl AppSettings {
         }
     }
 
-    /// Per-field validation for the Settings page: (field slug, ok, message
-    /// slug). The page translates both through `menu.settings.field.*` /
-    /// `settings.validate.*` locale keys (DESIGN §15) so the status lines
-    /// follow the UI language; slugs stay stable English identifiers.
-    pub fn validate(&self) -> Vec<(&'static str, bool, &'static str)> {
-        vec![
+    /// Per-field validation for the Settings page: (field slug, level,
+    /// message slug). The page translates both through
+    /// `menu.settings.field.*` / `settings.validate.*` locale keys
+    /// (DESIGN §15) so the status lines follow the UI language; slugs stay
+    /// stable English identifiers.
+    pub fn validate(&self) -> Vec<(&'static str, CheckLevel, &'static str)> {
+        let mut checks = vec![
             {
                 let ok = self.hoi4_dir().is_some();
                 (
                     "hoi4_dir",
-                    ok,
+                    level(ok),
                     if ok {
                         "provinces_found"
                     } else {
@@ -319,7 +382,7 @@ impl AppSettings {
                 let ok = self.saves_dir().is_some();
                 (
                     "saves_dir",
-                    ok,
+                    level(ok),
                     if ok { "dir_exists" } else { "dir_missing" },
                 )
             },
@@ -333,9 +396,115 @@ impl AppSettings {
                 } else {
                     "log_parent_missing"
                 };
-                ("log_path", ok, msg)
+                ("log_path", level(ok), msg)
             },
-        ]
+        ];
+        // Cross-field warning: the saves dir's parent and the game.log path
+        // must imply the SAME HOI4 user directory. The console batch file
+        // and the snapshot round trip both derive theirs from the saves
+        // dir, so a saves dir one level off (the user directory itself,
+        // missing the `save games` tail) passes its own check above and
+        // then fails everything in the field — silently. Never an error:
+        // the player must stay free to save and play.
+        if let (Some(from_saves), Some(from_log)) = (
+            user_dir_from_saves(&self.saves_dir),
+            user_dir_from_log(&self.log_path),
+        ) {
+            if !same_dir(&from_saves, &from_log) {
+                checks.push(("saves_dir", CheckLevel::Warn, "saves_user_dir_mismatch"));
+            }
+        }
+        checks
+    }
+}
+
+/// Severity of one Settings-page validation line — green, yellow, red. A
+/// WARN is a configuration that passes its own field check but fails in
+/// the field (see [`AppSettings::validate`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckLevel {
+    Ok,
+    Warn,
+    Error,
+}
+
+fn level(ok: bool) -> CheckLevel {
+    if ok {
+        CheckLevel::Ok
+    } else {
+        CheckLevel::Error
+    }
+}
+
+/// Lexical parent of a configured path string; a blank string has none.
+/// One trailing separator is dropped first — `Path::parent` reads it as a
+/// final empty component and would hand back the directory itself (a
+/// pasted `…\save games\` must not look like a mismatch). A bare drive
+/// keeps its separator: `C:` alone is a RELATIVE path.
+fn parent_of(path: &str) -> Option<PathBuf> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let dir = match trimmed.chars().last() {
+        Some('\\') | Some('/') if trimmed.len() > 3 => &trimmed[..trimmed.len() - 1],
+        _ => trimmed,
+    };
+    PathBuf::from(dir).parent().map(Path::to_path_buf)
+}
+
+/// HOI4 user directory implied by the configured saves dir (its parent) —
+/// the derivation the console-injection channel actually uses.
+fn user_dir_from_saves(saves_dir: &str) -> Option<PathBuf> {
+    parent_of(saves_dir)
+}
+
+/// HOI4 user directory implied by the configured `game.log` path
+/// (`<user dir>/logs/game.log`).
+fn user_dir_from_log(log_path: &str) -> Option<PathBuf> {
+    parent_of(log_path).and_then(|logs| logs.parent().map(Path::to_path_buf))
+}
+
+/// Windows-equality for two directory paths: separator style unified, one
+/// trailing separator dropped, case folded — the settings fields are free
+/// text and Windows paths are case-insensitive.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        let s = p.to_string_lossy().replace('/', "\\");
+        s.strip_suffix('\\').unwrap_or(&s).to_lowercase()
+    };
+    norm(a) == norm(b)
+}
+
+// ---------------------------------------------------------------------------
+// Console-channel injection targets (§3.2): the batch file and the ping
+// readback must live in the HOI4 user directory the game actually uses.
+
+/// HOI4 user directory + `game.log` for the menu/live console channel,
+/// derived from the configured paths: the user directory is the save dir's
+/// parent, the log path falls back to the user dir's `logs\game.log` when
+/// unset. `None` when the save dir is unset or pathless.
+fn user_dir_injection_paths(
+    saves_dir: Option<&Path>,
+    log_path: Option<&Path>,
+) -> Option<(PathBuf, PathBuf)> {
+    let dir = saves_dir?.parent()?.to_path_buf();
+    let log = log_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| dir.join("logs").join("game.log"));
+    Some((dir, log))
+}
+
+/// Injector for the menu/live console channel (snapshot, abort, quiet
+/// notify). Unlike [`tactical_inject::Injector::new`], both paths come from
+/// the settings — the built-in default assumes the English
+/// `%USERPROFILE%\Documents`, which does not exist where Documents is
+/// redirected (OneDrive) or localized (e.g. Turkish `Belgeler`), so every
+/// injection there fails before reaching the game.
+pub fn live_channel_injector(saves_dir: Option<&Path>, log_path: Option<&Path>) -> Injector {
+    match user_dir_injection_paths(saves_dir, log_path) {
+        Some((dir, log)) => Injector::for_user_dir(dir, Some(log)),
+        None => Injector::new(),
     }
 }
 
@@ -474,26 +643,33 @@ fn default_saves_dir() -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 
 /// The Win32 LANGID's primary language field (low ten bits) — Chinese is
-/// 0x04 in every sublanguage (Simplified, Traditional, Hong Kong…).
+/// 0x04 in every sublanguage (Simplified, Traditional, Hong Kong…);
+/// Russian is 0x19.
 const LANG_PRIMARY_MASK: u16 = 0x3FF;
 const LANG_CHINESE: u16 = 0x04;
+const LANG_RUSSIAN: u16 = 0x19;
 
 /// Interface language for a first launch: the OS UI language when it can
 /// be read, Simplified Chinese otherwise (the historical fallback — and
 /// the only shipped Chinese table, so every Chinese sublanguage maps
-/// here). Non-Chinese systems get English.
+/// here). Russian systems get Russian; other non-Chinese systems get
+/// English.
 pub fn detect_first_run_language() -> tactical_locale::Language {
     first_run_language(os_ui_language())
 }
 
 /// Pure mapping (unit-tested): an optional OS LANGID → interface
-/// language. Chinese in any sublanguage → Simplified Chinese; any other
-/// readable language → English; `None` (detection failed) → Simplified
-/// Chinese, the historical default.
+/// language. Chinese in any sublanguage → Simplified Chinese; Russian in
+/// any sublanguage → Russian; any other readable language → English;
+/// `None` (detection failed) → Simplified Chinese, the historical
+/// default.
 fn first_run_language(langid: Option<u16>) -> tactical_locale::Language {
     match langid {
         Some(id) if id & LANG_PRIMARY_MASK == LANG_CHINESE => {
             tactical_locale::Language::SimpChinese
+        }
+        Some(id) if id & LANG_PRIMARY_MASK == LANG_RUSSIAN => {
+            tactical_locale::Language::Russian
         }
         Some(_) => tactical_locale::Language::English,
         None => tactical_locale::Language::SimpChinese,
@@ -564,6 +740,35 @@ pub fn list_saves(saves_dir: &Path, cap: usize) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corrupt_settings_file_is_set_aside_not_overwritten() {
+        // A hand-edit typo used to reset every field silently and let the
+        // next save() persist that loss over the player's file. The bad
+        // file must survive as `<name>.bad`, and the caller must get a
+        // warning it can show.
+        let dir = std::env::temp_dir().join(format!("fc_settings_bad_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{ \"hoi4_dir\": ").unwrap();
+        let (s, warning) = read_settings_file(&path);
+        let LoadWarning::Corrupt { backup, .. } = warning.expect("a corrupt file warns");
+        assert_eq!(backup.as_deref(), Some("settings.json.bad"));
+        assert!(!path.exists(), "the bad file must not stay in place");
+        let moved = std::fs::read_to_string(dir.join("settings.json.bad")).unwrap();
+        assert!(moved.contains("hoi4_dir"), "the original survives verbatim");
+        // Defaults (auto-detected fields fill in later, in load_checked).
+        assert!(s.hoi4_dir.is_empty());
+        // A good file loads silently.
+        std::fs::write(&path, "{\"hoi4_dir\":\"D:/HOI4\"}").unwrap();
+        let (good, warning) = read_settings_file(&path);
+        assert!(warning.is_none());
+        assert_eq!(good.hoi4_dir, "D:/HOI4");
+        // A missing file is not a corruption either.
+        let (_, warning) = read_settings_file(&dir.join("nope.json"));
+        assert!(warning.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn serde_roundtrip_and_missing_fields_default() {
@@ -758,12 +963,14 @@ mod tests {
         assert_eq!(first_run_language(Some(0x0804)), Language::SimpChinese);
         assert_eq!(first_run_language(Some(0x0404)), Language::SimpChinese);
         assert_eq!(first_run_language(Some(0x0c04)), Language::SimpChinese);
-        // Every non-Chinese system → English (en-US 0x0409, ja-JP 0x0411,
-        // de-DE 0x0407, ru-RU 0x0419).
+        // Russian in any sublanguage → Russian (ru-RU 0x0419, ru-MD 0x0819).
+        assert_eq!(first_run_language(Some(0x0419)), Language::Russian);
+        assert_eq!(first_run_language(Some(0x0819)), Language::Russian);
+        // Every other system → English (en-US 0x0409, ja-JP 0x0411,
+        // de-DE 0x0407).
         assert_eq!(first_run_language(Some(0x0409)), Language::English);
         assert_eq!(first_run_language(Some(0x0411)), Language::English);
         assert_eq!(first_run_language(Some(0x0407)), Language::English);
-        assert_eq!(first_run_language(Some(0x0419)), Language::English);
         // Detection failure → Simplified Chinese (the historical default).
         assert_eq!(first_run_language(None), Language::SimpChinese);
     }
@@ -782,5 +989,115 @@ mod tests {
         s.set_language_tag(Language::SimpChinese);
         assert_eq!(s.language(), Language::SimpChinese);
         assert_eq!(s.language(), Language::from_code(&s.language));
+    }
+
+    #[test]
+    fn injection_paths_derive_the_user_dir_from_the_save_dir() {
+        let saves = PathBuf::from(
+            r"C:\Users\X\OneDrive\Documents\Paradox Interactive\Hearts of Iron IV\save games",
+        );
+        let (dir, log) = user_dir_injection_paths(Some(&saves), None).unwrap();
+        assert_eq!(
+            dir,
+            PathBuf::from(r"C:\Users\X\OneDrive\Documents\Paradox Interactive\Hearts of Iron IV")
+        );
+        assert_eq!(log, dir.join("logs").join("game.log"));
+    }
+
+    #[test]
+    fn injection_paths_prefer_the_configured_log() {
+        let saves = PathBuf::from(r"C:\HOI4\save games");
+        let log = PathBuf::from(r"D:\logs\game.log");
+        assert_eq!(
+            user_dir_injection_paths(Some(&saves), Some(&log)),
+            Some((PathBuf::from(r"C:\HOI4"), log))
+        );
+        // Unset or pathless save dir → the caller falls back to the
+        // built-in default injector.
+        assert!(user_dir_injection_paths(None, None).is_none());
+        assert!(user_dir_injection_paths(Some(Path::new("")), None).is_none());
+    }
+
+    /// Temp HOI4 user-dir tree `<root>` with the real child layout: a
+    /// `save games` folder and a `logs\game.log` file.
+    fn temp_user_dir(tag: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "fc_settings_userdir_{}_{tag}",
+            std::process::id()
+        ));
+        let saves = root.join("save games");
+        std::fs::create_dir_all(&saves).unwrap();
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        std::fs::write(root.join("logs").join("game.log"), "").unwrap();
+        (root, saves)
+    }
+
+    fn has_warn(s: &AppSettings) -> bool {
+        s.validate().iter().any(|(_, l, _)| *l == CheckLevel::Warn)
+    }
+
+    /// The misconfiguration seen live (2026-09-21 group report): the saves
+    /// dir pointing at the HOI4 user directory itself, one level above
+    /// `save games`. The console batch file AND the snapshot both derive
+    /// their user dir from it, so the whole live channel fails silently —
+    /// the page must say so, as a WARNING (the player stays free to save).
+    #[test]
+    fn validate_warns_when_saves_dir_sits_one_level_above_save_games() {
+        let (root, _) = temp_user_dir("warn");
+        let s = AppSettings {
+            saves_dir: root.display().to_string(),
+            log_path: root.join("logs").join("game.log").display().to_string(),
+            ..Default::default()
+        };
+        let checks = s.validate();
+        assert!(
+            checks.iter().any(|(field, level, msg)| *field == "saves_dir"
+                && *level == CheckLevel::Warn
+                && *msg == "saves_user_dir_mismatch"),
+            "a one-level-off saves dir must warn: {checks:?}"
+        );
+        // The field's own line stays green — the directory DOES exist; the
+        // warning rides alongside it.
+        assert!(checks
+            .iter()
+            .any(|(f, l, m)| *f == "saves_dir" && *l == CheckLevel::Ok && *m == "dir_exists"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validate_stays_quiet_on_a_matching_layout() {
+        let (root, saves) = temp_user_dir("quiet");
+        let log = root.join("logs").join("game.log").display().to_string();
+        let ok = AppSettings {
+            saves_dir: saves.display().to_string(),
+            log_path: log.clone(),
+            ..Default::default()
+        };
+        assert!(!has_warn(&ok), "{:?}", ok.validate());
+        // Free-text tolerance: forward slashes, upper case and one trailing
+        // separator all describe the same two directories.
+        let loose = AppSettings {
+            saves_dir: format!("{}\\", saves.display().to_string().replace('\\', "/")),
+            log_path: log.replace('\\', "/").to_uppercase(),
+            ..Default::default()
+        };
+        assert!(!has_warn(&loose), "{:?}", loose.validate());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validate_mismatch_check_needs_both_paths() {
+        // Nothing to compare with a blank log path or a blank saves dir —
+        // the check stays silent instead of guessing.
+        let no_log = AppSettings {
+            saves_dir: r"C:\HOI4\save games".into(),
+            ..Default::default()
+        };
+        assert!(!has_warn(&no_log));
+        let no_saves = AppSettings {
+            log_path: r"C:\HOI4\logs\game.log".into(),
+            ..Default::default()
+        };
+        assert!(!has_warn(&no_saves));
     }
 }

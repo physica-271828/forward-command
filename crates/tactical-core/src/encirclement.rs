@@ -151,22 +151,46 @@ pub fn detect_encirclement(
     units: &[BattalionUnit],
 ) -> EncirclementLevel {
     let group = pocket_group(target, units);
-    if !group.is_empty()
-        && group_has_adjacent_enemy(&group, units)
-        && group_liberties(grid, &group, units) == 0
-    {
-        let hq_sustained = group
-            .iter()
-            .any(|&i| units[i].is_hq() && units[i].is_combat_effective());
-        // A live HQ keeps the pocket an organized defense — it is not
-        // surrounded at all, not even the light pressure tier. Kill the HQ
-        // (org 0 or annihilated) and the very same pocket seals.
-        return if hq_sustained {
-            EncirclementLevel::None
-        } else {
-            EncirclementLevel::Full
-        };
+    if let Some(level) = sealed_pocket_level(&group, grid, units) {
+        return level;
     }
+    per_unit_pressure(grid, target, units)
+}
+
+/// The pocket verdict when the group is sealed: `Full` for every member,
+/// or `None` when a live HQ anchors the pocket (§6.13). `None` return =
+/// the pocket is not sealed and the per-unit pressure rules decide.
+fn sealed_pocket_level(
+    group: &[usize],
+    grid: &HexGrid,
+    units: &[BattalionUnit],
+) -> Option<EncirclementLevel> {
+    if group.is_empty()
+        || !group_has_adjacent_enemy(group, units)
+        || group_liberties(grid, group, units) != 0
+    {
+        return None;
+    }
+    let hq_sustained = group
+        .iter()
+        .any(|&i| units[i].is_hq() && units[i].is_combat_effective());
+    // A live HQ keeps the pocket an organized defense — it is not
+    // surrounded at all, not even the light pressure tier. Kill the HQ
+    // (org 0 or annihilated) and the very same pocket seals.
+    Some(if hq_sustained {
+        EncirclementLevel::None
+    } else {
+        EncirclementLevel::Full
+    })
+}
+
+/// The per-unit pressure tier (§6.4): an ISOLATED target pressed by an
+/// adjacent enemy with free ≤ 2 or an opposite enemy pair is Partial.
+fn per_unit_pressure(
+    grid: &HexGrid,
+    target: &BattalionUnit,
+    units: &[BattalionUnit],
+) -> EncirclementLevel {
     let sides = enemy_adjacency_sides(target, units);
     if sides.is_empty() || has_adjacent_friend(target, units) {
         return EncirclementLevel::None;
@@ -176,6 +200,34 @@ pub fn detect_encirclement(
         return EncirclementLevel::Partial;
     }
     EncirclementLevel::None
+}
+
+/// Whole-roster form of [`detect_encirclement`] (parallel to `units`):
+/// a sealed pocket's verdict is shared by every member (same connected
+/// group, same liberties), so each POCKET walks its BFS once instead of
+/// once per member — the per-frame label pass's price.
+pub fn detect_encirclement_all(grid: &HexGrid, units: &[BattalionUnit]) -> Vec<EncirclementLevel> {
+    let mut out: Vec<Option<EncirclementLevel>> = vec![None; units.len()];
+    for i in 0..units.len() {
+        if out[i].is_some() {
+            continue;
+        }
+        let group = pocket_group(&units[i], units);
+        match sealed_pocket_level(&group, grid, units) {
+            // Sealed (or HQ-anchored) pocket: one verdict for the group.
+            Some(level) => {
+                for &j in &group {
+                    out[j] = Some(level);
+                }
+            }
+            // Open pocket: only this unit's own pressure tier decides;
+            // the other members judge on their own turn.
+            None => out[i] = Some(per_unit_pressure(grid, &units[i], units)),
+        }
+    }
+    out.into_iter()
+        .map(|l| l.unwrap_or(EncirclementLevel::None))
+        .collect()
 }
 
 /// Org attrition per turn for a given level (§6.4). Applied by the combat
@@ -218,6 +270,70 @@ mod tests {
             detect_encirclement(&g, &target, &units),
             EncirclementLevel::Full
         );
+    }
+
+    #[test]
+    fn batch_form_matches_per_unit_detection() {
+        // A sealed two-unit pocket, an isolated Partial, an HQ-anchored
+        // pocket, and untouched bystanders — the batch must equal the
+        // per-unit call on every slot.
+        let g = grid();
+        let mut units = vec![
+            // Sealed pocket of two defenders at (1,1)+(2,1).
+            u(0, Side::Defender, HexCoord::new(1, 1)),
+            u(1, Side::Defender, HexCoord::new(2, 1)),
+            // Isolated defender in an opposite pair → Partial.
+            u(2, Side::Defender, HexCoord::new(5, 5)),
+            // HQ-anchored sealed pocket at (8,8).
+            u(3, Side::Defender, HexCoord::new(8, 8)),
+        ];
+        let mut hq = BattalionUnit::new(
+            4,
+            "HQ",
+            UnitType::Headquarters,
+            Side::Defender,
+            HexCoord::new(8, 7),
+        );
+        hq.max_org = 40.0;
+        hq.org = 40.0; // a LIVE HQ anchors the pocket (§6.13)
+        units.push(hq);
+        for n in HexCoord::new(1, 1)
+            .neighbors()
+            .into_iter()
+            .chain(HexCoord::new(2, 1).neighbors())
+        {
+            if !units.iter().any(|x| x.position == n) {
+                units.push(u(90 + units.len(), Side::Attacker, n));
+            }
+        }
+        units.push(u(50, Side::Attacker, HexCoord::new(4, 5)));
+        units.push(u(51, Side::Attacker, HexCoord::new(6, 5)));
+        for n in HexCoord::new(8, 8)
+            .neighbors()
+            .into_iter()
+            .chain(HexCoord::new(8, 7).neighbors())
+        {
+            if !units.iter().any(|x| x.position == n) {
+                units.push(u(70 + units.len(), Side::Attacker, n));
+            }
+        }
+        let all = detect_encirclement_all(&g, &units);
+        assert_eq!(all.len(), units.len());
+        for (i, x) in units.iter().enumerate() {
+            assert_eq!(
+                all[i],
+                detect_encirclement(&g, x, &units),
+                "slot {i} ({:?} at {:?})",
+                x.unit_type,
+                x.position
+            );
+        }
+        // …and the pocket verdicts really are the interesting ones.
+        assert_eq!(all[0], EncirclementLevel::Full);
+        assert_eq!(all[1], EncirclementLevel::Full);
+        assert_eq!(all[2], EncirclementLevel::Partial);
+        assert_eq!(all[3], EncirclementLevel::None, "HQ-anchored pocket");
+        assert_eq!(all[4], EncirclementLevel::None, "the HQ itself");
     }
 
     #[test]

@@ -176,6 +176,10 @@ pub fn render_gate(
         cam.is_active = !minimized;
     }
     if minimized {
+        // Count the frame before returning: this IS the throttled case the
+        // FC_PERF ratio is supposed to expose, so skipping it would report
+        // a fully-throttled window as 100% full-speed.
+        tick_perf(&mut stats, false);
         std::thread::sleep(MINIMIZED_NAP);
         return;
     }
@@ -198,6 +202,8 @@ pub fn render_gate(
     } else {
         let since = gate.unfocused_since.get_or_insert_with(Instant::now);
         if since.elapsed() >= UNFOCUSED_GRACE {
+            // Throttled frame — counted like the minimized one above.
+            tick_perf(&mut stats, false);
             std::thread::sleep(IDLE_NAP);
             gate.last_tick = Instant::now();
             return;
@@ -252,28 +258,34 @@ pub fn render_gate(
     }
     gate.last_tick = Instant::now();
 
-    // Opt-in (FC_PERF=1) log: "[gate] full-speed 37/600 frames (6%)" once
-    // per 5 s — true idle should read ~0–5%, active play ~100%.
+    tick_perf(&mut stats, full_speed);
+}
+
+/// Opt-in (FC_PERF=1) log: "[gate] full-speed 37/600 frames (6%)" once per
+/// 5 s — true idle should read ~0–5%, active play ~100%. Every frame counts,
+/// including the ones the gate throttles (minimized / unfocused idles), or
+/// the ratio would be blind to exactly the frames it exists to measure.
+fn tick_perf(stats: &mut GateStats, full_speed: bool) {
     let perf = *stats
         .perf
         .get_or_insert_with(|| std::env::var_os("FC_PERF").is_some());
-    if perf {
-        let stats = &mut *stats;
-        stats.frames += 1;
-        stats.full_speed += u32::from(full_speed);
-        if stats
-            .window
-            .map(|t| t.elapsed() >= Duration::from_secs(5))
-            .unwrap_or(true)
-        {
-            let pct = stats.full_speed * 100 / stats.frames.max(1);
-            eprintln!(
-                "[gate] full-speed {}/{} frames ({pct}%)",
-                stats.full_speed, stats.frames
-            );
-            stats.frames = 0;
-            stats.full_speed = 0;
-            stats.window = Some(Instant::now());
-        }
+    if !perf {
+        return;
+    }
+    stats.frames += 1;
+    stats.full_speed += u32::from(full_speed);
+    if stats
+        .window
+        .map(|t| t.elapsed() >= Duration::from_secs(5))
+        .unwrap_or(true)
+    {
+        let pct = stats.full_speed * 100 / stats.frames.max(1);
+        eprintln!(
+            "[gate] full-speed {}/{} frames ({pct}%)",
+            stats.full_speed, stats.frames
+        );
+        stats.frames = 0;
+        stats.full_speed = 0;
+        stats.window = Some(Instant::now());
     }
 }

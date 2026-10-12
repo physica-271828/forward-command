@@ -1,6 +1,7 @@
 # Forward Command - install the HOI4 mod component.
 # Copies hoi4-mod\forward-command into the user's Paradox mod folder and writes
 # the .mod descriptor file that the launcher picks up.
+# NOTE: ASCII-only file, UTF-8 without BOM (PowerShell 5.1 reads .ps1 as ANSI).
 param(
     [switch]$Uninstall
 )
@@ -8,11 +9,37 @@ param(
 $ErrorActionPreference = "Stop"
 $modName = "forward-command"
 $src = Join-Path $PSScriptRoot "hoi4-mod\$modName"
-$paradoxDir = Join-Path $env:USERPROFILE "Documents\Paradox Interactive\Hearts of Iron IV"
+
+# Resolve the HOI4 user directory the way the game does - through the shell's
+# Documents folder. The literal %USERPROFILE%\Documents does not exist where
+# Documents is redirected (OneDrive) or localized (Turkish "Belgeler"), and a
+# silent install there leaves a mod the game never reads.
+$docCandidates = @()
+try {
+    $shellDocs = [Environment]::GetFolderPath('MyDocuments')
+    if ($shellDocs) { $docCandidates += $shellDocs }
+} catch { }
+if ($env:OneDrive) { $docCandidates += (Join-Path $env:OneDrive "Documents") }
+if ($env:USERPROFILE) { $docCandidates += (Join-Path $env:USERPROFILE "Documents") }
+$docCandidates = $docCandidates | Select-Object -Unique
+
+$paradoxCandidates = @($docCandidates | ForEach-Object {
+    Join-Path $_ "Paradox Interactive\Hearts of Iron IV"
+})
+# Prefer a location the game already uses; otherwise create the tree under the
+# shell's Documents (the launcher scans it whether or not the game has run).
+$paradoxDir = $paradoxCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $paradoxDir) {
+    $paradoxDir = $paradoxCandidates | Select-Object -First 1
+    Write-Host "HOI4 user directory not found yet - creating it at:"
+    Write-Host "  $paradoxDir"
+    Write-Host "  (looked in: $($paradoxCandidates -join ' | '))"
+} else {
+    Write-Host "HOI4 user directory: $paradoxDir"
+}
 $modDir = Join-Path $paradoxDir "mod"
 
 if (-not (Test-Path $src)) { throw "mod source not found: $src" }
-if (-not (Test-Path $paradoxDir)) { throw "HOI4 user directory not found: $paradoxDir" }
 New-Item -ItemType Directory -Force -Path $modDir | Out-Null
 
 $dest = Join-Path $modDir $modName
@@ -32,11 +59,9 @@ if ($Uninstall) {
     exit 0
 }
 
-# Copy mod folder
-if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-# Clean target first: Copy-Item -Recurse MERGES into an existing destination,
-# so files deleted from the source (e.g. d_tac_apply_damage.txt) would linger
-# in the installed mod forever.
+# Copy mod folder. Clean target first: Copy-Item -Recurse MERGES into an
+# existing destination, so files deleted from the source (e.g.
+# d_tac_apply_damage.txt) would linger in the installed mod forever.
 if (Test-Path $dest) {
     Remove-Item -Recurse -Force $dest
     Write-Host "removed stale $dest"

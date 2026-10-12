@@ -38,12 +38,15 @@ mod demo;
 mod deploycheck;
 mod diag;
 mod dirs;
+mod enterable;
 mod headless;
+mod jobguard;
 mod live;
 mod menu;
 mod naming;
 mod pickmap;
 mod preview;
+mod publish;
 mod scenario;
 mod script;
 mod settings;
@@ -54,6 +57,44 @@ mod theme;
 mod tray;
 mod version;
 mod window;
+
+/// Shared tactic-token parser for the CLI arms: `from_str` folds the 55
+/// vanilla tokens AND silently defaults on garbage, so garbage must be
+/// rejected explicitly or a typo'd card runs the default profile under the
+/// caller's name. `mode` names the arm in the error line.
+fn parse_tactic_arg(
+    mode: &str,
+    what: &str,
+    s: &str,
+    dflt: tactical_ai::CombatTactic,
+) -> tactical_ai::CombatTactic {
+    if s.trim().is_empty() {
+        return dflt;
+    }
+    let parsed = tactical_ai::CombatTactic::from_str(s);
+    let low = s.trim().to_ascii_lowercase();
+    if parsed == tactical_ai::CombatTactic::Default
+        && !matches!(low.as_str(), "default" | "basic_attack" | "basic_defend")
+    {
+        eprintln!("{mode}: bad {what} '{s}' (unknown tactic token)");
+        std::process::exit(2);
+    }
+    parsed
+}
+
+/// Settings for one CLI mode: settings.json with the `hoi4_dir=` /
+/// `saves_dir=` / `log_path=` overrides applied.
+///
+/// The battle window must run on THIS set, never on a fresh
+/// `AppSettings::load()`: the live injector derives its batch-file directory
+/// from `saves_dir` and the abort watcher from `log_path`, so a re-read
+/// would assemble from the override and then inject into the default HOI4
+/// user dir (the batch file lands where the console never looks).
+fn cli_settings(args: &[String]) -> settings::AppSettings {
+    let mut settings = settings::AppSettings::load();
+    apply_path_overrides(&mut settings, args);
+    settings
+}
 
 /// Apply `hoi4_dir=` / `saves_dir=` / `log_path=` CLI overrides onto loaded
 /// settings (child processes inherit the menu's configured paths).
@@ -119,6 +160,10 @@ fn main() {
         );
     }
     install_crash_log_hook();
+    // The runtime folder must carry `data/` before anything else touches a
+    // table or settings.json — a missing one otherwise surfaces as a
+    // table-load failure naming a path the player never chose.
+    dirs::require_data_dir();
     // Let battle child processes take the foreground later (the menu hides
     // to the system tray while a battle runs; without this grant Windows
     // blocks the child's SetForegroundWindow and the battle window opens
@@ -241,11 +286,13 @@ fn main() {
                     .find_map(|a| a.strip_prefix(&p))
                     .map(|s| s.to_string())
             };
-            let tactic = |t: Option<String>, dflt: tactical_ai::CombatTactic| {
-                t.as_deref()
-                    .map(tactical_ai::CombatTactic::from_str)
-                    .unwrap_or(dflt)
+            let tactic = |t: Option<String>, dflt: tactical_ai::CombatTactic, what: &str| match t {
+                Some(s) => parse_tactic_arg("--deploycheck", what, &s, dflt),
+                None => dflt,
             };
+            // hoi4_dir=/saves_dir=/log_path= ride the same overrides as
+            // --battle (parse_cli whitelists them; apply them here).
+            let settings = cli_settings(&args[2..]);
             let sc = match scenario::parse_cli(
                 &args[2..]
                     .iter()
@@ -259,24 +306,36 @@ fn main() {
                     std::process::exit(2);
                 }
             };
-            deploycheck::run(deploycheck::Opts {
-                scenario: sc,
-                atk_tactic: tactic(kv("atk_tactic"), tactical_ai::CombatTactic::Blitz),
-                def_tactic: tactic(kv("def_tactic"), tactical_ai::CombatTactic::ElasticDefense),
-            });
+            deploycheck::run(
+                deploycheck::Opts {
+                    scenario: sc,
+                    atk_tactic: tactic(
+                        kv("atk_tactic"),
+                        tactical_ai::CombatTactic::Blitz,
+                        "atk_tactic",
+                    ),
+                    def_tactic: tactic(
+                        kv("def_tactic"),
+                        tactical_ai::CombatTactic::ElasticDefense,
+                        "def_tactic",
+                    ),
+                },
+                &settings,
+            );
         }
         Some("--battle") => {
             // Agent automation + menu Debug Battle child: forge a tac_start
             // from key=value args and run the battle directly (no menu/stdin;
             // see scenario::parse_cli). hoi4_dir=/saves_dir= override settings.
-            let mut settings = settings::AppSettings::load();
-            apply_path_overrides(&mut settings, &args[2..]);
+            let settings = cli_settings(&args[2..]);
             match scenario::parse_cli(&args[2..]).and_then(|sc| scenario::assemble(&sc, &settings))
             {
                 // --autoplay: hands-free self-play through the production
                 // command path (agent hang repro — see autoplay.rs).
-                Ok(spec) if args.iter().any(|a| a == "--autoplay") => battle::run_autoplay(spec),
-                Ok(spec) => battle::run(spec),
+                Ok(spec) if args.iter().any(|a| a == "--autoplay") => {
+                    battle::run_autoplay(spec, &settings)
+                }
+                Ok(spec) => battle::run(spec, &settings),
                 // Non-zero exit so the menu's reaper surfaces stderr
                 // instead of a bare "battle closed".
                 Err(e) => {
@@ -293,8 +352,7 @@ fn main() {
             // unknown → Default); player_atk=0 flips the player to Defender
             // (the mod ships 1 until a verified attack/defend trigger
             // exists).
-            let mut settings = settings::AppSettings::load();
-            apply_path_overrides(&mut settings, &args[2..]);
+            let settings = cli_settings(&args[2..]);
             let get = |key: &str| {
                 args[2..].iter().find_map(|a| {
                     a.split_once('=')
@@ -317,7 +375,13 @@ fn main() {
             let player_atk = get("player_atk").as_deref() != Some("0");
             match province {
                 Some(p) => {
-                    match scenario::assemble_live(&settings, p, &tag, &dirs, tactic, player_atk) {
+                    // `seed=` makes the whole live battle reproducible —
+                    // map relief, flag anchors AND the combat dice, so the
+                    // headless replay below is bit-for-bit the window's.
+                    let seed = get("seed").and_then(|v| v.parse::<u64>().ok());
+                    match scenario::assemble_live(
+                        &settings, p, &tag, &dirs, tactic, player_atk, seed,
+                    ) {
                         Ok(spec) => {
                             // headless=1: AI-vs-AI the live-assembled battle
                             // instead of opening the window (same assembly,
@@ -340,16 +404,16 @@ fn main() {
                                     atk,
                                     def,
                                     num("turns", 144) as u32,
-                                    num("seed", 42),
+                                    // The assembly's own seed first: a
+                                    // seeded run must not re-roll the dice
+                                    // in the engine.
+                                    seed.unwrap_or_else(|| num("seed", 42)),
                                 );
                             } else {
                                 battle::run_live(
                                     spec,
-                                    battle::LiveCtx {
-                                        tag,
-                                        dry,
-                                        mod_ver,
-                                    },
+                                    battle::LiveCtx { tag, dry, mod_ver },
+                                    &settings,
                                 )
                             }
                         }
@@ -377,19 +441,9 @@ fn main() {
                     .find_map(|a| a.strip_prefix(&p))
                     .map(|s| s.to_string())
             };
-            let tactic = |t: Option<String>, dflt: tactical_ai::CombatTactic, what: &str| {
-                let Some(s) = t else { return dflt };
-                let parsed = tactical_ai::CombatTactic::from_str(&s);
-                // from_str folds the 55 vanilla tokens AND silently defaults
-                // on garbage — reject the garbage explicitly.
-                let low = s.trim().to_ascii_lowercase();
-                if parsed == tactical_ai::CombatTactic::Default
-                    && !matches!(low.as_str(), "default" | "basic_attack" | "basic_defend")
-                {
-                    eprintln!("--headless: bad {what} '{s}' (unknown tactic token)");
-                    std::process::exit(2);
-                }
-                parsed
+            let tactic = |t: Option<String>, dflt: tactical_ai::CombatTactic, what: &str| match t {
+                Some(s) => parse_tactic_arg("--headless", what, &s, dflt),
+                None => dflt,
             };
             // tactic= (1..9) is the --battle enemy-tactic index: in headless
             // it doubles as the DEFENDER card (the "enemy" of the attacker).
@@ -438,6 +492,9 @@ fn main() {
             };
             let turns = parse_or_die(0, "turns").unwrap_or(12) as u32;
             let seed = parse_or_die(1, "seed").unwrap_or(42);
+            // hoi4_dir=/saves_dir=/log_path= ride the same overrides as
+            // --battle (parse_cli whitelists them; apply them here).
+            let settings = cli_settings(&args[2..]);
             // Seed unification: the positional seed drives the COMBAT dice;
             // when no seed= k=v rides along, the same seed must also feed
             // the map/flag RNG — otherwise identical CLI seeds produced
@@ -447,17 +504,20 @@ fn main() {
             if sc.seed.is_none() {
                 sc.seed = Some(seed);
             }
-            headless::run(headless::Opts {
-                scenario: sc,
-                atk_tactic: tactic(
-                    kv("atk_tactic"),
-                    tactical_ai::CombatTactic::Blitz,
-                    "atk_tactic",
-                ),
-                def_tactic,
-                turns,
-                seed,
-            });
+            headless::run(
+                headless::Opts {
+                    scenario: sc,
+                    atk_tactic: tactic(
+                        kv("atk_tactic"),
+                        tactical_ai::CombatTactic::Blitz,
+                        "atk_tactic",
+                    ),
+                    def_tactic,
+                    turns,
+                    seed,
+                },
+                &settings,
+            );
         }
         Some("--demo") => demo::run(),
         // No args = main menu (was: demo battle). An unknown mode is a CLI
@@ -468,5 +528,35 @@ fn main() {
             eprintln!("forward-command: unknown mode '{other}' (try no args, --demo, --battle, --live, --headless, --preview, --deploycheck, --debug)");
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_overrides_apply_and_skip_empty_values() {
+        // The CLI path keys are the only way a child process learns the
+        // menu's configured paths; an empty value must leave the stored one
+        // alone (a wipe would send the injector to a relative batch path).
+        let mut s = settings::AppSettings {
+            hoi4_dir: "D:/base/hoi4".to_string(),
+            saves_dir: "D:/base/saves".to_string(),
+            log_path: "D:/base/game.log".to_string(),
+            ..Default::default()
+        };
+        apply_path_overrides(
+            &mut s,
+            &[
+                "province=13238".to_string(),
+                "hoi4_dir=".to_string(),
+                "saves_dir=D:/alt/saves".to_string(),
+                "log_path=".to_string(),
+            ],
+        );
+        assert_eq!(s.hoi4_dir, "D:/base/hoi4", "empty value wiped the path");
+        assert_eq!(s.saves_dir, "D:/alt/saves");
+        assert_eq!(s.log_path, "D:/base/game.log", "empty value wiped the path");
     }
 }

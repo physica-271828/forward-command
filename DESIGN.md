@@ -73,7 +73,7 @@ forward-command/                  # v0.2.0 — current line: 3D renderer + live 
 │   ├── tactical-ai/              # Tactic-driven enemy AI (planner + doctrine cards)
 │   ├── tactical-inject/          # Win32 console injection (SendInput)
 │   ├── tactical-listen/           # notify-based game.log tailer, JSON Lines parsing
-│   ├── tactical-locale/          # HOI4-style en/zh localization (§15), zero deps
+│   ├── tactical-locale/          # HOI4-style en/zh/ru localization (§15), zero deps
 │   ├── tactical3d-render/        # Bevy 0.15 + bevy_egui 0.31 3D renderer & UI
 │   └── tactical3d-bin/           # Binary `forward-command` (menu/tray, demo, live,
 │                                 #   headless, preview, battle scripts)
@@ -129,8 +129,10 @@ forward-command/
 └── localisation/
     ├── english/
     │   └── tac_l_english.yml
-    └── simp_chinese/
-        └── tac_l_simp_chinese.yml
+    ├── simp_chinese/
+    │   └── tac_l_simp_chinese.yml
+    └── russian/
+        └── tac_l_russian.yml
 ```
 
 Planned but not yet implemented: `interface/tac_overlay.gui` (scripted GUI
@@ -466,10 +468,14 @@ The handshake makes a mismatch visible, never blocking play:
      data exists), filled nearest-first, skipping River/Water. An urban
      province without any VP entry still gets one small town as VP=1.
      Each VP city carries a floating name label (VICTORY_POINTS_<pid> from
-     the UI language's victory_points yml — simp_chinese for a Chinese
-     session, english otherwise/fallback; rendered as plain
+     the UI language's victory_points yml when the install ships it
+     (simp_chinese / russian), english otherwise/fallback; rendered as plain
      white text with a black outline).
     - River edges along edges matching adjacencies.csv data (cosmetic strips).
+      The marked edge is the PROVINCE boundary — a hex carries the bit when
+      its neighbour across the edge belongs to a different province (or
+      leaves the grid) — so on stitched maps (step 3b) the river lands on
+      the battle↔origin seam and the staging strip's outer edge stays dry.
  8b. Per-hex ELEVATION noise: a deterministic
     smooth value-noise field (tactical-core noise.rs, two octaves, ~8-hex
     base wavelength, keyed by the elevation seed) modulates the terrain
@@ -711,11 +717,11 @@ Pipeline status:
 
 | Section | Fields Extracted |
 |---------|-----------------|
-| `division_template` | `regiments` (subunit type + x/y), `support`; `need` is **not parsed** — equipment requirements come from `unit_templates.json` `needs` instead |
-| `division` | `division_template` name + `division_template_id`, `location` (province), `organization`, `strength`, `experience`, `equipment` (counts — both the legacy `token = count` form and the 1.19 `equipment = { id, amount }` id form, the latter kept per-id as the division's design breakdown), `entrenchment`, `supply_status`; auto-name token pair `division_name={type,name_order}` + the template's `division_names_group` (resolved live against `common/units/names_divisions/*.txt` at assembly — `%d` decimal / `%s` Roman, `ordered[N]` else `fallback_name`; player `override` renames win; `type` is always 0 in 1.19.2) |
+| `division_template` | `regiments` (subunit type + x/y), `support` + `regimental_support` (1.19's per-regiment company column — merged into the support list, one attachment per save count), `is_army_hq` (army-HQ formation flag); `need` is **not parsed** — equipment requirements come from `unit_templates.json` `needs` instead |
+| `division` | `division_template` name + `division_template_id`, `location` (province), `organization`, `strength`, `experience`, `equipment` (counts — both the legacy `token = count` form and the 1.19 `equipment = { id, amount }` id form, the latter kept per-id as the division's design breakdown), `entrenchment`, `army_current_supply_ratio`/`max_supply`/`fuel` (§6.7 logistics); auto-name token pair `division_name={type,name_order}` + the template's `division_names_group` (resolved live against `common/units/names_divisions/*.txt` at assembly — `%d` decimal / `%s` Roman, `ordered[N]` else `fallback_name`; player `override` renames win; `type` is always 0 in 1.19.2) |
 | `equipments` (root registry) | Every equipment item by its globally unique id: token, design `name`, `is_frame`, designer `modules` (slot → module token) and `upgrades` levels (token → level). The same token appears once per country/design — matching is by id. Designer-era tank chassis tokens carry no attack stats of their own (the gun is a module pick), so the module/upgrade fields are what make live tank stats computable (§5.3 designer path) |
-| `technologies` | List of researched tech tokens (parsed; doctrine progress tokens are mixed into this same list) |
-| `active_ideas` | Active national spirit tokens (parsed; no consumer yet) |
+| `technologies` | Researched tech tokens (doctrine progress tokens are mixed into this same list). Real 1.19 saves nest the ledger: the country-level `technology` block's `technologies` child carries one key per tech token (each with its own sub-object) — the parser descends into it; the flat country-level key stays accepted for older fixtures |
+| `active_ideas` | Active national spirit tokens — real 1.19 saves keep them at `politics.ideas` (a bare token list), which the parser descends into; the flat country-level `active_ideas`/`ideas` keys stay accepted for older fixtures. Consumed by the national org and combat modifier aggregations |
 | `doctrine` | Doctrine progress appears as tokens inside `technologies`; consumed via `DoctrineTable::researched` |
 | `leader` | Unit leaders: `theatres` army/army-group membership + `leader` ids → `character` corps_commander/field_marshal skills+traits (parsed); the political country-leader record is only used for its traits |
 | `country.modifiers` | Accumulated modifier map (**not parsed**) |
@@ -730,6 +736,28 @@ division experience (Green −25% … Veteran +75%, attack side only) and unit
 leader bonuses (±2.5% per skill point, FM halved; per-type trait factors)
 are all wired into the assembly below. Tech-category percentage bonuses
 remain unmodelled (resolve to 1.0 — no tech-modifier table is extracted).
+
+**Template resolution & support-company kinds.** Templates resolve through
+TWO indexes: by name and by id (`division_template_id`). The name index
+skips nameless templates (1.19 army-HQ formations carry
+`localization_key=` instead of `name=` — hundreds per save — so no
+`by_name[""]` poison); the id index carries EVERY template, so an army-HQ
+division resolves its real composition by id and fields like any other
+division (`hq_*` battalions are ordinary table entries; the `is_army_hq`
+flag rides along for the record). Every vanilla support-company token —
+the divisional column, the regimental column and the army-HQ `hq_*`
+companies — maps to its attachment kind explicitly (§6.3 bonuses). The
+eight named tokens with their own modelled effect rows (flame tanks ×3,
+super-heavy armor, land cruiser, helicopter brigade,
+blackshirt/sturmtruppe — §6.3/§6.8) attach with the MilitaryPolice kind,
+but their token row REPLACES the family default; the two HQ placeholder
+companies (`hq_support_company`, `hq_specops`) carry no row of their own
+and ride the MilitaryPolice family row. All of them keep their own
+display names (`support_name.*` locale keys); a token outside the table
+(modded content) attaches as the same placeholder and is logged once per
+division. A surviving company entry attaches one attachment per save
+COUNT (the equipment pool charges `need × count`, so a 3-battery
+regimental entry fields three attachments, round-robin over the hosts).
 
 ```
 # HOI4 equipment stats are
@@ -759,10 +787,56 @@ battalion.armor = max(equipment_stats[*].armor) × tech_armor_modifier
 battalion.piercing = weighted_avg(equipment_stats[*].piercing, equipment_count)
 battalion.hardness = weighted_avg(equipment_stats[*].hardness, equipment_count)
 battalion.speed = battalion-type speed table (tactical-core/src/unit.rs,
-                  HOI4-aligned; §6.2 abolished AP). Equipment min-speed is
-                  deliberately NOT applied (speed comes from the chassis
-                  table only; the equipment-speed statistic is not computed).
+                  HOI4-aligned; §6.2 abolished AP), scaled by the mobility
+                  shortfall below. Equipment min-speed is deliberately NOT
+                  applied (speed comes from the chassis table only; the
+                  equipment-speed statistic is not computed).
 ```
+
+**Understrength fielding rules.** HOI4 lets a
+division with a sliver of equipment fight at near-zero stats; tactically
+such a battalion would still see, capture flags and seal pockets at full
+effect, so the assembly applies explicit per-equipment gates instead
+(vanilla's understrength scaling stays as the stat pipeline above):
+
+```
+field_ratio(s) = min(division manpower ratio, min over archetypes a of fill_a(s))
+                 # fill_a = the archetype's apportioned share of the
+                 # division's stock, min(1, stock_a / total_need_a)
+```
+
+- Battalion group: `field_ratio < 0.10` → the whole group does NOT spawn
+  (`MIN_BATTALION_FIELD_RATIO`; no zero-strength ghosts — a non-existent
+  unit feeds no vision, flag capture or encirclement).
+- Support company: `field_ratio < 0.20` → the company never attaches
+  (`MIN_COMPANY_FIELD_RATIO`).
+- HQ: strength rides min(manpower ratio, division equipment fill) with the
+  fill counted over the SURVIVING battalion groups' needs only; a division
+  whose battalions all fail the bar fills 0 → 0-strength HQ (§6.13).
+
+Support companies' needs join the same division pool as line battalions
+(`total_need` per archetype covers both) — they really consume stock now,
+slightly diluting line fills the way HOI4's division-level pool does.
+Apportionment then runs twice: a first pass over every subunit derives the
+per-archetype fills and the field verdicts above, a second re-apportions
+the pool over the survivors only, so the gear a dropped group would have
+drawn flows back to it (fills only rise; one pass converges, no cascade,
+no second verdict).
+
+A battalion short of its chassis's MOBILITY equipment slows toward
+marching pace in 20% tiers: `tier = ceil(fill × 5) / 5` (fill > 0;
+`tier(0) = 0`), `speed_kmh = 4 + (base − 4) × tier`, applied only when
+base > 4 (foot, cavalry and horse-towed units have no mobility equipment
+and never slow). The mobility archetype is picked by chassis:
+TruckTowed/Wheeled → `motorized_equipment`, Halftrack →
+`mechanized_equipment`, tank weight classes → the unit type's
+`*_tank_chassis` fallback archetype; when the template never lists that
+archetype, the battalion's scarcest listed fill stands in. The 0% rung
+(`tier(0) = 0` → the 4 km/h infantry pace) is a function-level fallback:
+the field threshold guarantees a fielded battalion's mobility fill is at
+least 10% (its scarcest listed fill clears the bar), so the assembly
+floor is tier 0.2 — `4 + 0.2 × (base − 4)`, i.e. 5.6 km/h on a 12 km/h
+chassis.
 
 **Designer path (tank designs).** Since 1.11 a save's tank
 equipment is a bare chassis token (`light_tank_chassis_2`, …) whose vanilla
@@ -787,20 +861,21 @@ them); multiply zones touch armor/defense/breakthrough/speed/piercing
 (`tactical-save::MULTIPLY_ON_CHASSIS_BASE` selects whether multipliers
 ride the chassis base alone or base+adds — the in-game designer applies
 them to the total). Of the design stats the battalion takes the attack
-triple and the armor/hardness bases (armor keeps the max rule, hardness
-the count-weighted average); defense/breakthrough keep the static row
-values. Unknown module/upgrade tokens (modded content) log a warning and
-count 0 without failing the design; a design whose chassis token is
-missing from the equipment table falls back to the static equipment row,
-and saves without the registry (legacy formats) run the token-count path
-unchanged.
+triple, the armor/hardness bases (armor keeps the max rule, hardness the
+count-weighted average) and the defense/breakthrough pair — the designer
+chassis rows carry 0 for the whole family, the values live in the
+turret/armor module picks and upgrade levels. Unknown module/upgrade
+tokens (modded content) log a warning and count 0 without failing the
+design; a design whose chassis token is missing from the equipment table
+falls back to the static equipment row, and saves without the registry
+(legacy formats) run the token-count path unchanged.
 
 **Tactical buffs** (generated in-wargame only): entrenchment, terrain cover, encirclement attrition, supply degradation, support company adjacency buffs, commander effects after promotion in battle. (The flank damage bonus was retired, §6.4.)
 
 ### 5.4 Pre-Extracted Data Tables (revised)
 
 #### equipment_stats.json
-Complete extraction from `common/units/equipment/*.txt`, `dlc/*/common/units/equipment/*.txt` (342 entries, including the 66 tank variant-family chassis rows synthesized from `duplicate_archetypes` — see §5.3 designer path; those rows copy their source chassis tier and carry `family` + the family's `categories`/hardness override). Each entry carries a plural `categories` list plus `group` and `active` fields:
+Complete extraction from `common/units/equipment/*.txt` (342 entries, including the 66 tank variant-family chassis rows synthesized from `duplicate_archetypes` — see §5.3 designer path; those rows copy their source chassis tier and carry `family` + the family's `categories`/hardness override). Each entry carries a plural `categories` list plus `group` and `active` fields:
 
 ```json
 {
@@ -820,11 +895,15 @@ Complete extraction from `common/units/equipment/*.txt`, `dlc/*/common/units/equ
 ```
 
 #### unit_templates.json
-From `common/units/*.txt` battalion definitions. Top level is split into
-`line_battalions` (68 entries) and `support_companies` (89 entries) — note
-that HOI4's `artillery_brigade`, `anti_tank_brigade`, `anti_air_brigade`,
-`rocket_artillery_brigade`, `motorized_rocket_brigade`, etc. are filed under
-the `support_companies` key in this table:
+From `common/units/*.txt` battalion definitions. Naval and air sub-units
+are excluded outright (their `type` list); of the land units, anything
+with `combat_width > 0` is a line unit — the `*_brigade` artillery/AT/AA
+forms included (their `combat_support` group names are NOT the support
+column) — zero-width `group = support` entries (the divisional AND
+regimental support columns) are support companies, and the rest (railway
+guns) stays line. Top level is split into `line_battalions` (56 entries)
+and `support_companies` (67 entries); lookup consults both buckets, so the
+split is informational:
 
 ```json
 {
@@ -841,7 +920,7 @@ the `support_companies` key in this table:
     }
   },
   "support_companies": {
-    "artillery_brigade": { "max_strength": 0.6, "max_organisation": 40, ... }
+    "engineer": { "max_strength": 2, "max_organisation": 20, ... }
   }
 }
 ```
@@ -1073,12 +1152,12 @@ Mobility classes: **leg** (infantry, cavalry, bicycle, support companies) vs **m
 - **Contact stop**: stepping into a hex adjacent to an enemy consumes the order and halts the unit (assault is a separate decision next turn). The halt is **symmetric**: adjacent enemies with marching orders of their own stop too.
 - **Interception**: if the *next* path hex itself is enemy-held (fog-hidden, or the enemy marched onto the route), the unit halts in front of it and **both** orders are spent — the simple ambush rule; a red "Intercepted!" popup marks both units.
 - **Fog-limited pathing**: player-issued orders and the ETA display are computed against the player's view — enemies hidden by fog neither block routes nor project ZOC. Execution stays omniscient (contact/interception above), so nothing leaks but ambushes happen.
-- One battalion per hex: paths route **around** occupied hexes (friendly or enemy) but may legally *end* on a friendly-occupied hex (the occupant may march away first). If the next hex is still friendly-occupied at execution, the unit waits (progress kept), pops an orange "Congested", and retries with a detour (≤1.5× remaining cost) next turn.
+- One battalion per hex: paths route **around** occupied hexes (friendly or enemy) but may legally *end* on a friendly-occupied hex (the occupant may march away first). If the next hex is still friendly-occupied at execution, the unit waits (progress kept), pops an orange "Congested", and retries with a detour (≤1.5× remaining cost) next turn. Hours banked on the old step carry to the detour but are clamped to the new first step's cost: an over-paid step completes, yet the surplus never refunds into the turn's budget — the end-of-turn advance stays capped at `speed_kmh / 6` km.
 - **One action per turn** per unit (`acted` flag): assault, fire support, emplace, or limber each consume the turn's action. A unit that acted does not march at the end of that turn.
 - Assault consumes the unit's turn and cancels its move order. Fire support consumes the turn's action but not the order (a firing unit simply does not march that turn — towed guns are emplaced anyway and cannot march).
 - Selected-unit ETA: remaining travel time of the standing order, displayed in whole turns (§9.2).
 - **Waypoint chains**: holding Shift while right-clicking APPENDS the destination to the standing move order as the next waypoint of a multi-leg chain; a plain right-click replaces the whole chain. The chain lives inside the order, so every "order is over" event (contact, interception, stand-by, Hold, emplacement, attack supersede, retreat) clears it with the same single `move_order = None`, and the manual-override lifecycle spans the chain. Each leg is RE-PLANNED from the live board when the previous leg completes — a queued route is never replayed, and an intermediate waypoint is silent (no arrival log, no release) until the LAST leg ends the order. A leg completed while the turn's march budget remains keeps the unit marching into the next leg the same turn.
-- **Player progress retention**: right-clicking the CURRENT destination re-affirms the standing order untouched (silent — the AI side's same rule); re-pointing to a NEW destination keeps the invested hours while the fresh route shares the first step; only a genuinely different first step restarts the progress bar.
+- **Player progress retention**: right-clicking the CURRENT destination re-affirms the standing order untouched (silent — the AI side's same rule); re-pointing to a NEW destination keeps the invested hours while the fresh route shares the first step. A genuinely different first step no longer loses them: the abandoned first step's hours bank into the battalion's **step-progress memory**, and pointing back onto that first step — the A→B→A change of mind, or a third destination whose route starts on the same hex — restores them, clamped to the step's current cost, and consumes the memory. Stand-by banks the same way, so a cancelled march's progress returns on re-issue. The memory holds only the most recently abandoned investment, never decays across turns, and lapses once the unit no longer stands beside the remembered hex.
 
 | Action | Cost |
 |--------|------|
@@ -1354,15 +1433,32 @@ destruction is possible, and a dying unit still shoots back.
 
 #### Support Companies (attachments; revised)
 
-Support companies are NOT map units: they attach to a battalion (one-shot
-stat bonuses baked in: AT +4 hard/+10 piercing, artillery +5 soft, AA +1
-soft, recon +1 sight; ongoing: hospital ×0.75 str damage taken, maintenance
-+0.5 str/full turn). The host dies → attachments die. In live mode the
-division's companies attach round-robin across its battalions.
-Engineer, logistics and military-police companies attach the same
-way but have NO tactical effect yet (planned — not yet implemented).
-Signal companies got their effect (§6.13): the company rides
-the division HQ and extends its command aura radius (3 → 6 km).
+Support companies are NOT map units: they attach to a battalion (the host
+dies → attachments die). In live mode the division's companies attach
+round-robin across its battalions. Every effect is **writeback-safe** —
+the damage channel back to HOI4 only ever accumulates positive damage, so
+a support effect must be one of three kinds: **less positive damage
+taken**, **more output dealt**, or **a rule read** (movement, surrender,
+attrition, …). Mid-battle strength recovery is banned (a healing effect
+would create strength the writeback could never express and oversell the
+sync ledger); the HQ aura's org regen (§6.13) is the sole exception —
+HOI4 regenerates org out of combat natively, so org returned in battle
+never invents value. Damage reductions live in the tactical layer only —
+the writeback books the DELIVERED (pre-reduction) amount exactly as
+before; "safe" means an effect never invents value, not that the ledger
+reflects the reduction.
+
+Effects resolve per attachment, token first: the named companies (§6.8
+table) key on their HOI4 save TOKEN, and a token row REPLACES the
+kind-family default the token maps to — a flame tank is no military
+police, so the eight named tokens never inherit the MilitaryPolice family
+effects. Everything else rides its SupportKind family row. One-shot stat
+bonuses (attack / piercing / sight / armor / hardness / breakthrough /
+engine speed) are baked into the host at attach and divided back out on
+the deployment-phase re-assignment detach; ongoing effects are queried at
+the point of use (damage application, movement pricing, surrender
+conversion). Signal companies ride the division HQ (§6.13) and extend its
+command aura radius (3 → 6 km). Full table: §6.8 Support Companies.
 
 ### 6.4 Encirclement (progressive attrition model; redesigned)
 
@@ -1371,9 +1467,9 @@ The flanking damage bonus is **retired** — a multi-directional attack is alrea
 | Level | Condition | Effects |
 |-------|-----------|---------|
 | **Partial encirclement** | an isolated unit with ≤2 free adjacent edges, or an opposite adjacent enemy pair | -2.5% max org/turn |
-| **Full encirclement** | a sealed pocket (0 liberties) with an adjacent enemy and NO live HQ | -5% max org/turn. Cannot retreat — org at 0 = surrender instead of retreat. The ring is re-read every full turn for every unresolved unit, so a rout broken before the ring closed surrenders too. Equipment capture is out of scope: the injection channel cannot express it |
+| **Full encirclement** | a sealed pocket (0 liberties) with an adjacent enemy and NO live HQ | -5% max org/turn. Cannot retreat — org at 0 = surrender instead of retreat (a military-police host refuses: it routs in place until annihilated; its pocket-mates are unaffected). The ring is re-read every full turn for every unresolved unit, so a rout broken before the ring closed surrenders too. Equipment capture is out of scope: the injection channel cannot express it |
 
-The pace follows the 10-minute turn (§8.1): a static partial pocket collapses in ~40 turns (≈7 strategic hours), a full pocket in ~20 (≈3.3 h) — encirclement is a siege clock, not a death sentence. The HQ command aura (+2% max org/turn, §6.13) visibly sustains a pocket. Board status icons (§9): blue **↓** = partial attrition, blue **↓↓** = full attrition, red **↑** = HQ-aura recovery.
+The pace follows the 10-minute turn (§8.1): a static partial pocket collapses in ~40 turns (≈7 strategic hours), a full pocket in ~20 (≈3.3 h) — encirclement is a siege clock, not a death sentence. The HQ command aura (+2% max org/turn, §6.13) visibly sustains a pocket. Attachments modulate the attrition at both levels: a logistics company multiplies the loss ×0.5, military police ×0.9, both stacking multiplicatively (→ ×0.45). Board status icons (§9): blue **↓** = partial attrition, blue **↓↓** = full attrition, red **↑** = HQ-aura recovery.
 
 ### 6.5 Zone of Control (ZOC; revised)
 
@@ -1404,6 +1500,7 @@ The pace follows the 10-minute turn (§8.1): a static partial pocket collapses i
 - Move Cost is the leg-class value; **motor-class units pay 1 + (cost − 1) × 1.5** (the excess over the 1 km baseline is multiplied, §6.1 mobility classes).
 - **Road network**: a road or rail hex costs `road_base_km` (default 1.0) plus `road_elev_step_km` (default 0.3) per POSITIVE elevation level of the entered hex — the terrain type under the pavement is irrelevant (plains, forest, jungle, desert, marsh and village roads all pay the same; hexes at or below sea level clamp to the base). Relief is the only road surcharge left: hill roads 1.3/1.6, mountain roads 1.9/2.2. Every mobility class pays it (the motor excess multiplier is waived, so vehicles belong on roads); a FORD (road across River without a deck) carries no bonus and prices like open river. Every other hex pays the off-road row: terrain cost plus the flat `off_road_surcharge_km` (default 0.5) for legs, motor amplified through the same excess multiplier (motor = 1 + (base + 0.5 − 1) × 1.5 — the rougher the ground, the worse for vehicles). Urban streets are roads by definition (no surcharge). A bridge deck costs a flat 1.0 for every class (movement-only, no combat modifiers), and a bridged river edge waives the +2 km crossing surcharge. A factory district grants village-grade cover (+30%) whatever the base terrain says.
 - **River hexes are fords, not roads** (revised rule): crossable and may be held, but never deployable; a unit standing in a river hex is exposed via the −50% cover above — the old ×2 damage special case is retired (one number per terrain). **Width bands are PURE GEOMETRY**: a Medium/Large river is a WIDER strip (2/3 hexes, §4.2) of the SAME ford — every river hex keeps the uniform rows above, so the crossing difficulty difference comes from wading two or three hexes of water, never from per-band numbers. The band only names the hover terrain (小河/中河/大河).
+- **Engineer terrain craft**: for a battalion with an attached engineer company, the off-road EXCESS over the 1 km baseline is ×0.75 — forest leg 2.0 → 1.75, mountain leg 3.5 → 2.875, motor amplified through its own multiplier as usual. The baseline kilometre itself and every road / urban-street / bridge price are untouched (§6.8 Support Companies).
 - River *edges* (from `adjacencies.csv`) instead levy a flat **+2 km surcharge** on the crossing step only.
 - **Water** is the only fully impassable terrain (map border / coastal flavour from the province bitmap) — no combat rules.
 - **Line of sight**: terrain no longer hard-blocks LOS except **Urban** (buildings; street fighting). Mountain relief is carried by the per-hex elevation field (§4.2 step 8b): an intermediate hex blocks only when it stands **strictly higher than BOTH endpoints** (ridge rule — peaks see over saddles, valleys are shut in, equal elevation never blocks). Sight range from the table above stays the HARD CAP (§6.1): LOS only shortens it, never extends it.
@@ -1414,18 +1511,46 @@ The pace follows the 10-minute turn (§8.1): a static partial pocket collapses i
   - **Direct-fire line**: a flat trajectory (tanks, AT — range > 1, not indirect) cannot shoot over a ridge — an intermediate hex strictly higher than both endpoints makes the shot impossible (reported as `target_lost`; the AI never picks such targets, and indirect fire never goes through this check).
   - The river bed (elevation −1) reads as defilade against bank-side guns — a ford target halves remote fire (netting the −50% exposure to ×0.75), while a melee assault from the bank fires DOWN at ×1.15 on top of the exposure (×1.725): the crossing stays dangerous up close, the far bank stays partly sheltered from long range.
 
-### 6.7 Supply (planned — not yet implemented; revised)
+### 6.7 Supply & Fuel (strategic layer implemented; in-battle progression planned)
 
-The mechanic below is designed but NOT wired up: the save parser reads
-`division.supply_status` into the model, and no logic crate consumes it —
-there is no supply buff/debuff, no encirclement supply reduction, and no
-out-of-supply penalty in the tactical battle today.
+Every HOI4 division's strategic logistics state folds into the tactical stat
+block at assembly (§5.3), sourced from the save alone — no mod or protocol
+input. Both ratios ride on `BattalionUnit` for the hover panel (Supply % /
+Fuel %, yellow below 50%, red below 25%).
 
-- Strategic-level supply status (from `division.supply_status` in save) provides a global buff/debuff to all battalions of that division.
-- Encirclement progressively reduces effective supply:
-  - Partial encirclement: -20% supply effectiveness per turn (caps at -60%).
-  - Full encirclement: -40% per turn (caps at -100%).
-- Zero supply: -25% attack, -35% defense (matching HOI4 out-of-supply penalties).
+- **Supply storage ratio s** = `division.army_current_supply_ratio /
+  division.max_supply`, clamped 0..1; missing fields (legacy saves,
+  synthetic fixtures) read as full. Penalty driver t = 1 − s, linear:
+
+  | Effect | Mapping | Zero point | vanilla anchor |
+  |--------|---------|-----------|----------------|
+  | Max org | × (1 − 0.65·t) | ×0.35 | `SUPPLY_ORG_MAX_CAP` |
+  | Attack (soft/hard) | × (1 − 0.25·t) | −25% | spec ruling |
+  | Defense / breakthrough | × (1 − 0.35·t) | −35% | spec ruling |
+  | Speed | × (1 − 0.8·t) | ×0.2 | `OUT_OF_SUPPLY_SPEED` |
+
+  The cap shrinks the org CEILING only: current org mirrors the save's
+  absolute value — HOI4 already applies the cap in-game, so the absolute-form
+  org ratio divides by the capped max and a starved division is never
+  double-dipped (org 15 of capped 21 reads 71%, not 25%).
+
+- **Fuel reserve ratio f** = `division.fuel / (hourly draw × 96 h)`, where
+  the draw = Σ(equipment `fuel_consumption` × on-hand count) × 0.5
+  (`ARMY_FUEL_COST_MULT`); no draw (leg divisions) or a missing field reads
+  as full. Penalties ramp in below `FUEL_PENALTY_START_RATIO` 0.25
+  (t_f = 1 − f/0.25, floored at 0):
+  - Fuel-burning equipment rows contribute their stats × (1 − 0.9·t_f) —
+    ×0.1 when dry (`OUT_OF_FUEL_EQUIPMENT_MULT`). Leg gear is untouched:
+    pure infantry is immune.
+  - A battalion that drew fuel-burning equipment runs × (1 − 0.6·t_f)
+    speed — ×0.4 dry (`OUT_OF_FUEL_SPEED_MULT`), stacked on the supply
+    speed factor.
+  - Designer capacity modules (expanded fuel tanks) are not modelled —
+    rare picks read slightly richer than reality.
+
+In-battle supply progression remains a future item: encirclement reducing
+effective supply per turn (partial −20%/turn, cap −60%; full −40%/turn, cap
+−100%) with Logistics-company mitigation.
 
 ### 6.8 Abilities & Interactions (revised)
 
@@ -1433,7 +1558,8 @@ out-of-supply penalty in the tactical battle today.
 
 Support companies are **attachments**, not map units — a company
 attaches to a battalion (same hex, no model of its own) and rides with it
-until the host dies (§6.3 Support Companies). Current effects:
+until the host dies (§6.3 Support Companies: the effect architecture and
+the writeback-safe rule). Kind-family effects:
 
 | Company | Effect |
 |---------|--------|
@@ -1441,10 +1567,24 @@ until the host dies (§6.3 Support Companies). Current effects:
 | Artillery | +5 soft attack (baked in) |
 | Anti-Air | +1 soft attack (baked in) |
 | Recon | +1 sight range (baked in) |
-| Field Hospital | ×0.75 strength damage taken (ongoing) |
-| Maintenance | +0.5 strength regen per full turn (ongoing) |
+| Field Hospital | ×0.75 strength damage taken (ongoing, multiplicative) |
+| Maintenance | ×0.85 strength damage taken (ongoing); +10% road speed for an engine-carriage host (baked in; foot and horse-towed hosts unchanged) |
 | Signal | rides the division HQ; command aura radius +3 km (3→6) (§6.13) |
-| Engineer / Logistics / Military Police | attach the same way; no tactical effect yet (planned — not yet implemented) |
+| Engineer | off-road terrain penalty −25% (the excess over the 1 km baseline ×0.75, baked in; road/urban/bridge pricing untouched, §6.6); entrenchment contribution ×1.5 (ongoing — fieldworks, §6.8 Hold) |
+| Logistics | encirclement attrition ×0.5 (ongoing, §6.4) |
+| Military Police | org damage taken ×0.9 in combat (ongoing — command-collapse and flag-collapse org losses are command mechanics and not multiplied); encirclement attrition ×0.9 (stacks with Logistics → ×0.45); the host never surrenders — fully encircled at org 0 it routs instead of giving up (§6.4) |
+
+Named-company token rows (§6.3 — each token row REPLACES the
+MilitaryPolice family default these companies map to):
+
+| HOI4 token | Effect |
+|------------|--------|
+| light/medium/heavy_flame_tank | +3 breakthrough (baked in) |
+| super_heavy_armor | +3 armor, +0.15 hardness (baked in; hardness capped at 1.0) |
+| land_cruiser | +5 armor, +3 soft attack (baked in) |
+| blackshirt_assault_battalion / sturmtruppe_battalion | +2 soft attack (baked in) |
+| helicopter_brigade | +1 sight range (baked in); ×0.95 strength damage taken (ongoing) |
+| hq_support_company / hq_specops | no row of their own — they ride the Military Police family row above |
 
 #### Retreat
 
@@ -1469,10 +1609,16 @@ until the host dies (§6.3 Support Companies). Current effects:
   there is no assault restriction and no move-cost penalty while holding
   (the old "no assault / double move cost" side effects are removed).
   Standing back up (H again) is free.
+- AI-side: a battalion whose planner turn settles on "no action" idles in
+  the stance for the same +25% — within the SAME infantry-attribute
+  eligibility (guns, cavalry and HQs idle without it). Assault and retreat
+  clear it; movement drops it on the first step as usual.
 - Entrenchment layers are a SEPARATE value brought in from the HOI4 save's
   division entrenchment: the save value maps to 0–3 layers (a value ≤ 1 is
   treated as a fraction and scaled ×3; larger values are rounded), each
-  layer granting +10% defense. (This is a tactical rescale, not HOI4's own
+  layer granting +10% defense — ×1.5 per layer with an attached engineer
+  company (fieldworks, §6.8 Support Companies). (This is a tactical
+  rescale, not HOI4's own
   numbers — strategic digging is `DIG_IN_FACTOR = 0.02` per level up to
   `UNIT_DIGIN_CAP = 5`; we compress that into the 3-layer cap.)
   Battle-time digging as a deployable map element is a future item.
@@ -1488,6 +1634,7 @@ until the host dies (§6.3 Support Companies). Current effects:
 ### 6.9 Stacking (revised)
 
 - **1 battalion per hex** — no exceptions.
+- Exception note (current semantics): a retreating or Withdrawn battalion does NOT block movement — march paths may step onto/through its hex while the combat layer still counts it for targetability.
 - Support companies are NOT units on the map: they attach to a battalion and share its hex (§6.8), so they never affect stacking.
 
 ### 6.10 Engagement
@@ -1606,10 +1753,11 @@ combat** — no attack order, no assault, no fire mission ever registers for
 it. Its own defense is untouched: it stays a live, targetable unit that
 returns counter-fire, and it still dies to everything aimed at it. Its
 strength carries the same min(manpower ratio, equipment ratio) clamp every
-line battalion gets, measured against the DIVISION's own fill — the HQ asks
-for no equipment of its own — so a division with no equipment to its name
-fields a 0-strength HQ and gets no free command unit out of it. What it
-does do:
+line battalion gets, measured against the DIVISION's own fill over its
+SURVIVING battalion groups' needs — the HQ asks for no equipment of its
+own — so a division with no equipment to its name, or whose battalions all
+fell below the §5.3 field threshold, fields a 0-strength HQ and gets no
+free command unit out of it. What it does do:
 
 - **Command aura** (radius `hq_aura_radius` = 3 hexes, same side AND same
   division only): battalions in command get ±10% attack/defense — a LINEAR
@@ -1620,12 +1768,15 @@ does do:
   frontline units' org pinned at full while they took counter-fire, and a
   Warsaw headless attacker ran 300 turns at ~zero net loss).
 - **HQ destroyed** (annihilated — strength 0; retreat and surrender do NOT
-  count): every surviving same-division battalion immediately loses
+  count): every surviving same-division battalion (the division identity is
+  the side + owner tag + division name triple, as with the aura; a broken,
+  still-routing battalion is surviving too) immediately loses
   `hq_death_org_frac` = 20% of its max org (standard Break/Surrender rules
   apply at org 0) and the aura is gone for good. The collapse IS reported
   to HOI4 through the sync loop; the HQ's own casualties are NOT (no HOI4
   division maps to it).
-- **Chassis follows the template**: any tank battalion → the HQ rides an
+- **Chassis follows the template**: any tank battalion FIELDED (§5.3 field
+  threshold) → the HQ rides an
   armored car (never a tank), motorized/mechanized majority
   → trucks, otherwise foot.
 - **Signal company** (the first real `SupportKind::Signal` effect; it replaces the battalion-relay design): the company rides ON
@@ -1635,6 +1786,10 @@ does do:
 - HQs don't count for victory checks (§6.11). The AI does not prioritize
   HQs as targets; its own HQs shadow the division centroid inside the
   aura leash and flee adjacent enemies (§7.3).
+- Army-HQ formations (1.19 `is_army_hq` templates) are divisions like any
+  other to the assembly: their `hq_*` battalions field, their support
+  companies attach, and they receive this same synthesized HQ — no
+  exemption; the synthesized HQ simply IS the general's command post.
 
 **Visualization** (Steel Division style; selection-scoped):
 selecting the HQ draws its aura ring (radius reflects the signal bonus)
@@ -1681,7 +1836,13 @@ islands):
   counter walks it out — escapable prey for `oob_leaving_turns` turns
   (Retreating units stay targetable, never counter), then gone for good.
   The §6.8 deployment-edge Withdrawn remains the fallback for water-locked
-  maps where no ring land is reachable.
+  maps where no ring land is reachable. **Sector filter**: the ring
+  preference only takes REAR-half exits — ring hexes in the anti-threat
+  half-plane as seen from the unit (the §6.8 threat axis, mirrored to the
+  attacker's entry side; interior battles have no rear and keep the
+  any-direction preference). Exit chain: nearest rear-half ring hex → the
+  §6.8 deployment rim → the nearest ring hex of ANY direction (a sealed
+  pocket still slips away) → legacy greedy.
 - **UI honesty**: the hex hover card shows a prominent red IMPASSABLE
   line on water and a gold OUT-OF-BOUNDS warning (with the dwell limit) on
   backdrop land; a unit's hover card shows the dwell countdown
@@ -1771,7 +1932,7 @@ a future "leader skill → AI aggression" parameter may separate them.
 - **Hopeless-trade refusal**: an assault is refused when expected counter-damage exceeds 1.5× expected damage dealt, unless the strike is expected to break the target outright. The dealt estimate is pool-aware — the unit evaluates the volley it JOINS (itself plus every adjacent assault-capable friend, P = Σ(q·g)×Σg through the shared core `strike_group_org_estimate`, the counter total stays ~constant split across the pool) — and target selection prefers the most-joinable victim, so independent planners converge on the same pool instead of fragmenting.
 - **Elastic reinforcement**: elastic-defense units with no contact but an enemy within 3 hexes step toward it, stopping at distance 2 (second line, ready to counter-punch).
 - **Counterattack reserve closes up**: a counterattack battalion out of contact with an enemy within 8 hexes approaches to standoff 2 (the same screen_threat primitive, longer reach) — the deployment's reserve echelon actually reaches the line before the strike window opens, so the counter-punch starts from the reserve, not from a static backfield.
-- **Order persistence**: a re-affirmed same-destination move order keeps the WHOLE standing order — path and invested travel hours (the planner's fresh recomputation is advisory only; `refresh_move_order` heals the standing path each turn under anti-oscillation rules). Objective assignment is hysteretic too: a unit keeps its standing destination while it stays inside the division order's objective area and legal, so per-turn reservation churn cannot flap destinations. Any flip/reset pins units slower than 1 hex/turn.
+- **Order persistence**: a re-affirmed same-destination move order keeps the WHOLE standing order — path and invested travel hours (the planner's fresh recomputation is advisory only; `refresh_move_order` heals the standing path each turn under anti-oscillation rules). Objective assignment is hysteretic too: a unit keeps its standing destination while it stays inside the division order's objective area and legal, so per-turn reservation churn cannot flap destinations. Any flip/reset pins units slower than 1 hex/turn. A genuine replacement (a NEW destination) walks the §6.2 step-progress-memory ladder exactly like the player side — a first-step change banks the invested hours, pointing back restores them.
 - **Terrain-aware valuation**: the AI's org-damage estimate mirrors the strike() terrain column for the target's hex — defense modifier in the denominator, attack modifier and cover as linear terms, river ×2 — so it loves hitting units caught mid-ford (both assault and artillery target selection) and the counter-attack mirror refuses assaults from inside a ford.
 - **River discipline**: retreats and cover-seeking never step INTO a river hex (ties broken by defensive terrain); damaged-unit withdrawals and artillery break-contact steps pay a ford penalty equal to one hex of distance.
 - **Screen, never cross**: elastic reinforcement forms its second line on the threat's standoff ring on its OWN side of any river — shielded ring hexes first, any river-fording route rejected outright; when the shielded ring is already manned by the front line the backfield holds (manned-ring rule).
@@ -1779,7 +1940,7 @@ a future "leader skill → AI aggression" parameter may separate them.
 - **Division sectors**: pass 1 partitions the front band (the zone's own edge + the profile standoff, ±1.5) into contiguous ARC sectors — the band's PCA principal axis gives the arc coordinate — one sector per division with line troops, width proportional to its line-unit count, tiled in roster order; each division places its battalions inside its own sector (plus a 2-arc slack for terrain) with the k-th unit aiming at the k-th equal slice of the sector (slot tie-break) — the old cohesion pull is gone: the sector IS the cohesion, and divisions hold contiguous line segments instead of blobs/columns (Warsaw 3544 trace: 46./10./19. ID stacked into one 3-wide column; the first unit's (q,r) tie-break parked whole formations at one end of the front). `ai_deploy_impl`'s `sector_divisions` lets callers deploying division-by-division (allied contingents, headless splits) pass the shared order so every call lands in ITS slice.
 - **Support band**: AT/AA/artillery deploy in a support band BEHIND the line, anchored to the placed line's own distance to the enemy zone (`front_of`) — never to the division centroid (a centroid-relative ring let guns land ON the razor edge or chain into deep columns). Standoff per class: AT = line + 2 (the infantry's second line — the classic PAK siting covering approach lanes), AA = line + 3 (divisional flak protects the guns/command positions; the umbrella radius 3 still covers the line), artillery = line + clamp(range/2, 1, 4). **AA (attack range 1) is NOT a pass-1 line unit** — a flak battery never holds the razor edge; the city-garrison quota still takes it into the city (flak over the town). Support units stay inside their own division's sector (the sector partition counts ALL deployable units, so an army-level AT/AA group with no line troops owns a slice instead of falling back to the global front centroid) and spread along the band by the crowd penalty + slot tie-break; a degenerate zone (band beyond the zone) falls back to the sector's nearest ground rather than leaving guns OFFBOARD. **The DEFENDER's slot is instead anchored to its own line's arc CENTRE** (the likeliest contact axis), the k-th gun offsetting ±2.5-hex steps around it, sector-bounded — the defender is a fire base whose stand IS its coverage, and on wide sparse fronts the even spread parked guns a screen's width off the actual engagement (arena pz_at: the howitzer sat 19 hexes from the panzer lane and never fired). The ATTACKER keeps the even spread: its guns creep toward the nearest enemy and pair with their local line segment — clustering converged every tube on one flapping creep goal and they never settled (arena arty_inf: attacker fire 111→0).
 - **Reverse-slope siting + crest observation posts** (plan 2): the deployment is elevation-aware, mirroring the §6.6 crest rules. (a) A hex whose OWN STEP toward the enemy (the first intermediate on the enemy-centroid line) stands strictly higher is DEFILADED from indirect fire (×0.5) — the line and the guns prefer it (REVERSE_SLOPE_W ≈ 45, the "照抄河盾" term of the plan): the defender holds the military crest's reverse slope while the attacker's jump-off and the support band sit behind ridges too; the DEEP_W penalty still caps the pull. (b) The DEFENDER posts a THIN observation screen — 1 post per 8 line units, weakest first (OBSERVER_QUOTA_DIV) — re-placed onto CREST hexes (elevation ≥ 1 and no sampled intermediate hex toward the enemy stands higher): the ridge rule gives the post unobstructed sight over the approach (peaks see over saddles), and since the side's fog view is shared the post extends the whole side's spotting — the "峰线薄观察哨" of the plan. Posts stay in their division's sector, hug the front, and accept the exposed-crest ×1.5 as the historical observer's trade; no crest near the front → the unit keeps its line spot. Both predicates reuse the coarse enemy-centroid line sampling of the river-shield rule.
-- **Tactic profiles**: the deployment echoes the §7.2 card — each card's profile sets the echelon split (a front rank at the band plus reserve bands BEHIND it: elastic 65/35 with armor in reserve, counterattack 60/40, tactical_withdrawal 35/35/30 fallback lines, delay 50/50, overwhelming_fire 85/15, assault/default 75/25 waves, mass_charge 100% on the razor) and the horizontal shape (blitz CenterFocus: only the middle ~70% of the band is used — the axis concentration; encirclement TwoWings; ambush/guerrilla a deeper band + loose spacing). The distance penalty steepens beyond the band (+1.5 hexes, −DEEP_W=12/hex, waived for loose cards) so a river shield (+80) or city bonus can still draw the line a few hexes deeper but bare terrain cannot (an attacker's deep urban hex must never beat the razor edge).
+- **Tactic profiles**: the deployment echoes the §7.2 card — each card's profile sets the echelon split (a front rank at the band plus reserve bands BEHIND it: elastic 65/35, counterattack 60/40, tactical_withdrawal 35/35/30 fallback lines, delay 50/50, overwhelming_fire 85/15, assault/default 75/25 waves, mass_charge 100% on the razor) and the horizontal shape (blitz CenterFocus: only the middle ~70% of the band is used — the axis concentration; encirclement TwoWings; ambush/guerrilla a deeper band + loose spacing). Armor always deploys in the pass-2 support band (attack range 2 keeps every tank type out of the pass-1 line class; standoff 1), never in a dedicated reserve echelon. The distance penalty steepens beyond the band (+1.5 hexes, −DEEP_W=12/hex, waived for loose cards) so a river shield (+80) or city bonus can still draw the line a few hexes deeper but bare terrain cannot (an attacker's deep urban hex must never beat the razor edge).
 - **HQ handling** (§6.13): HQs never attack, shadow their division's living-members centroid at standoff 2, stay inside the aura leash and flee adjacent enemies; AI deployment parks them behind the line. Target selection does not prioritize enemy HQs.
 
 ### 7.4 Division Orders
@@ -1814,7 +1975,7 @@ resolved by the existing §6.2 wait/detour rule); the flag-tier response is
 skipped (an explicit player command outranks the flag doctrine, though the
 flag zones still anchor the blind march).
 
-**Manual override (微操排他)**: any player command on a battalion
+**Manual override (手操排他)**: any player command on a battalion
 (move / attack / Hold / emplace / retreat) sets `manual_override`; the
 division AI leaves that unit alone until the player's command completes —
 a march ends when it arrives or is consumed (contact stop), an attack
@@ -2251,7 +2412,7 @@ log became a standalone window.
 | Panel | Position | Type | Closable | Content |
 |-------|----------|------|:---:|---------|
 | **Tactical Map** | Center | Bevy canvas | No | Hex terrain grid, unit sprites, fog overlay |
-| **Command Panel** | Right side | egui panel | No | STATIC: turn/hour/phase, location, battle-objective section (above enemy tactic — side-dependent: capture the objectives vs hold them, a city battle names the city itself from the location label; the annihilation path is always listed as the alternative conclusion, and the sole one when the battle has no flags), enemy tactic section, fixed main-action slot ([Begin Battle] / [End Turn] / [Sync] / [Apply & Exit] by phase — position never moves; Begin Battle greys out until every player-commanded battalion is deployed), [Minimap] toggle, [Reset View], [Order of Battle], [Battle Log] |
+| **Command Panel** | Right side | egui panel | No | STATIC: turn/hour/phase, location, battle-objective section (above enemy tactic — side-dependent: capture the objectives vs hold them, a city battle names the city itself from the location label; the annihilation path is always listed as the alternative conclusion, and the sole one when the battle has no flags), enemy tactic section, fixed main-action slot ([Begin Battle] / [End Turn] / [Sync] / [Apply & Exit] by phase — position never moves; Begin Battle greys out until every player-commanded battalion is deployed), [Minimap] toggle, [Reset View], [Order of Battle], [Battle Log], Automation block (session-scoped, reset at every battle start): **RTS Mode (Test)** master switch — experimental, the Test tag goes once the mode matures — drives all three automations at the pace of its own speed slider (0.5×–4.0×, 1.0× = 0.6 s turn/sync settle; combat reports suppressed; the hourly sync summary never pops up — its numbers land in the battle log; the top notice bar stays silent — turn-handover and sync-ready banners off, only the deadlock-fuse halt and battle-resolved cues still show; Space pauses/resumes the flow) + auto-skip quiet turns (12-round deadlock fuse) / auto-close reports / auto-sync toggles with close-delay sliders |
 | **Hover card** | At cursor | egui area | auto | Replaces the Info Panel: resting the cursor 0.3s on a unit / 0.8s on bare terrain pops the full stat sheet; Org/Str bars show exact `current/max` on bar hover; the move-order ETA lives here (only here) |
 | **Minimap** | Top-left corner | egui window | Yes | Zoomed-out hex grid overview, colored dots for unit positions (fog-filtered), white quad marking the main camera's visible ground footprint |
 | **Esc menu** | Center modal | egui window | Esc | Continue / Settings (in-battle render & performance knobs — MSAA, shadows, render scale, frame cap, idle saver; hot-applied and persisted to settings.json) / Reset Battle… (merged Restart + To-Last-Sync with a confirmation naming the actual target) / Exit Game (live mode confirms an unsynced battle) |
@@ -2820,7 +2981,7 @@ or built-in value) when missing/blank, so a fresh install "just works".
   "hoi4_dir": "D:/Steam/steamapps/common/Hearts of Iron IV",
   "saves_dir": "C:/Users/<user>/Documents/Paradox Interactive/Hearts of Iron IV/save games",
   "log_path": "C:/Users/<user>/Documents/Paradox Interactive/Hearts of Iron IV/logs/game.log",
-  "language": "zh",            // "en" | "zh" (§15). FIRST launch (no settings.json yet):
+  "language": "zh",            // "en" | "zh" | "ru" (§15). FIRST launch (no settings.json yet):
                                //   a dedicated language-picker page opens before the settings
                                //   page, pre-selected from the OS UI language (Chinese systems →
                                //   zh, everything else → en); detection failure → zh. Existing
@@ -2834,7 +2995,7 @@ or built-in value) when missing/blank, so a fresh install "just works".
                                //   its retired token
                                //   maps to the default. Menu Settings
                                //   page shows player-facing labels + per-mode details
-                               //   (en/zh; no dev-log internals).
+                               //   (en/zh/ru; no dev-log internals).
   "msaa": 2,                   // 4 | 2 | 1 (= off); default 2. The 3D camera
                                //   always carries an FXAA pass — the far-zoom orbit moiré is
                                //   covered at a fraction of the MSAA delta.
@@ -3025,15 +3186,15 @@ AFTER that first full live-loop test. (The signal-company effect shipped with §
 
 ## 15. Localization
 
-The UI ships English + Simplified Chinese, switchable on the Settings page,
-in the HOI4 key-value localisation idiom so players can customize strings or
-add languages without recompiling.
+The UI ships English + Simplified Chinese + Russian, switchable on the
+Settings page, in the HOI4 key-value localisation idiom so players can
+customize strings or add languages without recompiling.
 
 ### 15.1 String tables
 
 - **Crate:** `tactical-locale` (zero dependencies, hand-rolled parser).
 - **File layout:** `localisation/<language>/*.yml` using the HOI4 modding
-  format — `l_english:` / `l_simp_chinese:` header, `key:0 "text"` lines,
+  format — `l_english:` / `l_simp_chinese:` / `l_russian:` header, `key:0 "text"` lines,
   `#` comments, `\"`/`\n` escapes. The version number is accepted but
   ignored; load order (embedded → external files, alphabetical, later wins)
   decides overrides. Shipping files are split by domain:
@@ -3044,10 +3205,10 @@ add languages without recompiling.
   plus generated-name labels: `unit_abbrev.*` for the battalion
   counter names + special subunit tokens, `support_abbrev.*` for support
   tags).
-- **Embedded + override:** both languages are compiled in via `include_str!`
-  (the exe runs standalone); files in the external `localisation/` dir
-  override them key-by-key — that is the user-customization / third-language
-  entry point. Missing keys fall back active language → English → the raw
+- **Embedded + override:** all shipping languages are compiled in via
+  `include_str!` (the exe runs standalone); files in the external
+  `localisation/` dir override them key-by-key — that is the
+  user-customization / extra-language entry point. Missing keys fall back active language → English → the raw
   key itself (HOI4-style visible miss marker).
 - **Lookup:** `Locale::tr(key)` for literals; `Locale::trf(key, &[(name, val)])`
   substitutes `{name}` placeholders — word order differs across languages,
@@ -3063,23 +3224,26 @@ add languages without recompiling.
   (English file = the legacy abbreviations, byte-identical to before).
   Script/demo/preset battles keep their hand-written historical names.
 - **HOI4's own names:** VP city names are read from the
-  install's matching localisation file — `victory_points_l_simp_chinese.yml`
-  for a Chinese session, the English file otherwise/as fallback — so the
-  floating label and the multi-battle picker show the same language the
-  player sees in HOI4.
-- **Switching:** `settings.json` field `language` (`"en"`/`"zh"`). The
+  install's localisation file matching the UI language
+  (`victory_points_l_<code>.yml` — simp_chinese / russian), with the
+  English file as fallback — so the floating label and the multi-battle
+  picker show the same language the player sees in HOI4.
+- **Switching:** `settings.json` field `language` (`"en"`/`"zh"`/`"ru"`). The
   Settings page radio applies instantly (the `LocaleRes` resource is rebuilt
   and the menu re-renders next frame) and persists immediately; battle child
   processes (`--battle`/`--livebattle`/`--demo`) read it at startup.
-- **Invariants (unit tests):** the embedded en/zh files must define the same
-  key set with non-empty values; every enum variant must resolve to a real
-  key. A missing translation is a build-time failure, not on-screen tofu.
+- **Invariants (unit tests):** the embedded en/zh/ru files must define the
+  same key set with non-empty values and identical placeholder sets; every
+  enum variant must resolve to a real key. A missing translation is a
+  build-time failure, not on-screen tofu.
 
 ### 15.2 Fonts and icons
 
 - **CJK font chain** (egui `Proportional`/`Monospace` families, appended
-  after the built-ins, installed in BOTH languages — HOI4 saves carry
-  arbitrary-language division names): system `msyh.ttc` (Microsoft YaHei,
+  after the built-ins, installed in EVERY language — HOI4 saves carry
+  arbitrary-language division names). Cyrillic needs no extra font: egui's
+  built-in Ubuntu-Light already covers it, as do the chain candidates
+  themselves: system `msyh.ttc` (Microsoft YaHei,
   TTC face 0) → bundled `assets/fonts/NotoSansSC-Subset.otf` (~1.6 MB,
   SIL OFL; ASCII + CJK punctuation + GB2312 level-1 hanzi + every char used
   in the localisation files; regenerate with `tools/make_font_subset.py`)
@@ -3139,7 +3303,7 @@ add languages without recompiling.
 | Recovery | Manual "Force Exit" decision; no auto-recovery |
 | Multi-division | Show all friendly divisions; player commands own only |
 | Project structure | One Rust workspace `forward-command/` — tactical-core, -combat, -sync, -map, -save, -ai, -inject, -listen, -locale, tactical3d-render, tactical3d-bin (legacy `tactical/` 2D workspace removed) |
-| Localization | HOI4-style key-value files (embedded + external override), en/zh, Settings-page switch; CJK font chain + vendored Twemoji icon textures (§15) |
+| Localization | HOI4-style key-value files (embedded + external override), en/zh/ru, Settings-page switch; CJK font chain + vendored Twemoji icon textures (§15) |
 | Data pre-extraction | 6 JSON tables: equipment, units, terrain, tactics, doctrines, country colors |
 | Mod role | Trigger detection + variable tagging + scripted effects/events hosting injection + hourly heartbeat |
 | Time limit | None — battle plays to resolution |

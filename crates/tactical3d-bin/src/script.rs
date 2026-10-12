@@ -164,8 +164,8 @@ pub struct ScriptUnit {
     /// Chassis token (see `chassis_from_token`); absent = the type default.
     #[serde(default)]
     pub chassis: Option<String>,
-    /// Under-strength battalion: a fraction of the type's full
-    /// org/strength — used for battle-weary remnants and militia.
+    /// Under-strength battalion: ABSOLUTE org/strength points, clamped to
+    /// the type's baseline — used for battle-weary remnants and militia.
     /// Absent = full strength.
     #[serde(default)]
     pub org: Option<f32>,
@@ -534,6 +534,7 @@ pub fn deploy_script_side(
             u.attach(SupportAttachment {
                 kind: support_kind_from_token(&ss.kind).expect("validated in load"),
                 name: ss.name.clone(),
+                token: String::new(),
             });
         }
         *next_id += 1;

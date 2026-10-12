@@ -28,6 +28,11 @@ pub fn localized_unit_naming(loc: &Locale) -> UnitNaming {
         "irregular_infantry",
         "penal_battalion",
         "hq_infantry",
+        "hq_paratrooper",
+        "hq_motorized",
+        "hq_light_armor",
+        "hq_medium_armor",
+        "hq_heavy_armor",
     ] {
         naming.set_token(token, loc.tr(&format!("unit_abbrev.{token}")).into_owned());
     }
@@ -40,6 +45,22 @@ pub fn localized_unit_naming(loc: &Locale) -> UnitNaming {
             ))
             .into_owned(),
         );
+    }
+    // No-modelled-effect companies carry their own display names
+    // (`support_name.*`); everything else resolves through its kind tag.
+    for token in [
+        "light_flame_tank",
+        "medium_flame_tank",
+        "heavy_flame_tank",
+        "super_heavy_armor",
+        "land_cruiser",
+        "helicopter_brigade",
+        "blackshirt_assault_battalion",
+        "sturmtruppe_battalion",
+        "hq_support_company",
+        "hq_specops",
+    ] {
+        naming.set_support_name(token, loc.tr(&format!("support_name.{token}")).into_owned());
     }
     naming
 }
@@ -62,15 +83,20 @@ mod tests {
                 "type {ut:?}"
             );
         }
-        for token in [
-            "militia",
-            "irregular_infantry",
-            "penal_battalion",
-            "hq_infantry",
+        for (token, ut) in [
+            ("militia", UnitType::Infantry),
+            ("irregular_infantry", UnitType::Infantry),
+            ("penal_battalion", UnitType::Infantry),
+            ("hq_infantry", UnitType::Infantry),
+            ("hq_paratrooper", UnitType::Paratrooper),
+            ("hq_motorized", UnitType::Motorized),
+            ("hq_light_armor", UnitType::LightArmor),
+            ("hq_medium_armor", UnitType::MediumArmor),
+            ("hq_heavy_armor", UnitType::HeavyArmor),
         ] {
             assert_eq!(
-                naming.subunit_abbrev(token, UnitType::Infantry),
-                default.subunit_abbrev(token, UnitType::Infantry),
+                naming.subunit_abbrev(token, ut),
+                default.subunit_abbrev(token, ut),
                 "token {token}"
             );
         }
@@ -79,6 +105,26 @@ mod tests {
                 naming.support_tag(kind),
                 default.support_tag(kind),
                 "{kind:?}"
+            );
+        }
+        // The no-modelled-effect companies' display names ride the same
+        // rule: the English yml must carry the table's default strings.
+        for token in [
+            "light_flame_tank",
+            "medium_flame_tank",
+            "heavy_flame_tank",
+            "super_heavy_armor",
+            "land_cruiser",
+            "helicopter_brigade",
+            "blackshirt_assault_battalion",
+            "sturmtruppe_battalion",
+            "hq_support_company",
+            "hq_specops",
+        ] {
+            assert_eq!(
+                naming.support_name(token, SupportKind::MilitaryPolice),
+                default.support_name(token, SupportKind::MilitaryPolice),
+                "token {token}"
             );
         }
         assert_eq!(naming.hq(), "HQ");
@@ -94,5 +140,13 @@ mod tests {
         );
         assert_eq!(naming.hq(), "指挥部");
         assert_eq!(naming.support_tag(SupportKind::AntiTank), "反坦克连");
+        assert_eq!(
+            naming.support_name("light_flame_tank", SupportKind::MilitaryPolice),
+            "轻型喷火坦克连"
+        );
+        assert_eq!(
+            naming.support_name("hq_support_company", SupportKind::MilitaryPolice),
+            "总参谋部"
+        );
     }
 }

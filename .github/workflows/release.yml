@@ -70,6 +70,26 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace
 
+      # Version-consistency gate (mirrors tools/package_release.ps1's
+      # descriptor check + the tag): a mis-tagged release must fail BEFORE
+      # packaging, never ship a zip whose contents disagree with its name.
+      - name: Assert version consistency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # Same read as package_release.ps1: the FIRST version= line of
+          # the workspace Cargo.toml is the [workspace.package] one.
+          $cargoVer = [regex]::Matches((Get-Content "Cargo.toml" -Raw), '(?m)^version\s*=\s*"([^"]+)"')[0].Groups[1].Value
+          $descText = Get-Content "hoi4-mod\forward-command\descriptor.mod" -Raw
+          if ($descText -notmatch "version=`"$([regex]::Escape($cargoVer))`"") {
+            throw "descriptor.mod version does not match Cargo.toml ($cargoVer) - bump both files at release"
+          }
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $tagVer = $env:GITHUB_REF_NAME -replace '^v', ''
+            if ($tagVer -ne $cargoVer) { throw "tag $($env:GITHUB_REF_NAME) != Cargo.toml ($cargoVer)" }
+          }
+          Write-Host "version consistency OK: $cargoVer"
+
       - name: Assemble package (mirrors tools/package_release.ps1)
         shell: pwsh
         run: |

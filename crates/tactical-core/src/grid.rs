@@ -152,6 +152,12 @@ impl HexGrid {
         }
     }
 
+    /// Stamp `t` on one hex and mirror the terrain's own side effects:
+    /// the cell's elevation level is RESET to the terrain's default
+    /// (Hills 1, Mountain 2, Marsh/River/Water −1, everything else 0), and
+    /// passability follows the terrain table. Callers that stamped a
+    /// bespoke elevation first (noise relief, painted ridgelines) must
+    /// re-stamp it after the terrain swap.
     pub fn set_terrain(&mut self, h: HexCoord, t: Terrain) {
         if let Some(c) = self.cell_mut(h) {
             c.terrain = t;

@@ -1,0 +1,59 @@
+# Forward Command — scan answer events (DESIGN §10.7).
+# The Scan decision is a round trip: the player asks, the external program
+# answers. A scan nobody answers is caught by tac_scan.3, the checker the
+# decision schedules 12 game hours ahead, which raises tac_scan.1 — the
+# "program is not running" explanation.
+# is_triggered_only keeps all three out of the daily random-firing pool,
+# like every event in this mod.
+
+add_namespace = tac_scan
+
+# Checker, scheduled by the Scan decision (12 game hours; the countdown only
+# runs while the player plays — the program pauses the game when it answers,
+# so a live program has always cleared the receipt long before this fires).
+# A receipt still armed here means nothing picked the scan up.
+country_event = {
+	id = tac_scan.3
+	hidden = yes
+	is_triggered_only = yes
+
+	immediate = {
+		if = {
+			limit = { has_country_flag = tac_scan_waiting }
+			clr_country_flag = tac_scan_waiting
+			country_event = { id = tac_scan.1 hours = 0 }
+		}
+	}
+}
+
+# No-response popup: fired by the checker above when the receipt is still
+# armed — no external program is listening. The map stays empty until the
+# player starts the program and scans again.
+country_event = {
+	id = tac_scan.1
+	title = tac_scan.1.t
+	desc = tac_scan.1.d
+	is_triggered_only = yes
+
+	option = {
+		name = tac_scan.1.o
+	}
+}
+
+# Empty-scan popup: fired BY the external program (`event tac_scan.2 <tag>`)
+# when its answer is "nothing to publish right now". Clearing the receipt
+# here is what keeps a quiet scan from ever reading as a missing program.
+country_event = {
+	id = tac_scan.2
+	title = tac_scan.2.t
+	desc = tac_scan.2.d
+	is_triggered_only = yes
+
+	immediate = {
+		clr_country_flag = tac_scan_waiting
+	}
+
+	option = {
+		name = tac_scan.2.o
+	}
+}

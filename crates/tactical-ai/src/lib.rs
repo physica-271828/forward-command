@@ -23,6 +23,10 @@ pub mod tactic;
 pub use action::AiAction;
 pub use deploy::ai_deploy;
 pub use deploy::ai_deploy_impl;
+pub use deploy::ai_deploy_impl_with_front;
+pub use deploy::ai_deploy_staged;
+pub use deploy::approach_corridor;
+pub use deploy::{front_map, FrontMap};
 pub use planner::{DivOrderTarget, StrategicObjective, TacticalAi, UnitRole};
 pub use tactic::CombatTactic;
 
@@ -757,7 +761,35 @@ mod tests {
         );
     }
 
-    // 15 ─ An EMPLACED defender gun does not limber when the enemy leaves
+    // 15 ─ A MOBILE battery (rocket launcher, no emplacement state) follows
+    //      the same fire-base rule as the towed guns: the defender shell
+    //      whatever comes close instead of driving at the enemy, while the
+    //      attacker's batteries creep with the advance.
+    #[test]
+    fn defender_mobile_battery_holds_while_attacker_creeps() {
+        let g = grid(16, 16);
+        // Self-propelled (Wheeled) rocket launcher: no emplacement state,
+        // range 6, min range 3.
+        let own = |side: Side| vec![unit(1, UnitType::MotRocketArtillery, side, 2, 2)];
+        // Visible but out of the envelope.
+        let enemy = vec![unit(10, UnitType::Infantry, Side::Attacker, 9, 2)];
+
+        let mut def_ai = TacticalAi::new(Side::Defender, CombatTactic::Default, 7);
+        let actions = def_ai.plan_turn(&g, &own(Side::Defender), &enemy);
+        assert!(
+            matches!(action_for(&actions, 1), AiAction::Hold { unit_id: 1 }),
+            "defender mobile battery out of range must hold its ground: {actions:?}"
+        );
+
+        let mut atk_ai = TacticalAi::new(Side::Attacker, CombatTactic::Blitz, 7);
+        let actions = atk_ai.plan_turn(&g, &own(Side::Attacker), &enemy);
+        assert!(
+            matches!(action_for(&actions, 1), AiAction::MoveUnit { .. }),
+            "attacker mobile battery out of range must creep: {actions:?}"
+        );
+    }
+
+    // 15b ─ An EMPLACED defender gun does not limber when the enemy leaves
     //      the envelope — a fire base does not chase; only the attacker
     //      limbers to follow the advance.
     #[test]
@@ -814,10 +846,10 @@ mod tests {
         }
     }
 
-    // 16a ─ BUG-0099: blind bombardment never lands on a zone holding own
-    //      troops — the area mission splashes the whole weighted circle
-    //      (aim hex + ring 1). Control: the same battery on a clean zone
-    //      still shells the intel goal.
+    // Blind bombardment never lands on a zone holding own troops (§7.3
+    // friend-free gate) — the area mission splashes the whole weighted
+    // circle (aim hex + ring 1). Control: the same battery on a clean zone
+    // still shells the intel goal.
     #[test]
     fn blind_fire_avoids_zone_holding_own_troops() {
         let g = grid(20, 12);
@@ -851,10 +883,79 @@ mod tests {
         }
     }
 
-    // 16b ─ BUG-0099: a commanded division's gun never blind-shells its
-    //      own seized point — once our infantry stands on the Seize hex
-    //      (hold phase) the order goal is not friend-free and the gun
-    //      holds. Control: an empty point is still shelled.
+    // §7.3: blind bombardment holds fire when the goal's blast circle is
+    // PROVABLY empty — every blast hex currently observed and no visible
+    // enemy inside (the garrison is gone; shelling the graveyard only
+    // farms "target lost" fizzles). A fog-hidden goal keeps the siege
+    // bleeding as before.
+    #[test]
+    fn blind_fire_holds_when_the_goal_circle_is_observed_empty() {
+        let g = grid(20, 12);
+        let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Blitz, 7);
+        let mut arty = unit(1, UnitType::ArtilleryBrigade, Side::Attacker, 4, 4);
+        arty.is_emplaced = true;
+        // A recon blanket-observes the intel goal's circle (sight 4 from
+        // (9,1) covers ring 1 around (9,4)) while standing OUTSIDE the
+        // blast circle itself — the friend-free gate stays out of the way.
+        let own = vec![arty, unit(2, UnitType::Recon, Side::Attacker, 9, 1)];
+        let intel = vec![HexCoord::new(9, 4)];
+        let mut fog = tactical_core::fog::FogOfWar::new(20, 12, 3, 3);
+        fog.update(&g, &own, Side::Attacker, 0);
+
+        let actions = ai.plan_turn_full_with_sound(
+            &g,
+            &own,
+            &[],
+            Some(&intel),
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            Some(&fog),
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, AiAction::FireSupport { attacker_id: 1, .. })),
+            "a provably empty circle must not be shelled: {actions:?}"
+        );
+
+        // Control: the same battery with the goal fog-hidden (the recon
+        // pulled back beside it) still shells it — a siege bleeds.
+        let mut arty2 = unit(1, UnitType::ArtilleryBrigade, Side::Attacker, 4, 4);
+        arty2.is_emplaced = true;
+        let own2 = vec![arty2, unit(2, UnitType::Recon, Side::Attacker, 4, 1)];
+        let mut fog2 = tactical_core::fog::FogOfWar::new(20, 12, 3, 3);
+        fog2.update(&g, &own2, Side::Attacker, 0);
+        let actions = ai.plan_turn_full_with_sound(
+            &g,
+            &own2,
+            &[],
+            Some(&intel),
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            Some(&fog2),
+        );
+        match action_for(&actions, 1) {
+            AiAction::FireSupport { target_hex, .. } => {
+                assert_eq!(
+                    *target_hex,
+                    HexCoord::new(9, 4),
+                    "a fog-hidden goal must still be blind-fired"
+                );
+            }
+            other => panic!("a fog-hidden goal keeps the siege bleeding, got {other:?}"),
+        }
+    }
+
+    // A commanded division's gun never blind-shells its own seized point
+    // (§7.3 friend-free gate): once our infantry stands on the Seize hex
+    // (hold phase) the order goal is not friend-free and the gun
+    // holds. Control: an empty point is still shelled.
     #[test]
     fn blind_fire_skips_order_goal_while_own_troops_hold_the_point() {
         let g = grid(20, 12);
@@ -891,10 +992,10 @@ mod tests {
         }
     }
 
-    // 16c ─ BUG-0099: a non-combat-effective enemy (retreating) is an
-    //      AREA-only shot, so the zone gate applies to it too — a tube
-    //      battery refuses while a friendly sits in the blast circle, and
-    //      a rocket launcher switches to the clean target instead.
+    // A non-combat-effective enemy (retreating) is an AREA-only shot, so
+    // the §7.3 friend-free zone gate applies to it too — a tube battery
+    // refuses while a friendly sits in the blast circle, and a rocket
+    // launcher switches to the clean target instead.
     #[test]
     fn area_fire_avoids_friend_adjacent_to_a_retreating_target() {
         let g = grid(20, 12);
@@ -1539,6 +1640,104 @@ mod tests {
         assert!(
             matches!(action_for(&actions, 2), AiAction::Hold { .. }),
             "units outside the city hold instead of marching out: {actions:?}"
+        );
+    }
+
+    // 27b ─ The no-maneuver cards hold their ARMOR too (§7.2 card text:
+    //       "never moves" / "never leaves it" / "no retreat ever" / the
+    //       delay contact band) — armor landing in the assault role marched
+    //       on the nearest enemy instead.
+    #[test]
+    fn no_maneuver_cards_hold_their_armor() {
+        for tactic in [
+            CombatTactic::Ambush,
+            CombatTactic::UrbanDefense,
+            CombatTactic::RiverDefense,
+            CombatTactic::Delay,
+        ] {
+            let g = grid(12, 12);
+            let mut ai = TacticalAi::new(Side::Defender, tactic, 3);
+            let own = vec![unit(1, UnitType::MediumArmor, Side::Defender, 5, 5)];
+            let enemy = vec![unit(10, UnitType::Infantry, Side::Attacker, 5, 2)];
+            let actions = ai.plan_turn(&g, &own, &enemy);
+            assert!(
+                !matches!(action_for(&actions, 1), AiAction::MoveUnit { .. }),
+                "{tactic} armor must not march out: {actions:?}"
+            );
+        }
+    }
+
+    // 27c ─ Recon probes only on the maneuver cards; a defensive card's
+    //       scout holds with the line (§7.2).
+    #[test]
+    fn defensive_cards_do_not_probe_with_recon() {
+        for tactic in [
+            CombatTactic::Ambush,
+            CombatTactic::UrbanDefense,
+            CombatTactic::RiverDefense,
+        ] {
+            let g = grid(12, 12);
+            let mut ai = TacticalAi::new(Side::Defender, tactic, 3);
+            let own = vec![unit(1, UnitType::Recon, Side::Defender, 5, 5)];
+            let enemy = vec![unit(10, UnitType::Infantry, Side::Attacker, 8, 8)];
+            let actions = ai.plan_turn(&g, &own, &enemy);
+            assert!(
+                !matches!(action_for(&actions, 1), AiAction::MoveUnit { .. }),
+                "{tactic} recon must not probe: {actions:?}"
+            );
+        }
+        // The maneuver cards still probe.
+        let g = grid(12, 12);
+        let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::InfiltrationAssault, 3);
+        let own = vec![unit(1, UnitType::Recon, Side::Attacker, 5, 5)];
+        let enemy = vec![unit(10, UnitType::Infantry, Side::Defender, 8, 8)];
+        let actions = ai.plan_turn(&g, &own, &enemy);
+        assert!(
+            matches!(action_for(&actions, 1), AiAction::MoveUnit { .. }),
+            "infiltration recon probes the flanks: {actions:?}"
+        );
+    }
+
+    // 27d ─ The assault trade estimate respects the resolver's reply
+    //       gates: a rocket battery (or a limbered towed gun) never
+    //       counters, so storming it is a free strike, not a refused
+    //       "hopeless trade".
+    #[test]
+    fn assault_on_a_rocket_battery_is_a_free_strike() {
+        let g = grid(12, 12);
+        let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Assault, 3);
+        let own = vec![unit(1, UnitType::Infantry, Side::Attacker, 5, 5)];
+        // A heavy salvo profile: if the estimate ignored the no-counter
+        // rule, the "trade" would read as hopeless and be refused.
+        let mut rkt = unit(10, UnitType::RocketArtillery, Side::Defender, 5, 4);
+        rkt.soft_attack = 200.0;
+        let enemy = vec![rkt];
+        let actions = ai.plan_turn(&g, &own, &enemy);
+        assert!(
+            matches!(action_for(&actions, 1), AiAction::Assault { .. }),
+            "a rocket defender never counters — the assault must go in: {actions:?}"
+        );
+    }
+
+    // 27e ─ Same gate, other arm: a LIMBERED towed gun deals no damage
+    //       in any form, so its storm is free too.
+    #[test]
+    fn assault_on_a_limbered_gun_is_a_free_strike() {
+        let g = grid(12, 12);
+        let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Assault, 3);
+        // A hard target: the gun's 200 hard attack would read as a
+        // hopeless counter if the estimate ignored the limbered rule.
+        let mut own_unit = unit(1, UnitType::Infantry, Side::Attacker, 5, 5);
+        own_unit.hardness = 0.9;
+        let own = vec![own_unit];
+        let mut gun = unit(10, UnitType::AntiTankBrigade, Side::Defender, 5, 4);
+        gun.hard_attack = 200.0;
+        gun.is_emplaced = false; // limbered — cannot reply
+        let enemy = vec![gun];
+        let actions = ai.plan_turn(&g, &own, &enemy);
+        assert!(
+            matches!(action_for(&actions, 1), AiAction::Assault { .. }),
+            "a limbered gun never counters — the assault must go in: {actions:?}"
         );
     }
 
@@ -3104,6 +3303,135 @@ mod tests {
                 "march into the enemy-held hex (execution decides the stop)"
             ),
             other => panic!("expected the march into contact, got {other:?}"),
+        }
+    }
+
+    // 33 ─ §6.1 sound ranging: artillery answers a HEARD battery when it has
+    //      nothing to look at. The counter-battery fallback sits between the
+    //      visible-target pick and blind bombardment, honours the firing
+    //      envelope and the own-troops blast gate, and gets the ATTACKER's
+    //      limbered guns laid so the mission can actually fire.
+    mod sound_counter_battery {
+        use super::*;
+
+        /// A mark inside the envelope, nothing visible: the mission lands on
+        /// the heard hex.
+        #[test]
+        fn counter_battery_fires_at_a_heard_battery() {
+            let g = grid(24, 24);
+            let mut own = vec![unit(1, UnitType::ArtilleryBrigade, Side::Attacker, 8, 8)];
+            own[0].is_emplaced = true;
+            let mark = HexCoord::new(8, 14); // 6 hexes: inside the tube envelope
+            let marks = [(mark, 0u32)];
+            let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Assault, 1);
+            let actions =
+                ai.plan_turn_full_with_sound(&g, &own, &[], None, None, None, None, &marks, &[], None);
+            match action_for(&actions, 1) {
+                AiAction::FireSupport { target_hex, .. } => {
+                    assert_eq!(*target_hex, mark, "counter-battery lands on the told hex")
+                }
+                other => panic!("expected a counter-battery mission, got {other:?}"),
+            }
+        }
+
+        /// A sighting outranks the tell.
+        #[test]
+        fn a_visible_target_outranks_the_sound_mark() {
+            let g = grid(24, 24);
+            let mut own = vec![unit(1, UnitType::ArtilleryBrigade, Side::Attacker, 8, 8)];
+            own[0].is_emplaced = true;
+            let seen = HexCoord::new(9, 11); // 4 hexes: well inside range
+            let enemy = vec![unit(50, UnitType::Infantry, Side::Defender, seen.q, seen.r)];
+            let marks = [(HexCoord::new(8, 15), 0u32)];
+            let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Assault, 1);
+            let actions =
+                ai.plan_turn_full_with_sound(&g, &own, &enemy, None, None, None, None, &marks, &[], None);
+            match action_for(&actions, 1) {
+                AiAction::FireSupport { target_hex, .. } => assert_eq!(
+                    *target_hex, seen,
+                    "the seen target is the aim hex, never the heard one"
+                ),
+                other => panic!("expected fire on the visible target, got {other:?}"),
+            }
+        }
+
+        /// A mark whose blast ring holds one of our own battalions is left
+        /// alone (the registration backstop would refuse the mission anyway).
+        #[test]
+        fn counter_battery_refuses_a_mark_over_own_troops() {
+            let g = grid(24, 24);
+            let mut own = vec![
+                unit(1, UnitType::ArtilleryBrigade, Side::Attacker, 8, 8),
+                unit(2, UnitType::Infantry, Side::Attacker, 8, 15), // on the ring
+            ];
+            own[0].is_emplaced = true;
+            let marks = [(HexCoord::new(8, 14), 1u32)];
+            let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Assault, 1);
+            let actions =
+                ai.plan_turn_full_with_sound(&g, &own, &[], None, None, None, None, &marks, &[], None);
+            assert!(
+                !matches!(action_for(&actions, 1), AiAction::FireSupport { .. }),
+                "never shell a ring our own infantry stands on: {:?}",
+                action_for(&actions, 1)
+            );
+        }
+
+        /// The tell gets the tubes laid: a limbered ATTACKER battery with a
+        /// mark in its envelope emplaces (the control shows the mark is what
+        /// triggers it).
+        #[test]
+        fn a_heard_battery_gets_the_tubes_laid() {
+            let g = grid(24, 24);
+            let own = vec![unit(1, UnitType::ArtilleryBrigade, Side::Attacker, 8, 8)];
+            let marks = [(HexCoord::new(8, 13), 0u32)]; // 5 hexes: in the envelope
+            let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Assault, 1);
+            let actions =
+                ai.plan_turn_full_with_sound(&g, &own, &[], None, None, None, None, &marks, &[], None);
+            assert!(
+                matches!(action_for(&actions, 1), AiAction::Emplace { .. }),
+                "a mark in the envelope gets the guns laid: {:?}",
+                action_for(&actions, 1)
+            );
+
+            // Control: nothing heard — the limbered attacker stays limbered.
+            let actions = ai.plan_turn_full(&g, &own, &[], None, None, None, None);
+            assert!(
+                !matches!(action_for(&actions, 1), AiAction::Emplace { .. }),
+                "no tell, no emplacement on spec: {:?}",
+                action_for(&actions, 1)
+            );
+        }
+
+        /// An out-of-range mark changes nothing: blind bombardment of the
+        /// intel goal still runs.
+        #[test]
+        fn an_out_of_range_mark_falls_through_to_blind_fire() {
+            let g = grid(24, 24);
+            let mut own = vec![unit(1, UnitType::ArtilleryBrigade, Side::Attacker, 8, 8)];
+            own[0].is_emplaced = true;
+            let intel = vec![HexCoord::new(8, 16)];
+            let marks = [(HexCoord::new(8, 22), 2u32)]; // 14 hexes: out of envelope
+            let mut ai = TacticalAi::new(Side::Attacker, CombatTactic::Assault, 1);
+            let actions = ai.plan_turn_full_with_sound(
+                &g,
+                &own,
+                &[],
+                Some(&intel),
+                None,
+                None,
+                None,
+                &marks,
+                &[],
+                None,
+            );
+            match action_for(&actions, 1) {
+                AiAction::FireSupport { target_hex, .. } => assert_eq!(
+                    *target_hex,
+                    HexCoord::new(8, 16),
+                    "the intel goal is shelled, never the out-of-range mark"
+                ),
+                other => panic!("expected blind bombardment, got {other:?}"),
+            }
         }
     }
 }

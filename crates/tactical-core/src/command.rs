@@ -224,6 +224,7 @@ mod tests {
         u.attach(crate::unit::SupportAttachment {
             kind: SupportKind::Signal,
             name: "Sig".to_string(),
+            token: String::new(),
         });
         u
     }

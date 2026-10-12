@@ -23,12 +23,37 @@ use crate::settings::AppSettings;
 const CRASH_TAIL: u64 = 1 << 20; // 1 MiB
 const INJECT_TAIL: u64 = 8 << 20; // 8 MiB
 const GAMELOG_TAIL: u64 = 512 << 10; // 512 KiB
+const COMBAT_TAIL: u64 = 1 << 20; // 1 MiB
 /// A text save is 50–150 MiB; refuse outright absurd ones so the in-memory
 /// zip build cannot OOM a weak laptop.
 const SAVE_MAX: u64 = 512 << 20;
 
 pub struct DiagReport {
     pub zip_path: PathBuf,
+}
+
+/// Newest `fc_combat_<pid>.log` in the temp dir (battle children write one
+/// per process; the newest is the latest battle).
+fn newest_pid_combat_log() -> Option<PathBuf> {
+    let mut best: Option<(SystemTime, PathBuf)> = None;
+    for e in std::fs::read_dir(std::env::temp_dir()).ok()?.flatten() {
+        let p = e.path();
+        let is_pid_log = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("fc_combat_")?.strip_suffix(".log"))
+            .is_some_and(|mid| !mid.is_empty() && mid.bytes().all(|b| b.is_ascii_digit()));
+        if !is_pid_log {
+            continue;
+        }
+        let Ok(mtime) = e.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
+            best = Some((mtime, p));
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// Collect the bundle and write the zip. Best-effort per file: a missing
@@ -82,6 +107,13 @@ pub fn export(settings: &AppSettings, include_save: bool) -> Result<DiagReport, 
         INJECT_TAIL,
         &mut entries,
     );
+    // The most recent battle's on-disk combat-log mirror (the in-memory
+    // battle-log window leaves no other trace). Battle children write one
+    // fc_combat_<pid>.log each; ship the newest.
+    let combat_log = newest_pid_combat_log();
+    if let Some(path) = &combat_log {
+        add_tail("fc_combat.log", path, COMBAT_TAIL, &mut entries);
+    }
     if !settings.log_path.trim().is_empty() {
         add_tail(
             "game_log_tail.txt",
@@ -91,6 +123,9 @@ pub fn export(settings: &AppSettings, include_save: bool) -> Result<DiagReport, 
         );
     } else {
         missing.push("game.log (path not set)".to_string());
+    }
+    if combat_log.is_none() {
+        missing.push("fc_combat.log (no battle yet)".to_string());
     }
 
     // Newest save (the live/injection bug reports need it).
@@ -102,7 +137,7 @@ pub fn export(settings: &AppSettings, include_save: bool) -> Result<DiagReport, 
                 Ok(meta) if meta.len() > SAVE_MAX => {
                     missing.push(format!("save: {} (too large, skipped)", save.display()));
                 }
-                _ => match std::fs::read(save) {
+                Ok(_) => match std::fs::read(save) {
                     Ok(bytes) => {
                         let name = save
                             .file_name()
@@ -113,6 +148,14 @@ pub fn export(settings: &AppSettings, include_save: bool) -> Result<DiagReport, 
                     }
                     Err(e) => missing.push(format!("save: {} ({e})", save.display())),
                 },
+                // No metadata = no size known = the 512 MiB guard cannot be
+                // applied before the read, and the zip is then built fully
+                // in memory (bytes + deflated + output). Skip rather than
+                // risk an unbounded allocation.
+                Err(e) => missing.push(format!(
+                    "save: {} (metadata unavailable: {e})",
+                    save.display()
+                )),
             },
             None => missing.push("save (no .hoi4 in saves dir)".to_string()),
         }

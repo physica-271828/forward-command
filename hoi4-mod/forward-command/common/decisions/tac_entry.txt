@@ -5,9 +5,10 @@
 forward_command_decisions = {
 
 	# "Enter Tactical Battle in <state>" — the category row is the opener:
-	# click it, then click a highlighted frontier state (enemy-controlled
-	# next to yours, or yours next to enemy-controlled). The external
-	# program resolves the battle — and the side — from the save.
+	# click it, then click a highlighted state. The external program scans
+	# the save for battles the player takes part in and publishes exactly
+	# those states here (see tactical_scan), then resolves the battle — and
+	# the side — from the save after the pick.
 	tactical_command_entry = {
 		icon = generic_army_support
 		cost = 0
@@ -22,20 +23,12 @@ forward_command_decisions = {
 		# selection (map icons over the candidates; ESC/right-click
 		# dismisses the selection).
 		on_map_mode = map_and_decisions_view
-		target_trigger = {
-			FROM = {
-				OR = {
-					AND = {
-						controller = { has_war_with = ROOT }
-						any_neighbor_state = { is_controlled_by = ROOT }
-					}
-					AND = {
-						is_controlled_by = ROOT
-						any_neighbor_state = { controller = { has_war_with = ROOT } }
-					}
-				}
-			}
-		}
+		# The candidate pool is EMPTY by construction: the external program
+		# activates the commandable states one by one after a scan (the
+		# activation bypasses this trigger). The engine's daily decision pulse
+		# drops every activated record, so a published state is SAME-DAY ONLY —
+		# the next scan republishes from the save of the moment.
+		target_trigger = { always = no }
 
 		# No generic at-war trigger exists in 1.19.2 (`is_at_war` is not a
 		# valid trigger — it would silently kill the decisions-tab row);
@@ -51,14 +44,10 @@ forward_command_decisions = {
 
 		complete_effect = {
 			# Mark the picked state FIRST — the external program snapshots
-			# right after tac_start and locates the pick via these state
-			# variables (state variables serialize to the save). The id
-			# capture is part of the take-record side channel — its presence
-			# makes the engine's daily-pulse decay restore the record to
-			# available; keep it (see d_tac_clear_tactical).
+			# right after tac_start and locates the pick via this state
+			# variable (state variables serialize to the save).
 			FROM = {
 				set_variable = { tac_pick = 1 }
-				set_variable = { ROOT.tac_picked_state = id }
 			}
 
 			# Trigger lines for the external listener (DESIGN §3.1).
@@ -73,7 +62,7 @@ forward_command_decisions = {
 			# (DESIGN §3.3): the program compares it with its own and tells
 			# the player which half of the package to update. Keep it in
 			# step with the packaged program version.
-			log = "{\"type\":\"tac_start\",\"province\":0,\"leader_id\":0,\"is_player_attacker\":true,\"ver\":\"0.3.2\"}"
+			log = "{\"type\":\"tac_start\",\"province\":0,\"leader_id\":0,\"is_player_attacker\":true,\"ver\":\"0.3.3\"}"
 
 			# Enemy tactic card (DESIGN §3.1): v1 ships the fixed default
 			# card; the real HOI4 combat-tactic mapping (16 cards, §7.2)
@@ -93,6 +82,44 @@ forward_command_decisions = {
 		}
 	}
 
+	# "Scan for Commandable Battles" — asks the external program to publish
+	# the battles the player takes part in (normal fronts, landings,
+	# airdrops, border wars, expeditionary and volunteer fights). The program
+	# snapshots the save and lights up exactly those states on the map
+	# (same-day only — the daily pulse reclaims them, scan again to refresh);
+	# the entry row above appears once it has something to offer.
+	#
+	# Every scan is a round trip with an in-game answer: the program pauses
+	# the game and clears the receipt flag the moment it picks the scan up
+	# (the tag in the log line lets it answer before it even snapshots the
+	# save), says so when it finds nothing to publish, and a scan nobody
+	# answers raises the no-response popup from the 12-hour check — so a
+	# player who forgot to start the program is told instead of staring at
+	# an empty map.
+	tactical_scan = {
+		icon = generic_research
+		cost = 0
+		fire_only_once = no
+		days_re_enable = 0
+
+		visible = { NOT = { has_country_flag = tac_mode_active } }
+		available = { NOT = { has_country_flag = tac_mode_active } }
+
+		complete_effect = {
+			# The country tag rides the line ([ROOT.GetTag] interpolates) so
+			# the external program can answer the scan before its save
+			# snapshot — the receipt must never race the check below.
+			log = "{\"type\":\"tac_scan\",\"tag\":\"[ROOT.GetTag]\"}"
+
+			# Scan receipt (DESIGN §10.7): armed here, cleared by the
+			# program's answer. The check below counts only game time the
+			# player actually plays — and the program pauses the game on
+			# receipt, so an answer lands long before the check does.
+			set_country_flag = tac_scan_waiting
+			country_event = { id = tac_scan.3 hours = 12 }
+		}
+	}
+
 	# "Force Exit Tactical Mode" — always visible while tactical mode is on (§10.4).
 	tactical_force_exit = {
 		icon = generic_research
@@ -100,7 +127,7 @@ forward_command_decisions = {
 		fire_only_once = no
 		# Re-takeable immediately — the default re-enable is next-day,
 		# which left the row showing as "already clicked" after a same-day
-		# reset (vanilla form: 124 uses).
+		# reset (vanilla idiom, e.g. RAJ_GOE).
 		days_re_enable = 0
 
 		visible = { has_country_flag = tac_mode_active }

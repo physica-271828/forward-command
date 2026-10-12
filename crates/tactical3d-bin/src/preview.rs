@@ -107,6 +107,16 @@ const STATIONS: &[(&str, ModelFamily, GunState)] = &[
         ModelFamily::RocketTowed,
         GunState::LimberedTruck,
     ),
+    // Self-propelled pieces (GunState::NA): the single-mesh emplaced
+    // form, no tow bar.
+    ("unit_artillery_spg", ModelFamily::Artillery, GunState::NA),
+    ("unit_antitank_spg", ModelFamily::AntiTank, GunState::NA),
+    ("unit_antiair_spg", ModelFamily::AntiAir, GunState::NA),
+    (
+        "unit_rockettowed_spg",
+        ModelFamily::RocketTowed,
+        GunState::NA,
+    ),
 ];
 
 #[derive(Resource)]

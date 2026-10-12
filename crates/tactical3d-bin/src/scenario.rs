@@ -22,15 +22,15 @@ use crate::demo::{arena_grid, arena_zones};
 use crate::script;
 use crate::settings::AppSettings;
 
-/// Design-stat lookup warnings collected during battalion assembly —
-/// logged deduped so unknown (e.g. modded) module tokens surface instead
-/// of silently contributing 0.
+/// Lookup warnings collected during battalion assembly (designer module /
+/// upgrade tokens, unknown support companies) — logged deduped so unknown
+/// (e.g. modded) content surfaces instead of silently contributing 0.
 fn log_design_warnings(warnings: &[String]) {
     let mut unique: Vec<&str> = warnings.iter().map(String::as_str).collect();
     unique.sort_unstable();
     unique.dedup();
     for w in unique {
-        eprintln!("design stats: {w}");
+        eprintln!("assembly: {w}");
     }
 }
 
@@ -123,7 +123,6 @@ pub struct BattleSpec {
     pub vp_label: Option<(String, HexCoord)>,
     /// Battle province (live sync / injection context; None for synthetic).
     pub province: Option<u32>,
-    pub template: String,
     /// §6.11: the battle's flag board — zone anchors + capture
     /// progress (city = VP-urban cluster; field = script `flags:` or the
     /// deep-band fallback). `None` = annihilation-only battle.
@@ -138,9 +137,22 @@ pub struct BattleSpec {
     /// The PLAYER side's AI-controlled allied contingents, grouped
     /// by country tag. Empty = the player commands her whole side (default).
     pub allies: Vec<tactical3d_render::game::AllyContingent>,
+    /// Every country taking part, both sides — live assemblies fill it from
+    /// the save's land_combat `tags` lists; script battles leave it empty and
+    /// rely on `division_tags`.
+    pub belligerent_tags: Vec<String>,
     /// HOI4 battle context for the `damage_units`
     /// sync batches (live from-save assemblies only; None elsewhere).
     pub battle_ctx: Option<tactical_sync::BattleContext>,
+    /// Interior battles (§4.2 step 9 — the attacker's source IS the battle
+    /// province): the province-boundary rout rim overriding the defender
+    /// zone's east rim. `None` on ordinary battles.
+    pub retreat_rim: Option<Vec<HexCoord>>,
+    /// Live battles: each source province's own staging hexes inside the
+    /// attacker zone — AI / auto-deploy ties each attacking division to
+    /// its own source's staging area (manual deployment stays free).
+    /// Empty on fallback / script forms.
+    pub staging: Vec<(u32, Vec<HexCoord>)>,
     /// Damage writeback mode from settings (§12).
     pub writeback_mode: tactical_sync::WritebackMode,
     /// In-game battle start datetime `(year, month, day, hour)`
@@ -177,10 +189,7 @@ pub fn map_generator(
         drop(guard);
     }
     let hoi4_dir = settings.hoi4_dir()?;
-    let gen = build_generator(
-        &hoi4_dir,
-        settings.language() == tactical_locale::Language::SimpChinese,
-    )?;
+    let gen = build_generator(&hoi4_dir, settings.language().code())?;
     *cell.lock().ok()? = Some((key, gen));
     Some(cell)
 }
@@ -207,7 +216,7 @@ pub fn with_generator_mut<R>(
     Some(f(gen))
 }
 
-fn build_generator(hoi4_dir: &Path, simp_chinese: bool) -> Option<MapGenerator> {
+fn build_generator(hoi4_dir: &Path, lang_code: &str) -> Option<MapGenerator> {
     let map_dir = hoi4_dir.join("map");
     let pm = tactical_map::ProvinceMap::load_bmp(&map_dir.join("provinces.bmp")).ok()?;
     let defs = tactical_map::load_definition_csv(&map_dir.join("definition.csv")).ok()?;
@@ -237,11 +246,10 @@ fn build_generator(hoi4_dir: &Path, simp_chinese: bool) -> Option<MapGenerator> 
     gen.set_unit_stacks(tactical_map::load_unit_stacks(
         &map_dir.join("unitstacks.txt"),
     ));
-    // VP names in the UI language (Chinese install → Chinese city
-    // names; English / missing folder → the English yml).
+    // VP names in the UI language (the install's own localisation when it
+    // ships one, else the English yml).
     gen.set_vp_names(tactical_map::load_vp_names(&tactical_map::vp_names_path(
-        hoi4_dir,
-        simp_chinese,
+        hoi4_dir, lang_code,
     )));
     Some(gen)
 }
@@ -361,7 +369,6 @@ pub fn assemble(sc: &Scenario, settings: &AppSettings) -> Result<BattleSpec, Str
         || matches!(sc.defender, ForceChoice::FromSave { .. });
     let mut units: Vec<BattalionUnit> = Vec::new();
     let mut next_id = 0usize;
-    let mut template = "Debug Division".to_string();
     if let Some((atk, def)) = &script_sides {
         // Canonical-key terrain adjusters for script battalions
         // (a missing table degrades to zero adjusters, §5.3 fallback).
@@ -384,7 +391,6 @@ pub fn assemble(sc: &Scenario, settings: &AppSettings) -> Result<BattleSpec, Str
             &zones.1,
             adj_templates.as_ref(),
         )?;
-        template = atk.division.clone();
         // Stamp every battalion's country tag from the
         // division→tag table (HQs included — they carry the division name).
         // Non-script battles leave tags empty → side-colored base plates.
@@ -456,9 +462,6 @@ pub fn assemble(sc: &Scenario, settings: &AppSettings) -> Result<BattleSpec, Str
                             "no divisions of {tag} found in province {province_id} (save: {})",
                             save_path.display()
                         ));
-                    }
-                    if side == sc.player_side && template == "Debug Division" {
-                        template = divs[0].template_name.clone();
                     }
                     // The force's country org modifier, computed
                     // once for all its divisions.
@@ -533,7 +536,6 @@ pub fn assemble(sc: &Scenario, settings: &AppSettings) -> Result<BattleSpec, Str
             &zones.1,
             adj_templates.as_ref(),
         );
-        template = format!("{} Division", preset_name(&preset_num(&sc.attacker)));
     }
     if units.is_empty() {
         return Err("scenario produced no battalions".into());
@@ -557,12 +559,16 @@ pub fn assemble(sc: &Scenario, settings: &AppSettings) -> Result<BattleSpec, Str
         location,
         vp_label,
         province,
-        template,
         flags,
         seed: sc.seed,
         division_tags,
         allies,
+        // A script battle declares no belligerents — `division_tags` is its
+        // per-division country registry instead.
+        belligerent_tags: Vec::new(),
         battle_ctx: None,
+        retreat_rim: None,
+        staging: Vec::new(),
         writeback_mode: tactical_sync::WritebackMode::default(),
         start_datetime: None,
         roster: tactical_sync::BattleRoster::default(),
@@ -572,6 +578,8 @@ pub fn assemble(sc: &Scenario, settings: &AppSettings) -> Result<BattleSpec, Str
 fn preset_num(f: &ForceChoice) -> String {
     match f {
         ForceChoice::Preset(p) => p.to_string(),
+        // A FromSave force never reaches this: the caller guards on
+        // `needs_save` and prints the picked save's name instead.
         ForceChoice::FromSave { .. } => "2".into(),
     }
 }
@@ -1094,6 +1102,7 @@ pub fn deploy_force(
             u.attach(tactical_core::SupportAttachment {
                 kind,
                 name: name.to_string(),
+                token: String::new(),
             });
         }
     };
@@ -1139,6 +1148,136 @@ pub fn deploy_force(
 // ---------------------------------------------------------------------------
 // Live assembly (tac_start from game.log → battle)
 
+/// The player's running battle at assembly time, viewed uniformly: an
+/// ordinary land combat or a border war — a separate combat system whose
+/// sides never share a province (DESIGN.md §10.7). A border war's
+/// `location` is its DEFENDER's province, which is exactly the role a land
+/// combat's `location` plays, so the assembly below treats both records
+/// alike.
+#[derive(Clone, Copy)]
+struct LiveBattle<'a> {
+    location: u32,
+    attacker: LiveBattleSide<'a>,
+    defender: LiveBattleSide<'a>,
+}
+
+/// One side of a [`LiveBattle`] — the fields the assembly consumes, so both
+/// record types present the same shape.
+#[derive(Clone, Copy)]
+struct LiveBattleSide<'a> {
+    unit_ids: &'a [u64],
+    tags: &'a [String],
+    tactic: Option<u32>,
+}
+
+impl<'a> LiveBattle<'a> {
+    fn from_land(c: &'a tactical_save::LandCombatData) -> Self {
+        Self {
+            location: c.location,
+            attacker: LiveBattleSide {
+                unit_ids: &c.attacker.unit_ids,
+                tags: &c.attacker.tags,
+                tactic: c.attacker.tactic,
+            },
+            defender: LiveBattleSide {
+                unit_ids: &c.defender.unit_ids,
+                tags: &c.defender.tags,
+                tactic: c.defender.tactic,
+            },
+        }
+    }
+
+    fn from_border_war(c: &'a tactical_save::BorderWarCombatData) -> Self {
+        Self {
+            location: c.location,
+            attacker: LiveBattleSide {
+                unit_ids: &c.attacker.unit_ids,
+                tags: &c.attacker.tags,
+                tactic: c.attacker.tactic,
+            },
+            defender: LiveBattleSide {
+                unit_ids: &c.defender.unit_ids,
+                tags: &c.defender.tags,
+                tactic: c.defender.tactic,
+            },
+        }
+    }
+}
+
+/// Pick the running battle the player takes command of, plus the side she is
+/// on. The side judgment uses the SAME dual criterion as the scan publisher
+/// ([`crate::enterable`], §10.7) — side tags ∨ player-owned units — because a
+/// volunteer force may fight tag-less under another country's banner; a state
+/// the publisher offers must assemble on the side the publisher promised.
+///
+/// A non-zero `province` comes from the state-target pick (menu/live resolved
+/// tac_pick=1 → this location) and LOCKS the battle by location; a border war
+/// locks second (its `location` is the DEFENDER's province, the same role a
+/// land combat's `location` plays); the largest-battle heuristic only runs
+/// when the pick no longer matches a running combat (ended between pick and
+/// assembly) or no pick was made (province=0).
+fn select_live_battle<'a>(
+    save_game: &'a tactical_save::SaveGame,
+    province: u32,
+    tag: &str,
+) -> (Option<LiveBattle<'a>>, Option<bool>) {
+    let owners = crate::enterable::unit_owners(save_game);
+    let involves_player = |c: &&tactical_save::LandCombatData| {
+        crate::enterable::land_side_has_player(&c.attacker, &owners, tag)
+            || crate::enterable::land_side_has_player(&c.defender, &owners, tag)
+    };
+    let by_size =
+        |c: &&tactical_save::LandCombatData| c.attacker.unit_ids.len() + c.defender.unit_ids.len();
+    let land = |c: &'a tactical_save::LandCombatData| {
+        (
+            LiveBattle::from_land(c),
+            crate::enterable::land_side_has_player(&c.attacker, &owners, tag),
+        )
+    };
+    // Border wars are a separate record type (§10.7).
+    let locked_border = (province != 0)
+        .then(|| {
+            save_game
+                .border_war_combats
+                .iter()
+                .filter(|c| {
+                    crate::enterable::border_side_has_player(&c.attacker, &owners, tag)
+                        || crate::enterable::border_side_has_player(&c.defender, &owners, tag)
+                })
+                .find(|c| c.location == province)
+        })
+        .flatten();
+    let locked = (province != 0)
+        .then(|| {
+            save_game
+                .land_combats
+                .iter()
+                .filter(involves_player)
+                .find(|c| c.location == province)
+        })
+        .flatten();
+    locked
+        .map(land)
+        .or_else(|| {
+            locked_border.map(|c| {
+                (
+                    LiveBattle::from_border_war(c),
+                    crate::enterable::border_side_has_player(&c.attacker, &owners, tag),
+                )
+            })
+        })
+        .or_else(|| {
+            save_game
+                .land_combats
+                .iter()
+                .filter(involves_player)
+                .max_by_key(by_size)
+                .map(land)
+        })
+        .map(|(battle, attacker)| (Some(battle), Some(attacker)))
+        .unwrap_or((None, None))
+}
+
 /// Assemble a battle from a real tac_start trigger (live mode / menu listen).
 /// The save's `land_combat` record is the battle truth: contested province,
 /// side membership (player attack/defend), participating division ids and
@@ -1150,6 +1289,11 @@ pub fn deploy_force(
 /// of a script battle's `control: ai` blocks — with their own country's
 /// national modifiers; the player keeps command of her own divisions.
 /// Heavy: map generation + save parse.
+///
+/// `seed` overrides the time-based per-battle dice (map relief, flag
+/// anchors, combat RNG) — the reproducible path for `--livebattle seed=N`,
+/// where every consumer must see the SAME seed or the run cannot be
+/// replayed.
 pub fn assemble_live(
     settings: &AppSettings,
     province: u32,
@@ -1157,6 +1301,7 @@ pub fn assemble_live(
     attack_dirs: &[String],
     enemy_tactic: CombatTactic,
     player_is_attacker: bool,
+    seed: Option<u64>,
 ) -> Result<BattleSpec, String> {
     let dirs: Vec<HexDirection> = attack_dirs
         .iter()
@@ -1195,35 +1340,8 @@ pub fn assemble_live(
     // fixed tactic card) only fill in when NO land_combat involves the
     // player. The early inference premise ("both sides sit in the
     // contested province") is FALSE — attackers stay in their source
-    // provinces (tac_probe.hoi4: ITA∩ETH = ∅). A non-zero province comes
-    // from the state-target pick (menu/live resolved tac_pick=1 → this
-    // location) and LOCKS the battle by location; the largest-battle
-    // heuristic only runs when the pick no longer matches a running combat
-    // (ended between pick and assembly) or no pick was made (province=0).
-    let player_battle = {
-        let involves_player = |c: &&tactical_save::LandCombatData| {
-            c.attacker.tags.iter().any(|t| t == tag) || c.defender.tags.iter().any(|t| t == tag)
-        };
-        let by_size = |c: &&tactical_save::LandCombatData| {
-            c.attacker.unit_ids.len() + c.defender.unit_ids.len()
-        };
-        let locked = (province != 0)
-            .then(|| {
-                save_game
-                    .land_combats
-                    .iter()
-                    .filter(involves_player)
-                    .find(|c| c.location == province)
-            })
-            .flatten();
-        locked.or_else(|| {
-            save_game
-                .land_combats
-                .iter()
-                .filter(involves_player)
-                .max_by_key(by_size)
-        })
-    };
+    // provinces (tac_probe.hoi4: ITA∩ETH = ∅).
+    let (player_battle, save_side) = select_live_battle(&save_game, province, tag);
 
     // Battle province: the player's land_combat location wins; a non-zero
     // mod province (old logs / future mods) is used as-is.
@@ -1237,9 +1355,7 @@ pub fn assemble_live(
         (None, p) => p,
     };
     // Side / enemy tactic: the save's truth wins over the mod's constants.
-    let player_is_attacker = player_battle
-        .map(|b| b.attacker.tags.iter().any(|t| t == tag))
-        .unwrap_or(player_is_attacker);
+    let player_is_attacker = save_side.unwrap_or(player_is_attacker);
     let enemy_tactic = player_battle
         .and_then(|b| {
             if player_is_attacker {
@@ -1275,12 +1391,21 @@ pub fn assemble_live(
         })
         .unwrap_or_default();
     // Vary the dice per live battle while staying deterministic
-    // for a given (province, launch-second) pair.
-    let live_seed = province as u64
-        ^ std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+    // for a given (province, launch-second) pair. An explicit `seed=` (the
+    // CLI reproducibility path) replaces the clock entirely, so the map,
+    // the flag anchors and the combat engine all replay from one number.
+    let live_seed = seed.unwrap_or_else(|| {
+        province as u64
+            ^ std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+    });
+    // The force size hints the interior-battle pocket sizing (§4.2 step 9)
+    // — a paradrop/civil-war battle has its sources inside the province.
+    let attacker_units = player_battle
+        .map(|b| b.attacker.unit_ids.len())
+        .unwrap_or(0);
     let tmap = with_generator_mut(settings, |gen| {
         // The live battle's own seed also drives the elevation
         // noise — every live battle gets fresh relief (dice-seed parity).
@@ -1290,7 +1415,13 @@ pub fn assemble_live(
         // lock is released.
         gen.set_rail_levels(Some(save_game.rail_levels.clone()));
         let generated = gen
-            .generate_from_sources(province, &source_provinces, &dirs, live_seed)
+            .generate_from_sources(
+                province,
+                &source_provinces,
+                attacker_units,
+                &dirs,
+                live_seed,
+            )
             .ok();
         gen.set_rail_levels(None);
         generated
@@ -1368,12 +1499,12 @@ pub fn assemble_live(
         my_tags = if my_side.tags.is_empty() {
             vec![tag.to_string()]
         } else {
-            my_side.tags.clone()
+            my_side.tags.to_vec()
         };
         their_tags = if their_side.tags.is_empty() {
             vec![enemy_tag.clone()]
         } else {
-            their_side.tags.clone()
+            their_side.tags.to_vec()
         };
     } else {
         let own = tactical_save::find_divisions_in_province(&save_game, tag, province);
@@ -1450,7 +1581,6 @@ pub fn assemble_live(
         my_tags = vec![tag.to_string()];
         their_tags = vec![enemy_tag.clone()];
     }
-    let template = player_divs[0].1.template_name.clone();
 
     // §5.2 real division names: the save stores `division_name` token pairs,
     // not literals — resolve them through the names-groups read LIVE from
@@ -1632,6 +1762,17 @@ pub fn assemble_live(
     } else {
         (their_tags, my_tags)
     };
+    // Base plates: the battle's color table must know every belligerent, not
+    // just the side primaries — an enemy-side co-belligerent rides neither
+    // `allies` (the player's side only) nor a script `division_tags` table,
+    // and would otherwise wear the main enemy's color. These side lists are
+    // the save's own participant record; a tag can appear on both, so dedup.
+    let mut belligerent_tags: Vec<String> = Vec::new();
+    for t in atk_tags.iter().chain(def_tags.iter()) {
+        if !belligerent_tags.contains(t) {
+            belligerent_tags.push(t.clone());
+        }
+    }
     // HOI4 battle context for the damage_units sync
     // batches — contested province, side tags, and the per-province maxima
     // bases (participants for org, every attacker-side division for the
@@ -1671,7 +1812,6 @@ pub fn assemble_live(
         location,
         vp_label: tmap.vp_label.clone(),
         province: Some(province),
-        template,
         flags,
         // Vary the dice per live battle while staying deterministic
         // for a given (province, launch-second) pair.
@@ -1683,7 +1823,10 @@ pub fn assemble_live(
         // §7.5: one contingent per allied country on the player's side
         // (empty = the player commands her whole side).
         allies,
+        belligerent_tags,
         battle_ctx,
+        retreat_rim: tmap.retreat_rim.clone(),
+        staging: tmap.staging.clone(),
         writeback_mode: settings.writeback_mode(),
         // The battle clock starts from the save's in-game time.
         start_datetime: save_game.date,
@@ -1853,7 +1996,7 @@ fn roster_entry(
 #[allow(clippy::too_many_arguments)]
 fn build_battle_context(
     save_game: &tactical_save::SaveGame,
-    battle: &tactical_save::LandCombatData,
+    battle: LiveBattle<'_>,
     province: u32,
     units: &[BattalionUnit],
     templates: &tactical_save::UnitTemplateTable,
@@ -2102,13 +2245,23 @@ pub fn apply_roster_sync(
     // NOTE: an empty roster is NOT a no-op gate — a live battle whose
     // whole OOB just left still diffs (every listed division re-joins);
     // the non-live battles are already excluded by the battle-ctx gate.
-    let Some(combat) = save.land_combats.iter().find(|c| c.location == contested) else {
+    let Some((atk_ids, def_ids)) = save
+        .land_combats
+        .iter()
+        .find(|c| c.location == contested)
+        .map(|c| (&c.attacker.unit_ids, &c.defender.unit_ids))
+        .or_else(|| {
+            // Border wars carry the same per-side unit lists (§10.7).
+            save.border_war_combats
+                .iter()
+                .find(|c| c.location == contested)
+                .map(|c| (&c.attacker.unit_ids, &c.defender.unit_ids))
+        })
+    else {
         return report; // battle ended HOI4-side — the savecheck path resolves it
     };
-    let atk_ids: std::collections::HashSet<u64> =
-        combat.attacker.unit_ids.iter().copied().collect();
-    let def_ids: std::collections::HashSet<u64> =
-        combat.defender.unit_ids.iter().copied().collect();
+    let atk_ids: std::collections::HashSet<u64> = atk_ids.iter().copied().collect();
+    let def_ids: std::collections::HashSet<u64> = def_ids.iter().copied().collect();
     let diff = session.roster.diff(&atk_ids, &def_ids);
 
     // 1. Departures: every battalion of a division the HOI4 combat no
@@ -2316,15 +2469,16 @@ fn recompute_pools(
         })
         .collect();
     if let Some(ctx) = &mut session.battle_ctx {
-        ctx.defender_max = def_max;
-        ctx.attacker_provinces = attacker_provinces;
-        // Degenerate states (a side momentarily unlisted) keep the
-        // assembly-time tags rather than dropping the damage lines.
+        // Tags and pools update TOGETHER: a degenerate roster (a side
+        // momentarily unlisted) keeps the assembly-time tags AND their
+        // pools, so a retained tag can never face an emptied pool.
         if !atk_tags.is_empty() {
             ctx.attacker_tags = atk_tags;
+            ctx.attacker_provinces = attacker_provinces;
         }
         if !def_tags.is_empty() {
             ctx.defender_tags = def_tags;
+            ctx.defender_max = def_max;
         }
     }
 }
@@ -2451,8 +2605,18 @@ impl Scenario {
         // explicit side toggle may ride along (the debug form's side switch
         // on a script battle).
         if let Some(f) = &self.file {
+            // Keep the path RELATIVE to data/battles (sub-paths included,
+            // no extension): `script::resolve` accepts sub-paths, so a
+            // stem-only round trip would send `campaign/warsaw` to the
+            // child as `warsaw` and fail there.
             let name = f.file_stem().and_then(|s| s.to_str()).unwrap_or("script");
-            args.push(format!("file={name}"));
+            let rel = f
+                .parent()
+                .and_then(|p| p.strip_prefix(crate::script::scripts_dir()).ok())
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(|p| format!("{}/{}", p.to_string_lossy().replace('\\', "/"), name))
+                .unwrap_or_else(|| name.to_string());
+            args.push(format!("file={rel}"));
             if self.side_override {
                 args.push(format!(
                     "side={}",
@@ -2833,6 +2997,29 @@ mod tests {
         assert_eq!(args, vec!["file=1939_warsaw"]);
     }
 
+    /// hoi4_dir=/saves_dir=/log_path= ride along with any scenario shape
+    /// (file= included): the CLI entry points apply them onto the loaded
+    /// settings via apply_path_overrides, so parse_cli must accept and
+    /// ignore them rather than trip the unknown-key / exclusivity guards.
+    #[test]
+    fn cli_path_override_keys_ride_along() {
+        let riders = || {
+            vec![
+                "hoi4_dir=D:/OtherHOI4".to_string(),
+                "saves_dir=D:/OtherSaves".to_string(),
+                "log_path=D:/OtherHOI4/logs/game.log".to_string(),
+            ]
+        };
+        let mut args = vec!["file=1939_warsaw".to_string()];
+        args.extend(riders());
+        let sc = parse_cli(&args).unwrap();
+        assert!(sc.file.is_some());
+        let mut args = vec!["province=306".to_string(), "dirs=E".to_string()];
+        args.extend(riders());
+        let sc = parse_cli(&args).unwrap();
+        assert!(matches!(sc.map, MapChoice::Province { id: 306, .. }));
+    }
+
     /// div_control= rides along with file= — the menu nation
     /// selector's per-tag command overrides.
     #[test]
@@ -2955,11 +3142,14 @@ mod tests {
             strength: 1.0,
             experience: 0.0,
             entrenchment: 0.0,
-            supply_status: None,
+            supply_current: None,
+            supply_max: None,
+            fuel: None,
             equipment: std::collections::HashMap::new(),
             equipment_ids: Vec::new(),
             battalions: vec![inf()],
             support_companies: Vec::new(),
+            is_army_hq: false,
         };
         let country = |tag: &str, divisions| CountryData {
             tag: tag.to_string(),
@@ -3043,7 +3233,7 @@ mod tests {
 
         let ctx = build_battle_context(
             &save_game,
-            &battle,
+            LiveBattle::from_land(&battle),
             13237,
             &units,
             &templates,
@@ -3085,11 +3275,14 @@ mod tests {
             strength: 1.0,
             experience: 0.0,
             entrenchment: 0.0,
-            supply_status: None,
+            supply_current: None,
+            supply_max: None,
+            fuel: None,
             equipment: std::collections::HashMap::new(),
             equipment_ids: Vec::new(),
             battalions: Vec::new(),
             support_companies: Vec::new(),
+            is_army_hq: false,
         }
     }
 
@@ -3181,6 +3374,183 @@ mod tests {
         let (allies, enemies) = war_partners(&save, "GER");
         assert!(allies.is_empty());
         assert!(enemies.contains("ENG") && enemies.contains("FRA"));
+    }
+
+    // ── Live assembly: battle selection + player-side judgment ──────────
+
+    /// One minimal coalition country — shared by the selection fixtures
+    /// below.
+    fn selection_country(
+        tag: &str,
+        divisions: Vec<tactical_save::DivisionData>,
+    ) -> tactical_save::CountryData {
+        tactical_save::CountryData {
+            tag: tag.to_string(),
+            divisions,
+            technologies: Vec::new(),
+            active_ideas: Vec::new(),
+            dynamic_modifiers: Vec::new(),
+            leader_traits: Vec::new(),
+            active_advisors: Vec::new(),
+        }
+    }
+
+    /// The selection lock and the side judgment share the scan publisher's
+    /// dual criterion (§10.7): a volunteer force fighting tag-less under
+    /// another country's banner still puts the player on the side its
+    /// divisions stand on.
+    #[test]
+    fn select_live_battle_judges_side_by_owned_units_without_a_tag() {
+        use tactical_save::{LandCombatData, LandCombatSideData};
+        let mut countries = std::collections::HashMap::new();
+        // GER volunteers (division 77) fight inside SPR's side — the side's
+        // tag list omits GER entirely.
+        countries.insert(
+            "GER".to_string(),
+            selection_country("GER", vec![coalition_div(77, 7154)]),
+        );
+        countries.insert(
+            "SPR".to_string(),
+            selection_country("SPR", vec![coalition_div(88, 7154)]),
+        );
+        countries.insert(
+            "SPD".to_string(),
+            selection_country("SPD", vec![coalition_div(99, 7154)]),
+        );
+        let save = tactical_save::SaveGame {
+            countries,
+            land_combats: vec![LandCombatData {
+                location: 7154,
+                attacker: LandCombatSideData {
+                    unit_ids: vec![77, 88],
+                    tags: vec!["SPR".to_string()],
+                    ..Default::default()
+                },
+                defender: LandCombatSideData {
+                    unit_ids: vec![99],
+                    tags: vec!["SPD".to_string()],
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        let (battle, side) = select_live_battle(&save, 7154, "GER");
+        assert!(
+            battle.is_some(),
+            "a player-owned division makes the battle hers"
+        );
+        assert_eq!(side, Some(true), "the volunteers' side is hers");
+        // The mirror: for SPD the same record is a defensive battle.
+        let (_, side) = select_live_battle(&save, 7154, "SPD");
+        assert_eq!(side, Some(false));
+        // A country with nothing in the fight is not a participant.
+        let (battle, side) = select_live_battle(&save, 7154, "ITA");
+        assert!(battle.is_none());
+        assert_eq!(side, None);
+    }
+
+    /// A picked state locks the border_war_combat record by its `location`
+    /// (the DEFENDER's province — the same role a land combat's location
+    /// plays), and the side comes from the same dual criterion.
+    #[test]
+    fn select_live_battle_locks_a_border_war_by_location() {
+        use tactical_save::{BorderWarCombatData, BorderWarCombatSideData};
+        let mut countries = std::collections::HashMap::new();
+        countries.insert(
+            "JAP".to_string(),
+            selection_country("JAP", vec![coalition_div(1890, 6944)]),
+        );
+        countries.insert(
+            "SOV".to_string(),
+            selection_country(
+                "SOV",
+                vec![coalition_div(495, 11879), coalition_div(496, 11879)],
+            ),
+        );
+        let save = tactical_save::SaveGame {
+            countries,
+            border_war_combats: vec![BorderWarCombatData {
+                location: 11879,
+                attacker: BorderWarCombatSideData {
+                    unit_ids: vec![1890],
+                    tags: vec!["JAP".to_string()],
+                    tag: Some("JAP".to_string()),
+                    state: Some(1028),
+                    province: Some(6944),
+                    ..Default::default()
+                },
+                defender: BorderWarCombatSideData {
+                    unit_ids: vec![495, 496],
+                    tags: vec!["SOV".to_string()],
+                    tag: Some("SOV".to_string()),
+                    state: Some(408),
+                    province: Some(11879),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        let (battle, side) = select_live_battle(&save, 11879, "SOV");
+        let battle = battle.expect("the picked province locks the border war");
+        assert_eq!(battle.location, 11879);
+        assert_eq!(battle.defender.unit_ids, &[495, 496]);
+        assert_eq!(
+            side,
+            Some(false),
+            "the defending player is not the attacker"
+        );
+        // A province matching nothing selects nothing (the land list is
+        // empty, so the largest-battle fallback has nothing to grab either).
+        let (battle, side) = select_live_battle(&save, 9999, "SOV");
+        assert!(battle.is_none());
+        assert_eq!(side, None);
+    }
+
+    /// The border-war side judgment honors player-owned units even when the
+    /// side's own tag fields name another country (volunteer shape).
+    #[test]
+    fn select_live_battle_border_war_attacker_side_by_owned_units() {
+        use tactical_save::{BorderWarCombatData, BorderWarCombatSideData};
+        let mut countries = std::collections::HashMap::new();
+        // ITA volunteers (division 1890) fight inside JAP's border-war side.
+        countries.insert(
+            "ITA".to_string(),
+            selection_country("ITA", vec![coalition_div(1890, 6944)]),
+        );
+        countries.insert(
+            "SOV".to_string(),
+            selection_country("SOV", vec![coalition_div(495, 11879)]),
+        );
+        let save = tactical_save::SaveGame {
+            countries,
+            border_war_combats: vec![BorderWarCombatData {
+                location: 11879,
+                attacker: BorderWarCombatSideData {
+                    unit_ids: vec![1890],
+                    tags: vec!["JAP".to_string()],
+                    tag: Some("JAP".to_string()),
+                    state: Some(1028),
+                    province: Some(6944),
+                    ..Default::default()
+                },
+                defender: BorderWarCombatSideData {
+                    unit_ids: vec![495],
+                    tags: vec!["SOV".to_string()],
+                    tag: Some("SOV".to_string()),
+                    state: Some(408),
+                    province: Some(11879),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        let (battle, side) = select_live_battle(&save, 11879, "ITA");
+        assert!(battle.is_some());
+        assert_eq!(
+            side,
+            Some(true),
+            "the volunteers' side is the attacking one"
+        );
     }
 
     /// The live allied split: one contingent per OWNER TAG, in
@@ -3275,11 +3645,14 @@ mod tests {
             strength: 1.0,
             experience: 0.0,
             entrenchment: 0.0,
-            supply_status: None,
+            supply_current: None,
+            supply_max: None,
+            fuel: None,
             equipment: std::collections::HashMap::new(),
             equipment_ids: Vec::new(),
             battalions: Vec::new(),
             support_companies: Vec::new(),
+            is_army_hq: false,
         };
         let mut divs: Vec<(String, tactical_save::DivisionData)> = vec![
             ("GER".to_string(), div(1, Some(2))),   // scripted entry
@@ -3327,11 +3700,14 @@ mod tests {
             strength: 1.0,
             experience: 0.0,
             entrenchment: 0.0,
-            supply_status: None,
+            supply_current: None,
+            supply_max: None,
+            fuel: None,
             equipment: std::collections::HashMap::new(),
             equipment_ids: Vec::new(),
             battalions: vec![inf()],
             support_companies: Vec::new(),
+            is_army_hq: false,
         };
         let country = |tag: &str, divisions| tactical_save::CountryData {
             tag: tag.to_string(),
@@ -3378,7 +3754,7 @@ mod tests {
         let units = vec![u];
         let ctx = build_battle_context(
             &save_game,
-            &battle,
+            LiveBattle::from_land(&battle),
             13237,
             &units,
             &templates,
@@ -3419,6 +3795,14 @@ mod tests {
             r#"{"line_battalions": {"infantry": {"max_organisation": 60.0, "max_strength": 25.0}}}"#,
         )
         .unwrap();
+        // Divisions arrive fully equipped: below the §5.3 field threshold
+        // battalions no longer spawn at all.
+        let equipment = EquipmentTable::from_str(
+            r#"{"infantry_equipment_0": {"archetype": "infantry_equipment", "year": 1936,
+                "soft_attack": 3.0, "hard_attack": 0.5, "defense": 20.0, "breakthrough": 2.0,
+                "armor": 0.0, "piercing": 1.0, "hardness": 0.0, "max_speed": 4.0}}"#,
+        )
+        .unwrap();
         let inf = || tactical_save::BattalionInfo {
             token: "infantry".to_string(),
             unit_type: UnitType::Infantry,
@@ -3437,11 +3821,16 @@ mod tests {
             strength: 1.0,
             experience: 0.0,
             entrenchment: 0.0,
-            supply_status: None,
-            equipment: std::collections::HashMap::new(),
+            supply_current: None,
+            supply_max: None,
+            fuel: None,
+            equipment: [("infantry_equipment_0".to_string(), 600.0)]
+                .into_iter()
+                .collect(),
             equipment_ids: Vec::new(),
             battalions: vec![inf()],
             support_companies: Vec::new(),
+            is_army_hq: false,
         };
         let country = |tag: &str, divisions| CountryData {
             tag: tag.to_string(),
@@ -3500,7 +3889,7 @@ mod tests {
             let us = create_tactical_units_named(
                 d,
                 side,
-                &EquipmentTable::default(),
+                &equipment,
                 &templates,
                 None,
                 neutral,
@@ -3551,7 +3940,7 @@ mod tests {
             units,
             save,
             tables: DivisionTables {
-                equipment: EquipmentTable::default(),
+                equipment,
                 templates,
                 modifiers: ModifierTable::default(),
                 doctrines: DoctrineTable::default(),

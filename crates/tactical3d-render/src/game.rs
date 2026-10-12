@@ -13,10 +13,11 @@ use tactical_core::fog::{FogOfWar, VisibilityState};
 use tactical_core::grid::HexGrid;
 use tactical_core::hex::HexCoord;
 use tactical_core::movement::{
-    advance_move_orders, eta_turns, order_eta_hours, refresh_move_order, MovementEvent,
+    advance_move_orders, eta_turns, order_eta_hours, refresh_move_order, repoint_carry_hours,
+    MovementEvent,
 };
 use tactical_core::params::CombatParams;
-use tactical_core::pathfinding::find_path;
+use tactical_core::pathfinding::{control_field, find_path};
 use tactical_core::unit::{BattalionUnit, MoveLeg, MoveOrder, Side, UnitState};
 use tactical_locale::Locale;
 use tactical_sync::{BattlePhase, BattleSession, VictoryOutcome};
@@ -30,13 +31,18 @@ use crate::picking::{cursor_hex, unit_y_on_grid};
 use crate::state::{
     BattleReport, BattleTour, BoxSelect, CommandMode, DesyncAlert, DivPickKind,
     EngagementDetailView, FlashNotice, HighlightKind, NoticeBar, PendingUnitVisual, ReportLane,
-    SyncStall, TacticalState, UiWindows, BOX_SELECT_PX,
+    SyncProgress, SyncStall, TacticalState, UiWindows, BOX_SELECT_PX,
 };
 use crate::units::MoveAnims;
 
-/// Spawn tracers + damage floaters for a resolved strike.
+/// Spawn tracers + damage floaters for a resolved strike. The impact
+/// endpoint rides the TARGET hex's surface: hex tops rise with elevation
+/// (up to ~1.7 world units), so a flat `hex_world` endpoint would bury the
+/// tracer and its damage numbers inside the ridge the unit stands on.
+#[allow(clippy::too_many_arguments)]
 fn push_combat_fx(
     fx: &mut FxQueue,
+    state: &TacticalState,
     from: HexCoord,
     to: HexCoord,
     org: f32,
@@ -44,8 +50,8 @@ fn push_combat_fx(
     artillery: bool,
     loc: &Locale,
 ) {
-    let from_w = hex_world(from) + Vec3::Y * 0.55;
-    let to_w = hex_world(to) + Vec3::Y * 0.45;
+    let from_w = hex_world(from) + Vec3::Y * 0.2;
+    let to_w = hex_world(to) + Vec3::Y * (crate::picking::unit_y_on_grid(state, to) + 0.35);
     fx.push(FxEvent::Tracer {
         from: from_w,
         to: to_w,
@@ -129,6 +135,11 @@ pub enum PlayerCommand {
     /// Cancel the standing order of the `(tag, division)` group (OOB header
     /// button or the HQ radial bar).
     CancelDivOrder { tag: String, division: String },
+    /// 全体推进 (§7.4): issue the Advance order to every player-commanded
+    /// division that has no standing order yet — one click instead of one
+    /// per HQ. Divisions with an explicit Seize/Engage order are left
+    /// untouched, and allied contingents keep their own staff.
+    AdvanceAll,
     /// §7.4 rule toggle from the End Turn area checkbox: keep manually
     /// commanded battalions manual after their command completes
     /// (`true`), or hand them back when done (`false`, the default).
@@ -254,6 +265,8 @@ pub struct BattleSnapshot {
     game: GameController,
     units: Vec<BattalionUnit>,
     fog: Option<FogOfWar>,
+    ai_fog: Option<FogOfWar>,
+    report_ghosts: HashMap<usize, HexCoord>,
     deployment_zones: Option<(Vec<HexCoord>, Vec<HexCoord>)>,
 }
 
@@ -263,16 +276,28 @@ impl BattleSnapshot {
             game: game.clone(),
             units: state.units.clone(),
             fog: state.fog.clone(),
+            ai_fog: state.ai_fog.clone(),
+            report_ghosts: state.report_ghosts.clone(),
             deployment_zones: state.deployment_zones.clone(),
         }
     }
 
     /// Write the snapshot back over the live resources and force a full
     /// re-render; transient UI state (selection/hover/drag) is reset.
-    fn restore(self, game: &mut GameController, state: &mut TacticalState) {
+    ///
+    /// `tour` is a separate resource, so the caller must pass it in: a
+    /// rewind during report playback has to tear the queue down, or the
+    /// restored battle stays frozen behind the tour (`run_ai_turn` and
+    /// `tick_division_orders` both return while it is active).
+    fn restore(self, game: &mut GameController, state: &mut TacticalState, tour: &mut BattleTour) {
         *game = self.game;
         state.units = self.units;
         state.fog = self.fog;
+        // The AI's own fog rides in the snapshot rather than being
+        // re-derived: `update_fog` early-returns on an empty turn, so a
+        // rebuild here could leave the planner looking at the future.
+        state.ai_fog = self.ai_fog;
+        state.report_ghosts = self.report_ghosts;
         state.deployment_zones = self.deployment_zones;
         state.turn = game.session.turn_number;
         state.clear_selection();
@@ -285,6 +310,15 @@ impl BattleSnapshot {
         state.sector_preview.clear();
         state.attack_orders.clear(); // orders don't survive a rewind
         state.clear_highlights();
+        tour.queue.clear();
+        tour.active = false;
+        tour.index = 0;
+        tour.focused = None;
+        tour.returning = false;
+        tour.awaiting_arrival = false;
+        tour.next_focus_at = None;
+        tour.saved_zoom = None;
+        tour.saved_target = None;
         state.board_mesh_dirty = true;
         state.board_colors_dirty = true;
         state.units_dirty = true;
@@ -358,9 +392,8 @@ pub struct GameController {
     /// consumed at BeginBattle. Reach them through [`Self::ally_sector`] /
     /// [`Self::set_ally_sector`] / [`Self::clear_ally_sector`].
     pub allied_sectors: HashMap<(String, String), (HexCoord, HexCoord)>,
-    /// Injection batch context (live mode): HOI4 state/province + template.
+    /// Injection batch context (live mode): HOI4 state/province.
     pub province: u32,
-    pub template: String,
     /// Battle location label for the right panel: demo/debug set a
     /// place name ("Sedan"), live mode shows "Province #id" until a province
     /// name table is extracted.
@@ -379,10 +412,40 @@ pub struct GameController {
     /// assembly from settings.json; checkpoint snapshots carry it, so a
     /// Restart keeps the policy.
     pub keep_manual_override: bool,
+    /// On-disk mirror of the battle log — MOST RECENT BATTLE ONLY: each
+    /// new controller truncates the same file, so nothing accumulates on
+    /// the player's disk. Append-only diagnostics; the diagnostic bundle
+    /// ships its tail. Best-effort: IO errors are silently ignored.
+    combat_log_path: std::path::PathBuf,
 }
 
 impl GameController {
     pub fn new(player_side: Side, enemy_tactic: CombatTactic, seed: u64) -> Self {
+        Self::with_combat_log(
+            player_side,
+            enemy_tactic,
+            seed,
+            std::env::temp_dir().join(format!("fc_combat_{}.log", std::process::id())),
+        )
+    }
+
+    fn with_combat_log(
+        player_side: Side,
+        enemy_tactic: CombatTactic,
+        seed: u64,
+        combat_log_path: std::path::PathBuf,
+    ) -> Self {
+        // A new controller = a new battle: truncate the mirror so only the
+        // latest battle's log ever exists on disk. The mirror is named by
+        // PID because battle children are per-process and concurrent
+        // battles must never share a file (interleaved writes garble it);
+        // older pid files are swept so nothing accumulates.
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&combat_log_path);
+        sweep_old_combat_logs(&combat_log_path);
         let mut session = BattleSession::with_params(&CombatParams::default());
         session.player_side = player_side;
         GameController {
@@ -397,12 +460,12 @@ impl GameController {
             division_tags: HashMap::new(),
             allied_sectors: HashMap::new(),
             province: 0,
-            template: "Infanterie-Division".to_string(),
             location: String::new(),
             last_sync_summary: None,
             last_results: Vec::new(),
             log: Vec::new(),
             keep_manual_override: false,
+            combat_log_path,
         }
     }
 
@@ -489,13 +552,47 @@ impl GameController {
         info!("{text}");
         self.log.push(LogLine {
             icon,
-            text,
+            text: text.clone(),
             detail: None,
         });
+        // Disk mirror of the battle log (most recent battle only; the
+        // diagnostic bundle ships its tail). Fresh handle per line — cheap
+        // at log volume, and keeps the controller Clone for snapshots.
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.combat_log_path)
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "[turn {}] {text}", self.session.turn_number);
+        }
         // The battle log is a standalone scrollable window
         // (Esc menu) instead of a 6-line panel corner — keep real history.
         if self.log.len() > 200 {
             self.log.remove(0);
+        }
+    }
+}
+
+/// Delete every other `fc_combat_<pid>.log` in the same directory — the
+/// battle children are per-process, so each new battle sweeps the previous
+/// ones and nothing accumulates. A concurrently running battle loses its
+/// earlier lines (its appends recreate the file); sequential battles — the
+/// norm — are unaffected.
+fn sweep_old_combat_logs(keep: &std::path::Path) {
+    let Some(dir) = keep.parent() else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        let is_pid_log = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("fc_combat_")?.strip_suffix(".log"))
+            .is_some_and(|mid| !mid.is_empty() && mid.bytes().all(|b| b.is_ascii_digit()));
+        if p != keep && is_pid_log {
+            let _ = std::fs::remove_file(p);
         }
     }
 }
@@ -526,6 +623,7 @@ impl Plugin for GameLoopPlugin {
                     handle_deploy_drag,
                     track_box_select,
                     handle_selection_keys,
+                    toggle_automation_pause,
                     handle_map_clicks,
                     run_ai_turn,
                     tick_division_orders,
@@ -582,6 +680,8 @@ fn handle_ui_commands(
     loc: Res<LocaleRes>,
     mut exit: EventWriter<AppExit>,
     mut battle_settings: Option<ResMut<crate::settings::BattleSettings>>,
+    auto: Res<crate::automation::TurnAutomation>,
+    sync_progress: Option<Res<SyncProgress>>,
 ) {
     // ExitGame is handled even without a battle (menu must always work).
     if pending
@@ -590,6 +690,14 @@ fn handle_ui_commands(
         .any(|c| matches!(c, PlayerCommand::ExitGame))
     {
         exit.send(AppExit::Success);
+        return;
+    }
+    // A sync worker in flight freezes the board (§8.4 — the same pause the
+    // synchronous path enforced by blocking): drop gameplay commands
+    // wholesale. The camera does not pass through this channel, so it
+    // stays live behind the progress modal.
+    if sync_progress.is_some() {
+        pending.0.clear();
         return;
     }
     let Some(game) = game.as_deref_mut() else {
@@ -611,7 +719,7 @@ fn handle_ui_commands(
                 // injected into HOI4 makes a full restart a desync.
                 if game.session.strategic_hour == 0 {
                     if let Some(snap) = checkpoints.battle_start.clone() {
-                        snap.restore(game, &mut state);
+                        snap.restore(game, &mut state, &mut tour);
                         // §7.4: the manual-retention rule is a persistent
                         // setting, not battle state — a rewind must not
                         // silently undo the live policy (the checkbox
@@ -628,7 +736,7 @@ fn handle_ui_commands(
             }
             PlayerCommand::RollbackToSync => {
                 if let Some(snap) = checkpoints.last_sync.clone() {
-                    snap.restore(game, &mut state);
+                    snap.restore(game, &mut state, &mut tour);
                     // Same persistent-rule re-sync as RestartBattle.
                     game.keep_manual_override = battle_settings
                         .as_ref()
@@ -707,6 +815,16 @@ fn handle_ui_commands(
                 // single-unit ribbon).
                 state.orders_dirty = true;
             }
+            PlayerCommand::AdvanceAll => {
+                issue_advance_all(
+                    game,
+                    &mut state,
+                    tour.active,
+                    &loc,
+                    &mut notice,
+                    time.elapsed_secs(),
+                );
+            }
             PlayerCommand::BeginBattle => {
                 if game.session.phase == BattlePhase::Deployment {
                     // Units start OFF the
@@ -750,8 +868,9 @@ fn handle_ui_commands(
                         false,
                     );
                     // The allied contingents deploy through their own AI
-                    // (§7.5) — into the player's sector suggestion
-                    // where one was drawn, else the full player zone.
+                    // (§7.5) — into the player's sector suggestion where one
+                    // was drawn, else their own source province's staging
+                    // slice, else the full player zone.
                     deploy_allied_nations(game, &mut state, &loc);
                     // Zones stay in state (border mesh re-shows them under
                     // the F8 debug view); zone-gated logic is phase-driven.
@@ -818,6 +937,7 @@ fn handle_ui_commands(
                     &mut fx,
                     &mut anims,
                     &mut tour,
+                    auto.fast_mode,
                     &loc,
                     &mut notice,
                     time.elapsed_secs(),
@@ -1002,9 +1122,9 @@ fn handle_ui_commands(
                         result: None,
                         phase2: Some(batches.phase2),
                     });
-                    // Ended now; exit_when_ended's countdown only ticks on
-                    // frames where drain_injections is not blocking, so the
-                    // batch goes out before the window closes.
+                    // Ended now; drain_injections flushes the queued batch
+                    // even while a stall/desync dialog sits unanswered, so
+                    // the exit countdown cannot outrun the cleanup.
                     game.session.abort();
                 }
             }
@@ -1339,6 +1459,43 @@ fn handle_selection_keys(
     }
 }
 
+/// Space = pause/resume the turn automation (RTS convention): only while an
+/// auto-flow could exist (fast play or skip-quiet on), never behind a modal
+/// or an unresolved sync dialog. The board stays fully interactive while
+/// paused — this is the "halt the clock to issue orders" affordance.
+/// RTS mode keeps the top bar silent: the yellow panel label alone carries
+/// the paused state there.
+fn toggle_automation_pause(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut auto: ResMut<crate::automation::TurnAutomation>,
+    ui_win: Res<UiWindows>,
+    stall: Option<Res<SyncStall>>,
+    desync: Option<Res<DesyncAlert>>,
+    mut notice: ResMut<NoticeBar>,
+    time: Res<Time>,
+    loc: Res<LocaleRes>,
+) {
+    if !keys.just_pressed(KeyCode::Space) {
+        return;
+    }
+    if ui_win.modal_open() || stall.is_some() || desync.is_some() {
+        return;
+    }
+    if !auto.fast_mode && !auto.skip_quiet_turns {
+        return;
+    }
+    auto.paused = !auto.paused;
+    if auto.fast_mode {
+        return;
+    }
+    let text = if auto.paused {
+        loc.tr("battle.notice.auto.paused")
+    } else {
+        loc.tr("battle.notice.auto.resumed")
+    };
+    notice.flash = Some(FlashNotice::plain(text.into_owned(), time.elapsed_secs() + 2.0));
+}
+
 /// Selection-set upkeep: members that died / surrendered / left the board
 /// drop out of the selection and the control groups (broken-but-present
 /// battalions keep their selection until the turn handover clears it).
@@ -1606,6 +1763,10 @@ fn retreat_core(game: &mut GameController, state: &mut TacticalState, id: usize)
     };
     state.units_dirty = true;
     state.board_colors_dirty = true;
+    // The routed unit keeps its `move_order`, so the order ribbon (which
+    // rebuilds only on `orders_dirty`) would otherwise keep drawing the
+    // old route under a unit that is now falling back.
+    state.orders_dirty = true;
     if org_lost > 0.0 {
         game.session
             .record_damage(side, &tag, province, org_lost, 0.0, max_org, max_str);
@@ -2501,7 +2662,9 @@ enum MoveIssue {
 /// destination keeps the whole standing order untouched (re-affirm —
 /// silent, mirroring the AI side); re-pointing to a new destination
 /// whose fresh route shares the first step keeps the invested `hours`;
-/// only a first-step change starts from zero.
+/// a genuinely different first step banks them into the §6.2 step
+/// memory — pointing back onto the banked first step restores them
+/// (`repoint_carry_hours`), otherwise the bar starts from zero.
 fn issue_move_order_for(
     game: &mut GameController,
     state: &mut TacticalState,
@@ -2561,12 +2724,14 @@ fn issue_move_order_for(
     if queued {
         if let Some(order) = standing {
             // Chain tail de-duplication: Shift-clicking the destination
-            // the chain already ends at changes nothing (silent).
-            let chain_end = order
-                .queue
-                .back()
-                .map(|leg| leg.dest)
-                .unwrap_or(*order.path.last().expect("standing order has a path"));
+            // the chain already ends at changes nothing (silent). The tail
+            // is the last queued leg when one exists — the wait state
+            // between legs (empty standing path, route pending) is legal —
+            // and the standing path's destination otherwise.
+            let chain_end = match order.queue.back() {
+                Some(leg) => leg.dest,
+                None => *order.path.last().expect("standing order has a path"),
+            };
             if chain_end == h {
                 return MoveIssue::Reaffirmed;
             }
@@ -2632,29 +2797,27 @@ fn issue_move_order_for(
     if path.is_empty() {
         return MoveIssue::Failed;
     }
-    // Progress retention on re-pointing: a fresh route sharing the old
-    // first step keeps the invested hours (the unit is mid-step into that
-    // hex — only a genuinely different first step restarts the bar).
-    let carry_hours = standing
-        .as_ref()
-        .filter(|o| o.path.first() == path.first())
-        .map(|o| o.hours)
-        .unwrap_or(0.0);
-    let eta = {
-        let mut probe = u.clone();
+    // Progress retention on re-pointing (§6.2 step-progress memory): the
+    // shared ladder — a fresh route sharing the old first step keeps the
+    // invested hours; else a banked memory matching the new first step
+    // restores them (the change of mind); else the bar restarts. The
+    // outgoing order's progress banks into the memory along the way.
+    let control = control_field(&grid, &view, u.side.opponent());
+    let mut eta = 0;
+    if let Some(mu) = state.units.iter_mut().find(|x| x.id == id) {
+        let carry = repoint_carry_hours(&grid, &control, mu, &path, &params);
+        let mut probe = mu.clone();
         probe.move_order = Some(MoveOrder {
             path: path.clone(),
-            hours: carry_hours,
+            hours: carry,
             queue: Default::default(),
         });
-        order_eta_hours(&grid, &probe, &view, &params)
+        eta = order_eta_hours(&grid, &probe, &view, &params)
             .map(|hrs| eta_turns(hrs, &params))
-            .unwrap_or(0)
-    };
-    if let Some(mu) = state.units.iter_mut().find(|x| x.id == id) {
+            .unwrap_or(0);
         mu.move_order = Some(MoveOrder {
             path,
-            hours: carry_hours,
+            hours: carry,
             queue: Default::default(),
         });
         // A personal player command outranks the division order
@@ -2974,6 +3137,32 @@ fn detail_view(
     }))
 }
 
+/// §6.13 report de-leak: TRUE when a unit must be reported anonymously —
+/// it is an ENEMY of the player and the player cannot currently SEE its
+/// hex. Own units (including friendly fire) and visible enemies keep their
+/// identity; a hidden one is reported as an "unobserved target", with its
+/// damage figures but without its name or formula chain. The gate is
+/// reader-centric: the log is player-facing, so the PLAYER's fog decides
+/// whichever side is acting.
+fn unit_unobserved(state: &TacticalState, unit_side: Side, hex: HexCoord) -> bool {
+    unit_side != state.player_side && state.fog_state(hex) != VisibilityState::Visible
+}
+
+/// Narration produced per combat result by the first loop of the fire
+/// phase and consumed by the report-tour builder — ONE vec of structs, so
+/// a new per-result field can never be pushed on one branch and forgotten
+/// on another (parallel-vec index drift is a runtime panic the compiler
+/// cannot see; see AGENTS.md testing conventions).
+struct ResultMeta {
+    fx: Vec<FxEvent>,
+    kind: String,
+    detail: Option<Box<EngagementDetailView>>,
+    /// De-leaked display names (§6.13): the report lanes must read these,
+    /// never the units' real names, or the modal becomes a leak point.
+    dname: String,
+    aname: String,
+}
+
 /// Unified fire phase: resolve the acting side's registered attack
 /// orders plus counter-fire simultaneously, then narrate (log lines, damage
 /// floaters, shock markers) and queue the SD2-style battle tour.
@@ -2982,7 +3171,9 @@ fn execute_fire_phase(
     state: &mut TacticalState,
     side: Side,
     fx: &mut FxQueue,
+    anims: &mut MoveAnims,
     tour: &mut BattleTour,
+    fast: bool,
     loc: &Locale,
 ) {
     if state.attack_orders.is_empty() {
@@ -3004,18 +3195,56 @@ fn execute_fire_phase(
     let results = game
         .combat
         .resolve_fire_phase(&grid, &mut state.units, &orders);
+    // §6.1 sound ranging: every mission that left the tube marks its firing
+    // hex in the OPPONENT's fog — hex intel only, never a unit. The mark
+    // rides `session.turn_number`, the clock the fog itself ticks on
+    // (`state.turn` has not advanced yet at the fire phase).
+    let fired: Vec<(Side, HexCoord)> = game
+        .combat
+        .take_fired_missions()
+        .into_iter()
+        .filter_map(|(id, hex)| state.unit_by_id(id).map(|u| (u.side, hex)))
+        .collect();
+    for (firing_side, hex) in fired {
+        let enemy_fog = if firing_side == state.player_side {
+            &mut state.ai_fog
+        } else {
+            &mut state.fog
+        };
+        let params = game.combat.params();
+        enemy_fog
+            .get_or_insert_with(|| {
+                FogOfWar::new(
+                    grid.width,
+                    grid.height,
+                    params.fog_reveal_duration_turns,
+                    params.sound_mark_turns,
+                )
+            })
+            .mark_firing(hex, game.session.turn_number);
+    }
     crate::stage!("execute_fire_phase: resolved ({} results)", results.len());
-    // Per-result combat animations, attached to the battle report
-    // and played when the modal shows the engagement (not one burst here).
-    let mut fx_by_result: Vec<Vec<FxEvent>> = Vec::with_capacity(results.len());
-    // Per-result attack-kind label + formula-chain view, attached
-    // to the log lines here and to the report lanes in the second loop.
-    let mut kind_by_result: Vec<String> = Vec::with_capacity(results.len());
-    let mut detail_by_result: Vec<Option<Box<EngagementDetailView>>> =
-        Vec::with_capacity(results.len());
+    // Per-result narration (fx / kind label / formula chain / de-leaked
+    // display names), produced here and consumed by the report loop below.
+    let mut meta_by_result: Vec<ResultMeta> = Vec::with_capacity(results.len());
     for r in &results {
-        let aname = unit_name(state, r.attacker_id);
-        let dname = unit_name(state, r.defender_id);
+        // The attacker's position/side first — both the fizzle line below
+        // and the exchange narration key off the identity gate.
+        let apos = state
+            .unit_by_id(r.attacker_id)
+            .map(|u| u.position)
+            .unwrap_or(r.hex);
+        let attacker_side = state
+            .unit_by_id(r.attacker_id)
+            .map(|u| u.side)
+            .unwrap_or(side);
+        let attacker_unobserved = unit_unobserved(state, attacker_side, apos);
+        let aname = if attacker_unobserved {
+            loc.tr("log.combat.unobserved").into_owned()
+        } else {
+            unit_name(state, r.attacker_id)
+        };
+        let victim_name = unit_name(state, r.defender_id);
         if r.target_lost {
             game.log_line(loc.trf("log.combat.target_lost", &[("name", &aname)]));
             fx.push(FxEvent::Floater {
@@ -3023,9 +3252,13 @@ fn execute_fire_phase(
                 text: loc.tr("floater.target_lost").into_owned(),
                 kind: FloaterKind::Congested,
             });
-            fx_by_result.push(Vec::new());
-            kind_by_result.push(String::new());
-            detail_by_result.push(None);
+            meta_by_result.push(ResultMeta {
+                fx: Vec::new(),
+                kind: String::new(),
+                detail: None,
+                dname: victim_name,
+                aname,
+            });
             continue;
         }
         // Damage accounting: the VICTIM's side absorbs `dealt` (with
@@ -3049,10 +3282,15 @@ fn execute_fire_phase(
             .unit_by_id(r.defender_id)
             .map(|u| u.side)
             .unwrap_or(side.opponent());
-        let attacker_side = state
-            .unit_by_id(r.attacker_id)
-            .map(|u| u.side)
-            .unwrap_or(side);
+        // §6.13 report de-leak: a unit the player cannot SEE right now keeps
+        // its damage numbers but loses its identity — the exchange line
+        // reports a generic target and the formula chain (which carries the
+        // unit's whole stat sheet) never attaches. Symmetric: the ATTACKER
+        // is anonymized the same way, so a fog-hidden battery shelling the
+        // line is heard (the §6.1 sound mark) but never named. This also
+        // closes the older hole an F-key blind barrage opened: a mission
+        // landing on a fog-hidden unit used to print its name.
+        let unobserved = unit_unobserved(state, victim_side, r.hex);
         // §6.13: HQ units are synthesized — no HOI4 division maps
         // to them, so their own casualties are never injected (the
         // division-wide command collapse below IS injected).
@@ -3128,7 +3366,20 @@ fn execute_fire_phase(
         let kind = loc
             .tr(attack_kind_key(&orders, r.attacker_id, rocket))
             .into_owned();
-        let detail = detail_view(state, r, kind.clone(), side);
+        // The reported identity: an unobserved unit is named by the generic
+        // label, and its formula chain (the unit's stat sheet) is dropped —
+        // damage figures and the BROKEN/… suffixes stay, so the player
+        // still reads the effect of the exchange.
+        let dname = if unobserved {
+            loc.tr("log.combat.unobserved").into_owned()
+        } else {
+            victim_name
+        };
+        let detail = if unobserved || attacker_unobserved {
+            None
+        } else {
+            detail_view(state, r, kind.clone(), side)
+        };
         game.log_line_icon(
             icon,
             loc.trf(
@@ -3145,7 +3396,9 @@ fn execute_fire_phase(
         if let Some(last) = game.log.last_mut() {
             last.detail = detail.clone();
         }
-        if r.org_damage_taken > 0.0 || r.str_damage_taken > 0.0 {
+        // Only counter damage that SURVIVES the {:.1} rounding prints —
+        // a 0.04 scratch must not surface as a "-0.0" line.
+        if r.org_damage_taken >= 0.05 || r.str_damage_taken >= 0.05 {
             let (org_t, str_t) = (
                 format!("{:.1}", r.org_damage_taken),
                 format!("{:.1}", r.str_damage_taken),
@@ -3159,13 +3412,12 @@ fn execute_fire_phase(
             }
         }
         // Tracer + damage numbers on the exchange hex — COLLECTED for the
-        // report modal, not pushed live.
+        // report modal, not pushed live. A tracer starts at the ATTACKER's
+        // hex: when the attacker is fog-hidden it flies only if the §6.1
+        // sound mark already told the player that hex (fire missions
+        // always mark) — anything else stays dark.
         let mut evs = Vec::new();
         if r.org_damage_dealt > 0.0 || r.str_damage_dealt > 0.0 {
-            let apos = state
-                .unit_by_id(r.attacker_id)
-                .map(|u| u.position)
-                .unwrap_or(r.hex);
             let arty = state
                 .unit_by_id(r.attacker_id)
                 .map(|u| u.is_indirect_artillery())
@@ -3173,6 +3425,7 @@ fn execute_fire_phase(
             let mut q = FxQueue::default();
             push_combat_fx(
                 &mut q,
+                state,
                 apos,
                 r.hex,
                 r.org_damage_dealt,
@@ -3180,6 +3433,13 @@ fn execute_fire_phase(
                 arty,
                 loc,
             );
+            if attacker_unobserved
+                && state
+                    .sound_mark_age(apos, game.session.turn_number)
+                    .is_none()
+            {
+                q.0.retain(|e| !matches!(e, FxEvent::Tracer { .. }));
+            }
             evs.extend(q.0);
         }
         if r.shocked_defender {
@@ -3198,9 +3458,13 @@ fn execute_fire_phase(
                 });
             }
         }
-        fx_by_result.push(evs);
-        kind_by_result.push(kind);
-        detail_by_result.push(detail);
+        meta_by_result.push(ResultMeta {
+            fx: evs,
+            kind,
+            detail,
+            dname,
+            aname,
+        });
     }
     // §6.13: HQ annihilations — narrate the command collapse,
     // float the per-battalion org hit, and inject it (unlike the HQ's own
@@ -3240,11 +3504,13 @@ fn execute_fire_phase(
             continue;
         }
         // Attack-kind label + formula chain were computed in the first loop
-        // — the log lines and this lane share the same view.
-        let kind = std::mem::take(&mut kind_by_result[i]);
+        // — the log lines and this lane share the same view. Both display
+        // names come de-leaked from the first loop: a fog-hidden unit is
+        // named by the generic label here too (no second leak point).
+        let meta = &mut meta_by_result[i];
         let lane = ReportLane {
-            attacker: unit_name(state, r.attacker_id),
-            kind,
+            attacker: std::mem::take(&mut meta.aname),
+            kind: std::mem::take(&mut meta.kind),
             org: r.org_damage_dealt,
             str_: r.str_damage_dealt,
             counter_org: r.org_damage_taken,
@@ -3254,7 +3520,7 @@ fn execute_fire_phase(
             // (rocket salvos and tube area-fire barrages both splash
             // friends in the zone).
             friendly: state.unit_by_id(r.defender_id).map(|u| u.side) == Some(side),
-            detail: std::mem::take(&mut detail_by_result[i]),
+            detail: std::mem::take(&mut meta.detail),
         };
         let outcome = if r.eliminated {
             loc.tr("outcome.annihilated").into_owned()
@@ -3265,7 +3531,9 @@ fn execute_fire_phase(
         } else {
             String::new()
         };
-        let dname = unit_name(state, r.defender_id);
+        // The first loop's de-leaked display name — an unobserved victim is
+        // reported by the generic label here too (no second leak point).
+        let dname = std::mem::take(&mut meta.dname);
         // Defer the visual consequence of this engagement — a
         // repelled (moved) or annihilated / surrendered defender, plus an
         // assault attacker that occupied the vacated hex, keep rendering at
@@ -3313,7 +3581,7 @@ fn execute_fire_phase(
         {
             Some(rep) => {
                 rep.lanes.push(lane);
-                rep.fx.append(&mut fx_by_result[i]);
+                rep.fx.append(&mut meta.fx);
                 for p in pendings {
                     if !rep.pending.iter().any(|q| q.unit_id == p.unit_id) {
                         rep.pending.push(p);
@@ -3329,7 +3597,7 @@ fn execute_fire_phase(
                 acting: side,
                 lanes: vec![lane],
                 outcome,
-                fx: std::mem::take(&mut fx_by_result[i]),
+                fx: std::mem::take(&mut meta.fx),
                 pending: pendings,
             }),
         }
@@ -3341,10 +3609,27 @@ fn execute_fire_phase(
             state.report_ghosts.insert(p.unit_id, p.from);
         }
     }
+    // The automation's round-activity combat signal (tour-independent).
+    state.combat_reports += reports.len() as u64;
     if !reports.is_empty() {
+        if fast {
+            // Fast play: no tour, no report windows — the combat FX plays
+            // on the map right away and the deferred unit visuals settle
+            // immediately (the same release the tour runs per confirm).
+            for rep in &mut reports {
+                let evs = std::mem::take(&mut rep.fx);
+                for ev in evs {
+                    fx.push(ev);
+                }
+                release_report_pending(rep, state, anims);
+            }
+            if !state.report_ghosts.is_empty() {
+                state.report_ghosts.clear();
+                state.units_dirty = true;
+            }
         // Normally the queue is read through before the next fire phase
         // (the AI turn is gated on it); append defensively if not.
-        if tour.active {
+        } else if tour.active {
             tour.queue.extend(reports);
         } else {
             tour.queue = reports;
@@ -3538,6 +3823,7 @@ fn end_player_turn(
     fx: &mut FxQueue,
     anims: &mut MoveAnims,
     tour: &mut BattleTour,
+    fast: bool,
     loc: &Locale,
     notice: &mut NoticeBar,
     now: f32,
@@ -3549,7 +3835,7 @@ fn end_player_turn(
     crate::stage!("end_player_turn: movement done");
     // Then her registered attack orders resolve together in the
     // unified fire phase (with counter-fire).
-    execute_fire_phase(game, state, side, fx, tour, loc);
+    execute_fire_phase(game, state, side, fx, anims, tour, fast, loc);
     crate::stage!("end_player_turn: fire phase done");
     // Shocks set during THIS turn-end's fire
     // phase (incl. counter-fire on the acting side) persist until the end
@@ -3587,6 +3873,7 @@ fn run_ai_turn(
     mut notice: ResMut<NoticeBar>,
     time: Res<Time>,
     loc: Res<LocaleRes>,
+    auto: Res<crate::automation::TurnAutomation>,
 ) {
     let Some(game) = game.as_deref_mut() else {
         return;
@@ -3643,13 +3930,36 @@ fn run_ai_turn(
         } else {
             None
         };
+        // §6.1 sound-ranging intel for the AI's own planning: the tells its
+        // fog holds (the player's shooting) and its own guns the player has
+        // heard (the reserved shoot-and-scoot hook — fed, not yet read).
+        let turn = game.session.turn_number;
+        let enemy_sound_marks: Vec<(HexCoord, u32)> = state
+            .ai_fog
+            .as_ref()
+            .map(|f| f.firing_marks(turn).collect())
+            .unwrap_or_default();
+        let own_marked_units: Vec<usize> = state
+            .fog
+            .as_ref()
+            .map(|f| {
+                state
+                    .units
+                    .iter()
+                    .filter(|u| {
+                        u.side != state.player_side && f.firing_marker(u.position, turn).is_some()
+                    })
+                    .map(|u| u.id)
+                    .collect()
+            })
+            .unwrap_or_default();
         ai_turn.actions = game
             .ai
             // No passive friendlies for the enemy's whole-side AI.
             // The physical foe list feeds the fog-wall
             // blind-assault probe (a dark-fog wall that halts the march is
             // stormed when beaten/overwhelmed).
-            .plan_turn_full(
+            .plan_turn_full_with_sound(
                 &grid,
                 &own,
                 &foe,
@@ -3657,6 +3967,9 @@ fn run_ai_turn(
                 game.session.flags(),
                 None,
                 Some(&state.units),
+                &enemy_sound_marks,
+                &own_marked_units,
+                state.ai_fog.as_ref(),
             )
             .into();
         // Make the AI inspectable — one plan summary per turn.
@@ -3722,7 +4035,7 @@ fn run_ai_turn(
             execute_movement(game, &mut state, enemy_side, &mut fx, &mut anims, &loc);
             crate::stage!("run_ai_turn: movement done — fire phase");
             // Then its registered attack orders resolve together.
-            execute_fire_phase(game, &mut state, enemy_side, &mut fx, &mut tour, &loc);
+            execute_fire_phase(game, &mut state, enemy_side, &mut fx, &mut anims, &mut tour, auto.fast_mode, &loc);
             crate::stage!("run_ai_turn: fire phase done — closeout");
             // Shock expiry — same rule as the player turn end:
             // this phase's fresh shocks persist, older ones wear off.
@@ -3778,6 +4091,17 @@ fn apply_ai_action(
                 return false;
             }
             // §6.2: a standing order — the unit marches it at its speed.
+            let Some(grid) = state.grid.clone() else {
+                return false;
+            };
+            let params = game.combat.params().clone();
+            let control = control_field(&grid, &state.units, acting_side.opponent());
+            // §6.13 fog honesty: a fog-hidden mover's name and destination
+            // stay out of the player-facing log (the march itself is seen
+            // when it enters sight, per the fog rules).
+            let mu_unobserved = state
+                .unit_by_id(*unit_id)
+                .is_some_and(|u| unit_unobserved(state, u.side, u.position));
             if let Some(mu) = state.units.iter_mut().find(|x| x.id == *unit_id) {
                 if !mu.is_emplaced {
                     let dest = *path.last().unwrap();
@@ -3799,18 +4123,32 @@ fn apply_ai_action(
                         }
                         _ => {
                             if log {
-                                let name = mu.name.clone();
-                                let (q, r) = (dest.q.to_string(), dest.r.to_string());
-                                game.log_line(
-                                    loc.trf(
-                                        "log.ai.move",
-                                        &[("name", &name), ("q", &q), ("r", &r)],
-                                    ),
-                                );
+                                // §6.13 fog honesty: a fog-hidden mover is
+                                // logged anonymously — no name, no
+                                // destination (the march is seen when it
+                                // enters sight, per the fog rules).
+                                if mu_unobserved {
+                                    game.log_line(loc.tr("log.ai.move_hidden"));
+                                } else {
+                                    let name = mu.name.clone();
+                                    let (q, r) = (dest.q.to_string(), dest.r.to_string());
+                                    game.log_line(
+                                        loc.trf(
+                                            "log.ai.move",
+                                            &[("name", &name), ("q", &q), ("r", &r)],
+                                        ),
+                                    );
+                                }
                             }
+                            // A real replacement walks the §6.2
+                            // step-memory ladder — same-first-step carry,
+                            // banked-progress restore, outgoing progress
+                            // banks — so the AI side keeps the player
+                            // side's retention rules.
+                            let carry = repoint_carry_hours(&grid, &control, mu, path, &params);
                             mu.move_order = Some(MoveOrder {
                                 path: path.clone(),
-                                hours: 0.0,
+                                hours: carry,
                                 queue: Default::default(),
                             });
                         }
@@ -3821,13 +4159,20 @@ fn apply_ai_action(
             true
         }
         AiAction::Emplace { unit_id } => {
+            let emplacer_unobserved = state
+                .unit_by_id(*unit_id)
+                .is_some_and(|u| unit_unobserved(state, u.side, u.position));
             if let Some(u) = state.units.iter_mut().find(|u| u.id == *unit_id) {
                 if !u.acted && u.requires_emplacement() && !u.is_emplaced {
                     u.is_emplaced = true;
                     u.acted = true;
                     u.move_order = None;
                     if log {
-                        let name = u.name.clone();
+                        let name = if emplacer_unobserved {
+                            loc.tr("log.combat.unobserved").into_owned()
+                        } else {
+                            u.name.clone()
+                        };
                         game.log_line(loc.trf("log.ai.emplace", &[("name", &name)]));
                     }
                     state.units_dirty = true;
@@ -3836,12 +4181,19 @@ fn apply_ai_action(
             false
         }
         AiAction::Limber { unit_id } => {
+            let limberer_unobserved = state
+                .unit_by_id(*unit_id)
+                .is_some_and(|u| unit_unobserved(state, u.side, u.position));
             if let Some(u) = state.units.iter_mut().find(|u| u.id == *unit_id) {
                 if !u.acted && u.is_emplaced {
                     u.is_emplaced = false;
                     u.acted = true;
                     if log {
-                        let name = u.name.clone();
+                        let name = if limberer_unobserved {
+                            loc.tr("log.combat.unobserved").into_owned()
+                        } else {
+                            u.name.clone()
+                        };
                         game.log_line(loc.trf("log.ai.limber", &[("name", &name)]));
                     }
                     state.units_dirty = true;
@@ -3853,6 +4205,15 @@ fn apply_ai_action(
             attacker_id,
             target_id,
         } => {
+            // §6.13 fog honesty: neither side of a registered assault is
+            // named while fog-hidden (the exchange line at resolution
+            // carries the same rule).
+            let attacker_unobserved = state
+                .unit_by_id(*attacker_id)
+                .is_some_and(|u| unit_unobserved(state, u.side, u.position));
+            let target_unobserved = state
+                .unit_by_id(*target_id)
+                .is_some_and(|u| unit_unobserved(state, u.side, u.position));
             // Shocked units cannot take attack orders — the
             // planner picks a different action instead of wasting this one.
             if state
@@ -3861,10 +4222,14 @@ fn apply_ai_action(
                 .unwrap_or(true)
             {
                 if log {
-                    let an = state
-                        .unit_by_id(*attacker_id)
-                        .map(|u| u.name.clone())
-                        .unwrap_or_default();
+                    let an = if attacker_unobserved {
+                        loc.tr("log.combat.unobserved").into_owned()
+                    } else {
+                        state
+                            .unit_by_id(*attacker_id)
+                            .map(|u| u.name.clone())
+                            .unwrap_or_default()
+                    };
                     game.log_line(loc.trf("log.ai.shocked_hold", &[("name", &an)]));
                 }
                 return false;
@@ -3902,6 +4267,18 @@ fn apply_ai_action(
             }
             state.orders_dirty = true;
             if log {
+                // §6.13: either side of the assault is anonymized while
+                // fog-hidden; the line is still recorded.
+                let an = if attacker_unobserved {
+                    loc.tr("log.combat.unobserved").into_owned()
+                } else {
+                    an
+                };
+                let tn = if target_unobserved {
+                    loc.tr("log.combat.unobserved").into_owned()
+                } else {
+                    tn
+                };
                 game.log_line_icon(
                     Some(IconId::Attack),
                     loc.trf("log.ai.assault", &[("name", &an), ("target", &tn)]),
@@ -3913,6 +4290,12 @@ fn apply_ai_action(
             attacker_id,
             target_hex,
         } => {
+            // §6.13 fog honesty: a fog-hidden battery is never named at
+            // registration — the §6.1 sound mark on its hex is the
+            // player's tell, not this log line.
+            let firer_unobserved = state
+                .unit_by_id(*attacker_id)
+                .is_some_and(|u| unit_unobserved(state, u.side, u.position));
             // Shocked units cannot take attack orders.
             if state
                 .unit_by_id(*attacker_id)
@@ -3920,10 +4303,14 @@ fn apply_ai_action(
                 .unwrap_or(true)
             {
                 if log {
-                    let an = state
-                        .unit_by_id(*attacker_id)
-                        .map(|u| u.name.clone())
-                        .unwrap_or_default();
+                    let an = if firer_unobserved {
+                        loc.tr("log.combat.unobserved").into_owned()
+                    } else {
+                        state
+                            .unit_by_id(*attacker_id)
+                            .map(|u| u.name.clone())
+                            .unwrap_or_default()
+                    };
                     game.log_line(loc.trf("log.ai.shocked_hold", &[("name", &an)]));
                 }
                 return false;
@@ -3937,10 +4324,13 @@ fn apply_ai_action(
             // Direct-fire guns (AT/AA) are the exception — by design their
             // missions are ALWAYS precision: no zone saturation, no
             // self-splash (a point-blank area mission used to hit the
-            // gun's own hex). With no combat-effective enemy exactly on
+            // gun's own hex). With no targetable enemy exactly on
             // the aim hex there is no mission at all.
+            // §6.8: a targetable enemy on the aim hex — combat-effective OR
+            // retreating/withdrawn (broken units stay valid targets, same
+            // as the player's picker) — makes the mission precise.
             let enemy_at_hex = state.units.iter().any(|e| {
-                e.side != acting_side && e.is_combat_effective() && e.position == *target_hex
+                e.side != acting_side && e.is_targetable() && e.position == *target_hex
             });
             let direct_gun = state
                 .unit_by_id(*attacker_id)
@@ -4002,25 +4392,34 @@ fn apply_ai_action(
             }
             state.orders_dirty = true;
             if log {
-                let (q, r) = (target_hex.q.to_string(), target_hex.r.to_string());
-                game.log_line_icon(
-                    Some(IconId::Fire),
-                    loc.trf(
-                        "log.ai.fire_mission",
-                        &[("name", &an), ("q", &q), ("r", &r)],
-                    ),
-                );
+                // §6.13 fog honesty: a fog-hidden battery is logged
+                // anonymously — no name, no aim hex (the §6.1 sound mark
+                // on its hex is the player's tell).
+                if firer_unobserved {
+                    game.log_line_icon(Some(IconId::Fire), loc.tr("log.ai.fire_mission_hidden"));
+                } else {
+                    let (q, r) = (target_hex.q.to_string(), target_hex.r.to_string());
+                    game.log_line_icon(
+                        Some(IconId::Fire),
+                        loc.trf(
+                            "log.ai.fire_mission",
+                            &[("name", &an), ("q", &q), ("r", &r)],
+                        ),
+                    );
+                }
             }
             true
         }
         AiAction::Hold { unit_id } => {
             // "No action this turn" doubles as the Hold stance for AI
-            // units: an idle unit hunkers (+hold_defense_bonus). The old
-            // player-only rationale is gone — can_assault no longer reads
-            // the stance and movement drops it on the first step, so the
-            // AI cannot trap itself. Assault/retreat clear it below.
+            // units: an idle unit hunkers (+hold_defense_bonus) — within
+            // the §6.8 eligibility (infantry attribute only, same as the
+            // player's H: guns, cavalry and HQs idle WITHOUT the stance).
+            // The old player-only rationale is gone — can_assault no longer
+            // reads the stance and movement drops it on the first step, so
+            // the AI cannot trap itself. Assault/retreat clear it below.
             if let Some(u) = state.units.iter_mut().find(|u| u.id == *unit_id) {
-                if u.is_combat_effective() && !u.is_holding {
+                if u.is_combat_effective() && u.can_hold() && !u.is_holding {
                     u.is_holding = true;
                     state.units_dirty = true;
                 }
@@ -4124,6 +4523,70 @@ fn issue_division_order(
     true
 }
 
+/// 全体推进 (§7.4): one click issues the Advance order to every
+/// player-commanded division that has no standing order yet. Divisions
+/// with an explicit Seize/Engage order are left untouched — the button
+/// fills the gaps, it never overwrites a deliberate target — and allied
+/// contingents keep their own staff. Logs one summary line and plans
+/// once; the per-division issue path would re-plan the whole set per
+/// division.
+fn issue_advance_all(
+    game: &mut GameController,
+    state: &mut TacticalState,
+    tour_active: bool,
+    loc: &Locale,
+    notice: &mut NoticeBar,
+    now: f32,
+) -> bool {
+    // The battle-report tour gates this button the same way it gates End
+    // Turn: planning mid-tour would draw the player's attack lines over the
+    // enemy's resolution still on screen.
+    if tour_active
+        || game.session.phase != BattlePhase::TacticalActive
+        || game.session.current_side != state.player_side
+    {
+        return false;
+    }
+    // Unique commanded divisions with someone left to move: allied
+    // contingents fight under their own staff unless ordered individually.
+    let mut divs: Vec<(String, String)> = Vec::new();
+    for u in state
+        .units
+        .iter()
+        .filter(|u| game.commands(u) && u.is_combat_effective())
+    {
+        let key = (u.tag.clone(), u.division.clone());
+        if !divs.contains(&key) {
+            divs.push(key);
+        }
+    }
+    let mut issued = 0usize;
+    for key in divs {
+        if game.div_order(&key.0, &key.1).is_some() {
+            continue; // an explicit order stays as it is
+        }
+        game.div_orders.insert(
+            key,
+            DivisionOrder {
+                pick: DivOrderPick::Advance,
+                seized: false,
+                engage_last_pos: None,
+            },
+        );
+        issued += 1;
+    }
+    if issued == 0 {
+        let msg = loc.tr("battle.notice.advance_all.none").into_owned();
+        notice.flash = Some(FlashNotice::plain(msg, now + 4.0));
+        return false;
+    }
+    let msg = loc.trf("log.div.advance_all", &[("n", &issued.to_string())]);
+    game.log_line_icon(Some(IconId::Advance), msg.clone());
+    notice.flash = Some(FlashNotice::plain(msg, now + 5.0));
+    plan_division_orders(game, state, loc, notice, now);
+    true
+}
+
 /// Plan and register every standing division order for the
 /// player's side (DESIGN §7.4). Runs once at the start of each player turn
 /// (gated by [`GameController::div_planned_turn`]) and immediately after an
@@ -4171,6 +4634,29 @@ fn plan_division_orders(
         .as_ref()
         .map(|(a, d)| (if player == Side::Attacker { d } else { a }).clone());
     let flags = game.session.flags().cloned();
+
+    // §6.1 sound-ranging intel for every planner this turn: the player's own
+    // fog holds the enemy battery tells, the AI's fog holds the marks on OUR
+    // guns (the reserved shoot-and-scoot hook — fed, not yet read). Built
+    // once per call — the marks do not change inside the loop below.
+    let turn = game.session.turn_number;
+    let enemy_sound_marks: Vec<(HexCoord, u32)> = state
+        .fog
+        .as_ref()
+        .map(|f| f.firing_marks(turn).collect())
+        .unwrap_or_default();
+    let own_marked_units: Vec<usize> = state
+        .ai_fog
+        .as_ref()
+        .map(|f| {
+            state
+                .units
+                .iter()
+                .filter(|u| u.side == player && f.firing_marker(u.position, turn).is_some())
+                .map(|u| u.id)
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut planned = false;
     let orders = std::mem::take(&mut game.div_orders);
@@ -4275,13 +4761,16 @@ fn plan_division_orders(
             .collect();
         let mut ai = TacticalAi::new(player, order.phase_tactic(), seed);
         crate::stage!("plan_division_orders: planning '{division}'");
-        let actions = ai.plan_turn_div_order(
+        let actions = ai.plan_turn_div_order_with_sound(
             &grid,
             &own,
             &foe,
             intel.as_deref(),
             flags.as_ref(),
             order.planner_target(),
+            &enemy_sound_marks,
+            &own_marked_units,
+            state.fog.as_ref(),
         );
         crate::stage!(
             "plan_division_orders: '{division}' -> {} actions",
@@ -4386,6 +4875,29 @@ fn plan_allied_nations(game: &mut GameController, state: &mut TacticalState, loc
         .map(|(a, d)| (if player == Side::Attacker { d } else { a }).clone());
     let flags = game.session.flags().cloned();
 
+    // §6.1 sound-ranging intel for every planner this turn: the player's own
+    // fog holds the enemy battery tells, the AI's fog holds the marks on OUR
+    // guns (the reserved shoot-and-scoot hook — fed, not yet read). Built
+    // once per call — the marks do not change inside the loop below.
+    let turn = game.session.turn_number;
+    let enemy_sound_marks: Vec<(HexCoord, u32)> = state
+        .fog
+        .as_ref()
+        .map(|f| f.firing_marks(turn).collect())
+        .unwrap_or_default();
+    let own_marked_units: Vec<usize> = state
+        .ai_fog
+        .as_ref()
+        .map(|f| {
+            state
+                .units
+                .iter()
+                .filter(|u| u.side == player && f.firing_marker(u.position, turn).is_some())
+                .map(|u| u.id)
+                .collect()
+        })
+        .unwrap_or_default();
+
     let mut planned = false;
     let allies = game.allies.clone();
     for contingent in &allies {
@@ -4423,7 +4935,7 @@ fn plan_allied_nations(game: &mut GameController, state: &mut TacticalState, loc
             ^ (game.session.turn_number as u64).wrapping_mul(0x517CC1B727220A95);
         let mut ai = TacticalAi::new(player, contingent.tactic, seed);
         crate::stage!("plan_allied_nations: planning '{}'", contingent.tag);
-        let actions = ai.plan_turn_full(
+        let actions = ai.plan_turn_full_with_sound(
             &grid,
             &own,
             &foe,
@@ -4431,6 +4943,9 @@ fn plan_allied_nations(game: &mut GameController, state: &mut TacticalState, loc
             flags.as_ref(),
             Some(&passive),
             Some(&state.units),
+            &enemy_sound_marks,
+            &own_marked_units,
+            state.fog.as_ref(),
         );
         let actions: Vec<AiAction> = actions
             .into_iter()
@@ -4569,14 +5084,6 @@ fn finish_full_turn(
     for u in state.units.iter_mut() {
         u.normalize_broken_state();
     }
-    // Maintenance attachments regenerate a little strength each
-    // full turn.
-    for u in state.units.iter_mut() {
-        let regen = u.support_str_regen();
-        if regen > 0.0 && u.is_combat_effective() {
-            u.strength = (u.strength + regen).min(u.max_strength);
-        }
-    }
 
     // §6.13: in-command battalions regenerate org near their HQ.
     game.combat.apply_command_regen(&mut state.units);
@@ -4592,11 +5099,19 @@ fn finish_full_turn(
         .map(|u| u.id)
         .collect();
     let retreat_zones = state.deployment_zones.clone();
+    let retreat_rim = state.retreat_rim.clone();
     for id in retreating {
         let zones = retreat_zones
             .as_ref()
             .map(|(a, d)| (a.as_slice(), d.as_slice()));
-        retreat_step_zoned(&grid, &mut state.units, id, true, zones);
+        retreat_step_zoned(
+            &grid,
+            &mut state.units,
+            id,
+            true,
+            zones,
+            retreat_rim.as_deref(),
+        );
     }
 
     // §6.14: out-of-bounds dwell — a unit ending the turn in the
@@ -4914,7 +5429,45 @@ fn deploy_side(
             placed += 1;
         }
     }
-    if exclude.is_empty() {
+    let staging = state.staging.clone();
+    // ENH-0158: the defender's deployment corridor — the attacker's
+    // approach routes to the keypoints; a quota of the line mans them
+    // front-first (a bias, not a partition). Battle params are the shared
+    // code defaults everywhere.
+    let corridor: Vec<HexCoord> = if side == Side::Defender {
+        tactical_ai::approach_corridor(
+            &grid,
+            &staging,
+            &foe_zone,
+            &self_zone,
+            &state.flag_anchors,
+            &tactical_core::params::CombatParams::default(),
+        )
+    } else {
+        Vec::new()
+    };
+    let corridor: Option<&[HexCoord]> = if corridor.is_empty() {
+        None
+    } else {
+        Some(&corridor)
+    };
+    if side == Side::Attacker
+        && tactical_ai::ai_deploy_staged(
+            &grid,
+            &mut state.units,
+            &staging,
+            &self_zone,
+            &foe_zone,
+            side,
+            tactic,
+            pre_used,
+            exclude,
+            only_undeployed,
+        )
+    {
+        // ENH-0157 origin-tied staging applied — each attacking division
+        // deployed on ITS source province's area (manual stays free).
+    } else if exclude.is_empty() {
         tactical_ai::ai_deploy_impl(
             &grid,
             &mut state.units,
@@ -4927,6 +5480,7 @@ fn deploy_side(
             None,
             None,
             only_undeployed,
+            corridor,
         );
     } else {
         // Division-by-division so the excluded slices stay untouched; each
@@ -4946,8 +5500,11 @@ fn deploy_side(
             }
         }
         let divisions: Vec<String> = keys.iter().map(|(_, d)| d.clone()).collect();
+        // The front metric is O(zone × foe-zone); one table serves every
+        // division in the loop (it depends only on the two zones).
+        let front = tactical_ai::front_map(&self_zone, &foe_zone);
         for (tag, division) in &keys {
-            tactical_ai::ai_deploy_impl(
+            tactical_ai::ai_deploy_impl_with_front(
                 &grid,
                 &mut state.units,
                 &self_zone,
@@ -4959,6 +5516,8 @@ fn deploy_side(
                 Some(tag),
                 Some(&divisions),
                 only_undeployed,
+                Some(&front),
+                corridor,
             );
             for u in &state.units {
                 if u.side == side
@@ -5073,6 +5632,7 @@ fn commit_sector_deploy(
         &used,
         Some(&division),
         Some(&tag),
+        None,
     );
     let mut placed = 0usize;
     for u in &mut state.units {
@@ -5108,8 +5668,11 @@ fn commit_sector_deploy(
 /// Deploy every allied contingent at BeginBattle (§7.5) — each of
 /// its divisions through its own `ai_deploy` call with the contingent's
 /// tactic card, into the player's stored sector suggestion when one exists
-/// (rect ∩ zone ∩ deployable, the sector_area guard; empty → the full
-/// player zone). A deployed division's hexes join `pre_used` so later
+/// (rect ∩ zone ∩ deployable, the sector_area guard). A division nobody
+/// drew a rectangle for is placed automatically and therefore stages on its
+/// own source province's slice ([`division_staging_zone`]); anything with
+/// neither suggestion nor staging keeps the full player zone.
+/// A deployed division's hexes join `pre_used` so later
 /// divisions and nations spread instead of stacking.
 /// Every step is scoped to the (contingent tag, division name) pair: a
 /// player-owned battalion that happens to share an ally's division name is
@@ -5156,12 +5719,16 @@ fn deploy_allied_nations(game: &mut GameController, state: &mut TacticalState, l
     };
     for contingent in &allies {
         for division in &contingent.divisions {
+            // The player's own action outranks automatic deployment
+            // (DESIGN.md §9.3): a rectangle the player drew herself is her own
+            // instruction and beats the automatic rule — only a division
+            // nobody drew for is automatic deployment, and only that stages
+            // on its source province.
             let area: Vec<HexCoord> = game
                 .ally_sector(&contingent.tag, division)
-                .map(|(anchor, release)| {
-                    sector_area(&grid, &self_zone, anchor, release, &pre_used)
-                })
+                .map(|(anchor, release)| sector_area(&grid, &self_zone, anchor, release, &pre_used))
                 .filter(|area| !area.is_empty())
+                .or_else(|| division_staging_zone(state, &contingent.tag, division))
                 .unwrap_or_else(|| self_zone.clone());
             tactical_ai::ai_deploy_impl(
                 &grid,
@@ -5175,6 +5742,7 @@ fn deploy_allied_nations(game: &mut GameController, state: &mut TacticalState, l
                 Some(&contingent.tag),
                 Some(&division_order),
                 false, // BeginBattle allied deploy: arrange the contingent whole
+                None,
             );
             // Division-scoped flip (deploy_side's whole-side flip is the
             // wrong granularity here): only this owner's division's placed
@@ -5194,6 +5762,37 @@ fn deploy_allied_nations(game: &mut GameController, state: &mut TacticalState, l
         game.log_line(loc.trf("log.ally.deployed", &[("tag", &contingent.tag)]));
     }
     state.units_dirty = true;
+}
+
+/// The automatic placement area of one allied division on the attack: the
+/// staging slice of THIS division's own source province — the same lookup
+/// the headless split and the player's Auto Deploy run, so a contingent
+/// never lands in another country's beach segment or another origin's
+/// departure strip.
+/// The player's own action outranks automatic deployment: this is the
+/// AUTOMATIC branch only — `deploy_allied_nations` falls back to it after
+/// ruling out the sector rectangle the player drew herself (DESIGN.md §9.3).
+/// `None` = no staging applies (defender side, empty `state.staging`, a
+/// division with no source province, a province that is not a staging key):
+/// the caller then keeps its whole-zone fallback.
+fn division_staging_zone(
+    state: &TacticalState,
+    tag: &str,
+    division: &str,
+) -> Option<Vec<HexCoord>> {
+    if state.player_side != Side::Attacker || state.staging.is_empty() {
+        return None;
+    }
+    let province = state
+        .units
+        .iter()
+        .find(|u| u.side == state.player_side && u.tag == tag && u.division == division)
+        .and_then(|u| u.hoi4_province)?;
+    state
+        .staging
+        .iter()
+        .find(|(source, _)| *source == province)
+        .map(|(_, hexes)| hexes.clone())
 }
 
 /// Per-frame sector-deployment preview: while the player drags (anchor set),
@@ -5257,6 +5856,7 @@ fn tick_sector_preview(mut state: ResMut<TacticalState>, time: Res<Time>, mut la
         &used,
         Some(&pick.division),
         Some(&pick.tag),
+        None,
     );
     state.sector_preview = probe
         .iter()
@@ -5281,6 +5881,7 @@ fn update_fog(state: &mut TacticalState, game: &GameController) {
                 grid.width,
                 grid.height,
                 game.combat.params().fog_reveal_duration_turns,
+                game.combat.params().sound_mark_turns,
             )
         })
         .update(
@@ -5297,6 +5898,7 @@ fn update_fog(state: &mut TacticalState, game: &GameController) {
                 grid.width,
                 grid.height,
                 game.combat.params().fog_reveal_duration_turns,
+                game.combat.params().sound_mark_turns,
             )
         })
         .update(
@@ -5524,6 +6126,7 @@ fn tick_battle(
     tour: Res<BattleTour>,
     time: Res<Time>,
     loc: Res<LocaleRes>,
+    auto: Res<crate::automation::TurnAutomation>,
     mut prev: Local<Option<(BattlePhase, Side, u32, u32)>>,
 ) {
     let Some(game) = game else { return };
@@ -5551,7 +6154,8 @@ fn tick_battle(
             // never clicks into the AI's action window by mistake. While
             // the battle-report tour is still playing the banner is held
             // back (notice.pending) until the reports are read through.
-            if (side != p_side || turn != p_turn) && phase == BattlePhase::TacticalActive {
+            // RTS mode keeps the top bar silent: no turn banners at all.
+            if (side != p_side || turn != p_turn) && phase == BattlePhase::TacticalActive && !auto.fast_mode {
                 let banner = if side == state.player_side {
                     FlashNotice::turn(
                         loc.trf("notice.turn.yours", &[("n", &turn.to_string())]),
@@ -5578,11 +6182,14 @@ fn tick_battle(
             // top-anchored modal prompt (summary + Continue / End Tactic)
             // replaces the auto-opened log window. Desync mode seals hours
             // locally without any sync — the prompt would be a lie there.
-            if hour != p_hour && phase != BattlePhase::Deployment && !game.session.sync_disabled {
+            // RTS mode seals hours without the popup at all — the numbers
+            // land in the battle log and the flow never pauses.
+            if hour != p_hour && phase != BattlePhase::Deployment && !game.session.sync_disabled && !auto.fast_mode {
                 ui_win.sync_prompt = true;
             }
             // Ready to sync: point at the fixed button slot (right panel).
-            if phase == BattlePhase::ReadyToSync && p_phase != BattlePhase::ReadyToSync {
+            // RTS mode syncs by itself — the hint stays silent there too.
+            if phase == BattlePhase::ReadyToSync && p_phase != BattlePhase::ReadyToSync && !auto.fast_mode {
                 notice.flash = Some(FlashNotice::plain(
                     loc.trf("notice.hour_complete", &[("n", &(hour + 1).to_string())]),
                     now + 6.0,
@@ -6005,6 +6612,34 @@ mod tests {
         assert!(!state.units[0].is_holding, "attacking drops the stance");
     }
 
+    /// The AI idle-hold respects the §6.8 infantry-attribute eligibility,
+    /// same as the player's H: artillery and cavalry idle WITHOUT the
+    /// stance (no +25% defense, no hold glyph).
+    #[test]
+    fn ai_hold_respects_infantry_only_eligibility() {
+        let mut game = GameController::new(Side::Attacker, CombatTactic::Default, 7);
+        let mut state = TacticalState::default();
+        state.grid = Some(Arc::new(HexGrid::new(8, 8, Terrain::Plains)));
+        state.units = vec![
+            BattalionUnit::new(1, "GUN", UnitType::ArtilleryBrigade, Side::Defender, HexCoord::new(3, 3)),
+            BattalionUnit::new(2, "CAV", UnitType::Cavalry, Side::Defender, HexCoord::new(4, 4)),
+        ];
+        let loc = Locale::from_text(tactical_locale::Language::English, "", "");
+
+        for id in [1, 2] {
+            apply_ai_action(
+                &AiAction::Hold { unit_id: id },
+                Side::Defender,
+                &mut game,
+                &mut state,
+                &loc,
+                false,
+            );
+        }
+        assert!(!state.units[0].is_holding, "artillery cannot take cover");
+        assert!(!state.units[1].is_holding, "cavalry cannot take cover");
+    }
+
     /// Combat facing: registering an assault turns the attacker toward the
     /// target and the target back toward its attacker.
     #[test]
@@ -6140,6 +6775,46 @@ mod tests {
         u.name = format!("{id}.Inf");
         u.division = div.to_string();
         u
+    }
+
+    /// A rewind drops the report tour and restores the AI's fog view —
+    /// both ride OUTSIDE the snapshot's own state, so `restore` has to reset
+    /// them explicitly. Reachable when a tour is live while the Esc menu is
+    /// open: without the reset the restored battle stays frozen behind the
+    /// stale queue (`run_ai_turn` / `tick_division_orders` return while
+    /// `tour.active`), and the planner would plan against the fog of the
+    /// timeline that no longer exists.
+    #[test]
+    fn restore_clears_the_tour_and_rewinds_the_ai_fog() {
+        let (mut game, mut state) = tactical_fixture();
+        state.units = vec![inf(1, "1. Div", Side::Attacker)];
+        state.fog = Some(FogOfWar::new(8, 8, 3, 3));
+        state.ai_fog = Some(FogOfWar::new(8, 8, 3, 3));
+        let snap = BattleSnapshot::take(&game, &state);
+        // Battle runs on: the AI saw more, the tour is walking reports.
+        state.ai_fog = Some(FogOfWar::new(4, 4, 3, 3));
+        state.report_ghosts.insert(1, HexCoord::new(2, 2));
+        let mut tour = BattleTour {
+            queue: vec![report_with_pending(HexCoord::new(2, 2), Vec::new())],
+            active: true,
+            ..BattleTour::default()
+        };
+        snap.restore(&mut game, &mut state, &mut tour);
+        assert!(!tour.active, "a rewind must not leave the tour running");
+        assert!(tour.queue.is_empty(), "{:?}", tour.queue);
+        assert!(
+            state.report_ghosts.is_empty(),
+            "ghosts belong to the old run"
+        );
+        assert_eq!(
+            state.ai_fog.as_ref().map(|f| (f.width, f.height)),
+            Some((8, 8)),
+            "the AI fog rewinds with the units"
+        );
+        assert_eq!(
+            state.fog.as_ref().map(|f| (f.width, f.height)),
+            Some((8, 8))
+        );
     }
 
     /// §6.8/§8.2: the 20% disengagement penalty is org the unit really lost —
@@ -6413,8 +7088,9 @@ mod tests {
         assert!(game2.log.is_empty());
     }
 
-    /// BUG-0098: re-issuing the CURRENT destination keeps the whole
-    /// standing order (invested hours AND queued legs) and stays silent.
+    /// Order persistence (§7.3): re-issuing the CURRENT destination keeps
+    /// the whole standing order (invested hours AND queued legs) and stays
+    /// silent.
     #[test]
     fn issue_move_order_reaffirm_same_destination_keeps_order() {
         let (mut game, mut state) = tactical_fixture();
@@ -6443,9 +7119,9 @@ mod tests {
         assert!(!state.orders_dirty, "nothing changed — nothing flagged");
     }
 
-    /// BUG-0098: re-pointing to a NEW destination whose fresh route
-    /// shares the first step carries the invested hours; a first-step
-    /// change starts the bar from zero.
+    /// Order persistence (§7.3): re-pointing to a NEW destination whose
+    /// fresh route shares the first step carries the invested hours; a
+    /// first-step change starts the bar from zero.
     #[test]
     fn issue_move_order_repoint_carries_hours_only_when_first_step_shared() {
         let (mut game, mut state) = tactical_fixture();
@@ -6486,6 +7162,182 @@ mod tests {
         ));
         let order = state.unit_by_id(1).unwrap().move_order.as_ref().unwrap();
         assert_eq!(order.hours, 0.0, "first-step change zeroes the bar");
+    }
+
+    /// Step-progress memory (§6.2): re-pointing to a genuinely different
+    /// first step BANKS the invested hours instead of losing them;
+    /// changing one's mind back onto the banked first step restores them
+    /// (consumed once) — and the ETA prices the remaining march only.
+    #[test]
+    fn issue_move_order_repoint_restores_banked_progress_on_change_of_mind() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.position = HexCoord::new(1, 1);
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            hours: 0.12,
+            queue: Default::default(),
+        });
+        state.units = vec![u];
+
+        // Re-point north: a different first step — the bar restarts and
+        // the east investment banks into the step memory.
+        let issued = issue_move_order_for(&mut game, &mut state, 1, HexCoord::new(1, 3), false);
+        assert!(matches!(issued, MoveIssue::Issued { .. }));
+        let u = state.unit_by_id(1).unwrap();
+        assert_eq!(u.move_order.as_ref().unwrap().hours, 0.0);
+        assert_eq!(
+            u.step_memory,
+            Some((HexCoord::new(2, 1), 0.12)),
+            "east progress banked"
+        );
+
+        // Change of mind, back east: the banked hours return, the memory
+        // is consumed, and the ETA prices the restored progress
+        // (0.75 h − 0.12 h at 6 turns/h → 4 turns, not 5).
+        let issued = issue_move_order_for(&mut game, &mut state, 1, HexCoord::new(3, 1), false);
+        match issued {
+            MoveIssue::Issued { eta, .. } => {
+                assert_eq!(eta, 4, "the ETA reflects the restored hours")
+            }
+            _ => panic!("expected Issued"),
+        }
+        let u = state.unit_by_id(1).unwrap();
+        let order = u.move_order.as_ref().unwrap();
+        assert!(
+            (order.hours - 0.12).abs() < 1e-6,
+            "banked hours restored: {}",
+            order.hours
+        );
+        assert_eq!(u.step_memory, None, "restore consumes the memory");
+    }
+
+    /// A→B→C: C's fresh route shares A's first step — the banked
+    /// progress comes back even though the player never pointed at A
+    /// again (§6.2 step-progress memory).
+    #[test]
+    fn issue_move_order_repoint_restores_via_a_third_destination_sharing_the_first_step() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.position = HexCoord::new(1, 1);
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            hours: 0.12,
+            queue: Default::default(),
+        });
+        state.units = vec![u];
+
+        // To B in the north: the east investment banks.
+        let issued = issue_move_order_for(&mut game, &mut state, 1, HexCoord::new(1, 3), false);
+        assert!(matches!(issued, MoveIssue::Issued { .. }));
+        assert_eq!(
+            state.unit_by_id(1).unwrap().step_memory,
+            Some((HexCoord::new(2, 1), 0.12))
+        );
+
+        // To C further east: C's route shares A's first step (2,1) —
+        // the banked hours restore.
+        let issued = issue_move_order_for(&mut game, &mut state, 1, HexCoord::new(4, 1), false);
+        assert!(matches!(issued, MoveIssue::Issued { .. }));
+        let u = state.unit_by_id(1).unwrap();
+        let order = u.move_order.as_ref().unwrap();
+        assert_eq!(order.path.last(), Some(&HexCoord::new(4, 1)));
+        assert!(
+            (order.hours - 0.12).abs() < 1e-6,
+            "banked progress restores via the matching first step: {}",
+            order.hours
+        );
+        assert_eq!(u.step_memory, None);
+    }
+
+    /// Stand-by banks the cancelled march's step progress (§6.2/§7.4):
+    /// a later order toward the same first step picks it back up.
+    #[test]
+    fn stand_by_banks_progress_and_reissue_restores_it() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.position = HexCoord::new(1, 1);
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            hours: 0.12,
+            queue: Default::default(),
+        });
+        state.units = vec![u];
+        let sel = state.unit_by_id(1).unwrap().clone();
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        // Default policy: right-click self on a marching battalion
+        // stands it by — the march dies, its progress banks.
+        assert!(right_click_self(&mut game, &mut state, &sel, &loc));
+        let u = state.unit_by_id(1).unwrap();
+        assert!(u.move_order.is_none(), "stood by");
+        assert_eq!(
+            u.step_memory,
+            Some((HexCoord::new(2, 1), 0.12)),
+            "the cancelled march banked its progress"
+        );
+
+        // Re-issue toward the banked first step: the investment returns.
+        let issued = issue_move_order_for(&mut game, &mut state, 1, HexCoord::new(4, 1), false);
+        assert!(matches!(issued, MoveIssue::Issued { .. }));
+        let u = state.unit_by_id(1).unwrap();
+        assert!(
+            (u.move_order.as_ref().unwrap().hours - 0.12).abs() < 1e-6,
+            "stood-by progress restored"
+        );
+        assert_eq!(u.step_memory, None);
+    }
+
+    /// AI symmetry (§6.2): the division/enemy AI's own order replacement
+    /// walks the same memory ladder — a destination flip banks the old
+    /// first step's progress and a flip back restores it.
+    #[test]
+    fn apply_ai_action_move_repoint_banks_and_restores_step_progress() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Defender);
+        u.position = HexCoord::new(1, 1);
+        u.move_order = Some(MoveOrder {
+            path: vec![HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            hours: 0.12,
+            queue: Default::default(),
+        });
+        state.units = vec![u];
+        let loc = Locale::from_text(tactical_locale::Language::English, "", "");
+
+        // The planner flips the destination: different first step — bank.
+        apply_ai_action(
+            &AiAction::MoveUnit {
+                unit_id: 1,
+                path: vec![HexCoord::new(1, 2), HexCoord::new(1, 3)],
+            },
+            Side::Defender,
+            &mut game,
+            &mut state,
+            &loc,
+            false,
+        );
+        let u = state.unit_by_id(1).unwrap();
+        assert_eq!(u.move_order.as_ref().unwrap().hours, 0.0);
+        assert_eq!(u.step_memory, Some((HexCoord::new(2, 1), 0.12)));
+
+        // …and flips back: the banked progress restores (consumed).
+        apply_ai_action(
+            &AiAction::MoveUnit {
+                unit_id: 1,
+                path: vec![HexCoord::new(2, 1), HexCoord::new(3, 1)],
+            },
+            Side::Defender,
+            &mut game,
+            &mut state,
+            &loc,
+            false,
+        );
+        let u = state.unit_by_id(1).unwrap();
+        assert!(
+            (u.move_order.as_ref().unwrap().hours - 0.12).abs() < 1e-6,
+            "the AI side restores too"
+        );
+        assert_eq!(u.step_memory, None);
     }
 
     /// Shift-click appends a waypoint leg to the standing order; the
@@ -6579,10 +7431,57 @@ mod tests {
         );
     }
 
-    /// BUG-0099: the registration backstop — an AI AREA mission whose
-    /// blast circle (aim hex + ring 1) holds a same-side targetable
-    /// battalion is refused even when the planner proposed it (the
-    /// planner aims clean zones; this gate catches anything that slips
+    /// The Shift-chain WAIT state — active leg consumed, the next leg still
+    /// without a route — is `path: []` + a non-empty queue. Appending there
+    /// must price the new leg from the queued tail, never panic on the
+    /// missing path.
+    #[test]
+    fn issue_move_order_queued_wait_state_appends_from_the_chain_tail() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut u = inf(1, "1. Div", Side::Attacker);
+        u.position = HexCoord::new(1, 1);
+        u.move_order = Some(MoveOrder {
+            path: vec![],
+            hours: 0.0,
+            queue: VecDeque::from([MoveLeg {
+                dest: HexCoord::new(3, 1),
+                preview: vec![
+                    HexCoord::new(1, 1),
+                    HexCoord::new(2, 1),
+                    HexCoord::new(3, 1),
+                ],
+            }]),
+        });
+        state.units = vec![u];
+        state.select_only(1);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        assert!(issue_move_order(
+            &mut game,
+            &mut state,
+            HexCoord::new(5, 1),
+            &loc,
+            true
+        ));
+        let order = state.unit_by_id(1).unwrap().move_order.as_ref().unwrap();
+        assert_eq!(order.queue.len(), 2, "the leg appends behind the wait");
+        assert_eq!(order.queue.back().unwrap().dest, HexCoord::new(5, 1));
+        // Shift-clicking the chain tail again = de-duplicated no-op.
+        assert!(issue_move_order(
+            &mut game,
+            &mut state,
+            HexCoord::new(5, 1),
+            &loc,
+            true
+        ));
+        let order = state.unit_by_id(1).unwrap().move_order.as_ref().unwrap();
+        assert_eq!(order.queue.len(), 2, "tail duplicate dropped");
+    }
+
+    /// The registration backstop (§7.3 friend-free gate): an AI AREA
+    /// mission whose blast circle (aim hex + ring 1) holds a same-side
+    /// targetable battalion is refused even when the planner proposed it
+    /// (the planner aims clean zones; this gate catches anything that slips
     /// through, e.g. a moved friendly). Precise missions never splash and
     /// always register.
     #[test]
@@ -7212,6 +8111,117 @@ mod tests {
         );
     }
 
+    /// Two attacking contingents whose divisions come from different source
+    /// provinces: `state.staging` carries one slice per province, both
+    /// inside the player's deployment zone. Returns the two slices so a test
+    /// can tell which origin a division landed in.
+    fn staged_allies_fixture() -> (GameController, TacticalState, Vec<HexCoord>, Vec<HexCoord>) {
+        let (mut game, mut state) = tactical_fixture();
+        state.player_side = Side::Attacker;
+        let grid = HexGrid::new(8, 8, Terrain::Plains);
+        let a_zone: Vec<HexCoord> = grid.iter_coords().filter(|h| h.q < 3).collect();
+        let d_zone: Vec<HexCoord> = grid.iter_coords().filter(|h| h.q > 5).collect();
+        state.grid = Some(Arc::new(grid));
+        state.deployment_zones = Some((a_zone, d_zone));
+        // Province 100's slice is the northern strip of the zone, province
+        // 200's the southern one — disjoint, so a landing identifies its
+        // origin.
+        let north: Vec<HexCoord> = (0..=2)
+            .flat_map(|q| (0..=2).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        let south: Vec<HexCoord> = (0..=2)
+            .flat_map(|q| (5..=7).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        state.staging = vec![(100, north.clone()), (200, south.clone())];
+        let waiting_from = |id: usize, div: &str, tag: &str, province: u32| {
+            let mut u = inf(id, div, Side::Attacker);
+            u.tag = tag.to_string();
+            u.hoi4_province = Some(province);
+            u.undeployed = true;
+            u.position = BattalionUnit::OFFBOARD;
+            u
+        };
+        state.units = vec![
+            waiting_from(1, "1. Div", "GER", 100),
+            waiting_from(2, "A. Div", "FRA", 100),
+            waiting_from(3, "B. Div", "ITA", 200),
+        ];
+        game.allies = vec![
+            AllyContingent {
+                tag: "FRA".to_string(),
+                tactic: CombatTactic::Assault,
+                divisions: vec!["A. Div".to_string()],
+            },
+            AllyContingent {
+                tag: "ITA".to_string(),
+                tactic: CombatTactic::Assault,
+                divisions: vec!["B. Div".to_string()],
+            },
+        ];
+        (game, state, north, south)
+    }
+
+    /// Attacking contingents stage on their own source province: with two
+    /// origin slices in `state.staging`, each allied division lands inside
+    /// the slice of ITS province — nobody swaps into another origin's
+    /// departure strip.
+    #[test]
+    fn allied_attacker_deploys_on_its_own_staging_slice() {
+        let (mut game, mut state, north, south) = staged_allies_fixture();
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        deploy_allied_nations(&mut game, &mut state, &loc);
+
+        let fra = state.unit_by_id(2).unwrap();
+        assert!(
+            north.contains(&fra.position),
+            "the FRA division stages on province 100's slice, landed at {:?}",
+            fra.position
+        );
+        let ita = state.unit_by_id(3).unwrap();
+        assert!(
+            south.contains(&ita.position),
+            "the ITA division stages on province 200's slice, landed at {:?}",
+            ita.position
+        );
+        let own = state.unit_by_id(1).unwrap();
+        assert!(
+            own.undeployed && own.position == BattalionUnit::OFFBOARD,
+            "the player's own division still waits for her"
+        );
+    }
+
+    /// Player instruction outranks automatic deployment: a rectangle the
+    /// player drew for one contingent division beats the source-staging rule
+    /// — that division lands in the rectangle while the undrawn one still
+    /// stages on its own province.
+    #[test]
+    fn allied_sector_rectangle_outranks_source_staging() {
+        let (mut game, mut state, north, south) = staged_allies_fixture();
+        let loc = Locale::load(tactical_locale::Language::English);
+        // A band between the two slices: disjoint from both, so a landing
+        // inside it can only come from the rectangle.
+        let drawn: Vec<HexCoord> = (0..=2)
+            .flat_map(|q| (3..=4).map(move |r| HexCoord::new(q, r)))
+            .collect();
+        game.set_ally_sector("FRA", "A. Div", (HexCoord::new(0, 3), HexCoord::new(2, 4)));
+
+        deploy_allied_nations(&mut game, &mut state, &loc);
+
+        let fra = state.unit_by_id(2).unwrap();
+        assert!(
+            drawn.contains(&fra.position) && !north.contains(&fra.position),
+            "the drawn rectangle wins over province 100's staging, landed at {:?}",
+            fra.position
+        );
+        let ita = state.unit_by_id(3).unwrap();
+        assert!(
+            south.contains(&ita.position),
+            "the undrawn ITA division still stages on province 200's slice, landed at {:?}",
+            ita.position
+        );
+    }
+
     /// Sector drag, player's own division: the (tag, division) pair routes
     /// the rectangle to the player's battalion as a real deploy, and the
     /// same-name ally stays OFFBOARD with no suggestion stored for it.
@@ -7427,6 +8437,459 @@ mod tests {
         assert!(
             !cancel_division_order(&mut game, "GER", "2. Inf"),
             "nothing to cancel on the player's same-name division"
+        );
+    }
+
+    /// 全体推进 fills the Advance order into every commanded division
+    /// without one — and an explicit Seize order is not overwritten.
+    #[test]
+    fn advance_all_fills_orderless_divisions_and_keeps_explicit_orders() {
+        let (mut game, mut state) = tactical_fixture();
+        state.player_side = Side::Attacker;
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.tag = "GER".to_string();
+        let mut b = inf(2, "2. Div", Side::Attacker);
+        b.tag = "GER".to_string();
+        let mut foe = inf(9, "9. Div", Side::Defender);
+        foe.tag = "SOV".to_string();
+        state.units = vec![a, b, foe];
+        game.div_orders.insert(
+            ("GER".to_string(), "2. Div".to_string()),
+            DivisionOrder {
+                pick: DivOrderPick::Seize(HexCoord::new(5, 5)),
+                seized: false,
+                engage_last_pos: None,
+            },
+        );
+        let loc = Locale::load(tactical_locale::Language::English);
+        let mut notice = NoticeBar::default();
+        assert!(issue_advance_all(
+            &mut game,
+            &mut state,
+            false,
+            &loc,
+            &mut notice,
+            0.0
+        ));
+        assert!(matches!(
+            game.div_order("GER", "1. Div").map(|o| o.pick),
+            Some(DivOrderPick::Advance)
+        ));
+        assert!(matches!(
+            game.div_order("GER", "2. Div").map(|o| o.pick),
+            Some(DivOrderPick::Seize(_))
+        ));
+        assert!(
+            !game.div_ordered("SOV", "9. Div"),
+            "the enemy takes no order"
+        );
+    }
+
+    /// Allied contingents keep their own staff — only the divisions the
+    /// player commands are filled in.
+    #[test]
+    fn advance_all_skips_allied_divisions() {
+        let (mut game, mut state) = tactical_fixture();
+        state.player_side = Side::Attacker;
+        game.allies = vec![AllyContingent {
+            tag: "ITA".to_string(),
+            tactic: CombatTactic::Default,
+            divisions: vec!["3. Div".to_string()],
+        }];
+        let mut own = inf(1, "1. Div", Side::Attacker);
+        own.tag = "GER".to_string();
+        let mut ally = inf(2, "3. Div", Side::Attacker);
+        ally.tag = "ITA".to_string();
+        state.units = vec![own, ally];
+        let loc = Locale::load(tactical_locale::Language::English);
+        let mut notice = NoticeBar::default();
+        assert!(issue_advance_all(
+            &mut game,
+            &mut state,
+            false,
+            &loc,
+            &mut notice,
+            0.0
+        ));
+        assert!(game.div_ordered("GER", "1. Div"));
+        assert!(
+            !game.div_ordered("ITA", "3. Div"),
+            "the ally is not conscripted"
+        );
+    }
+
+    /// The button only acts on the player's own tactical turn, and a
+    /// second click with everything already ordered changes nothing.
+    #[test]
+    fn advance_all_respects_the_turn_and_is_idempotent() {
+        let (mut game, mut state) = tactical_fixture();
+        state.player_side = Side::Attacker;
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.tag = "GER".to_string();
+        state.units = vec![a];
+        let loc = Locale::load(tactical_locale::Language::English);
+        let mut notice = NoticeBar::default();
+        // Enemy turn: rejected outright.
+        game.session.current_side = Side::Defender;
+        assert!(!issue_advance_all(
+            &mut game,
+            &mut state,
+            false,
+            &loc,
+            &mut notice,
+            0.0
+        ));
+        assert!(game.div_orders.is_empty());
+        game.session.current_side = Side::Attacker;
+        assert!(issue_advance_all(
+            &mut game,
+            &mut state,
+            false,
+            &loc,
+            &mut notice,
+            0.0
+        ));
+        // Second click: everything is ordered — nothing new lands.
+        assert!(!issue_advance_all(
+            &mut game,
+            &mut state,
+            false,
+            &loc,
+            &mut notice,
+            0.0
+        ));
+        assert_eq!(game.div_orders.len(), 1);
+    }
+
+    /// The battle-report tour gates the button the same way it gates End
+    /// Turn: new orders wait until the enemy's resolution has been read.
+    #[test]
+    fn advance_all_waits_for_the_report_tour() {
+        let (mut game, mut state) = tactical_fixture();
+        state.player_side = Side::Attacker;
+        let mut a = inf(1, "1. Div", Side::Attacker);
+        a.tag = "GER".to_string();
+        state.units = vec![a];
+        let loc = Locale::load(tactical_locale::Language::English);
+        let mut notice = NoticeBar::default();
+        assert!(!issue_advance_all(
+            &mut game,
+            &mut state,
+            true,
+            &loc,
+            &mut notice,
+            0.0
+        ));
+        assert!(game.div_orders.is_empty());
+        assert!(issue_advance_all(
+            &mut game,
+            &mut state,
+            false,
+            &loc,
+            &mut notice,
+            0.0
+        ));
+        assert!(game.div_ordered("GER", "1. Div"));
+    }
+
+    /// §6.13 report de-leak: only an ENEMY the player cannot see is reported
+    /// anonymously — own units under fire and visible enemies keep their
+    /// identity, and a battle without a fog (preview paths) never anonymizes
+    /// anything. The gate is reader-centric and side-symmetric: it covers
+    /// the victim AND the attacker (a fog-hidden battery shelling the line).
+    #[test]
+    fn unobserved_victims_are_reported_anonymously() {
+        let (_, mut state) = tactical_fixture();
+        let grid = state.grid.clone().expect("fixture grid");
+        let hidden = HexCoord::new(6, 6);
+        // One own observer at (2,2): its sight covers the observer's own hex
+        // and the ring around it, never the far corner.
+        let mut spotter = inf(1, "1. Div", Side::Attacker);
+        spotter.position = HexCoord::new(2, 2);
+        state.units = vec![spotter];
+        let mut fog = FogOfWar::new(grid.width, grid.height, 3, 3);
+        fog.update(&grid, &state.units, Side::Attacker, 0);
+        state.fog = Some(fog);
+
+        assert!(
+            !unit_unobserved(&state, Side::Attacker, HexCoord::new(2, 2)),
+            "own units (either role) stay named"
+        );
+        assert!(
+            !unit_unobserved(&state, Side::Defender, HexCoord::new(2, 2)),
+            "a visible enemy is reported as before"
+        );
+        assert!(
+            unit_unobserved(&state, Side::Defender, hidden),
+            "an unseen enemy is an unobserved target"
+        );
+        state.fog = None;
+        assert!(
+            !unit_unobserved(&state, Side::Defender, hidden),
+            "no fog (previews) means everything is seen"
+        );
+    }
+
+    /// §6.13 attacker de-leak end-to-end through the real fire phase: a
+    /// fog-hidden battery's exchange is reported anonymously in the log AND
+    /// the report lane, while the own-side victim keeps its name — and a
+    /// fizzle in the same phase must not shift the per-result name
+    /// alignment (the vec-skip panic class).
+    #[test]
+    fn hidden_attackers_are_reported_anonymously_end_to_end() {
+        let (mut game, mut state) = tactical_fixture();
+        let grid = state.grid.clone().expect("fixture grid");
+        let mut spotter = inf(1, "1. Div", Side::Attacker);
+        spotter.position = HexCoord::new(2, 2);
+        let mut battery = BattalionUnit::new(
+            9,
+            "Arty",
+            UnitType::ArtilleryBrigade,
+            Side::Defender,
+            HexCoord::new(6, 6),
+        );
+        battery.is_emplaced = true;
+        let mut fizzler = BattalionUnit::new(
+            10,
+            "Arty2",
+            UnitType::ArtilleryBrigade,
+            Side::Defender,
+            HexCoord::new(6, 5),
+        );
+        fizzler.is_emplaced = true;
+        state.units = vec![spotter, battery, fizzler];
+        let battery_name = unit_name(&state, 9);
+        let mut fog = FogOfWar::new(grid.width, grid.height, 3, 3);
+        fog.update(&grid, &state.units, Side::Attacker, 0);
+        state.fog = Some(fog);
+        state.attack_orders = vec![
+            AttackOrder {
+                attacker: 9,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(2, 2),
+                    precise: false,
+                },
+            },
+            AttackOrder {
+                attacker: 10,
+                target: AttackTarget::FireMission {
+                    hex: HexCoord::new(7, 7),
+                    precise: false,
+                },
+            },
+        ];
+        let loc = Locale::load(tactical_locale::Language::English);
+        let mut tour = BattleTour::default();
+        execute_fire_phase(
+            &mut game,
+            &mut state,
+            Side::Defender,
+            &mut FxQueue::default(),
+            &mut MoveAnims::default(),
+            &mut tour,
+            false,
+            &loc,
+        );
+        let log: String = game.log.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join("\n");
+        assert!(
+            !log.contains(&battery_name),
+            "the hidden battery is never named: {log}"
+        );
+        assert!(
+            log.contains("unobserved target"),
+            "the exchange is anonymous: {log}"
+        );
+        assert!(
+            log.contains("1.Inf"),
+            "the own-side victim keeps its name: {log}"
+        );
+        // The report lane reads the same de-leaked name, index-aligned with
+        // the hit result despite the fizzle in the same phase.
+        assert_eq!(tour.queue.len(), 1, "one hit report: {:?}", tour.queue.len());
+        assert_eq!(tour.queue[0].lanes.len(), 1);
+        assert_eq!(tour.queue[0].lanes[0].attacker, "unobserved target");
+        // …and the shot left the §6.1 sound mark on the battery's own hex.
+        assert!(
+            state
+                .fog
+                .as_ref()
+                .and_then(|f| f.firing_marker(HexCoord::new(6, 6), game.session.turn_number))
+                .is_some(),
+            "the firing hex is marked in the player's intel"
+        );
+    }
+
+    /// §6.13 fog honesty at registration: the AI action logs always record
+    /// the action, but never NAME a fog-hidden unit — the fire-mission
+    /// registration is anonymous for an unseen battery (the §6.1 sound mark
+    /// is the tell) and names a seen one.
+    #[test]
+    fn ai_action_logs_never_name_fog_hidden_units() {
+        let (mut game, mut state) = tactical_fixture();
+        let grid = state.grid.clone().expect("fixture grid");
+        let mut spotter = inf(1, "1. Div", Side::Attacker);
+        spotter.position = HexCoord::new(2, 2);
+        let mut battery = BattalionUnit::new(
+            9,
+            "Arty",
+            UnitType::ArtilleryBrigade,
+            Side::Defender,
+            HexCoord::new(6, 6),
+        );
+        battery.is_emplaced = true;
+        state.units = vec![spotter, battery];
+        let mut fog = FogOfWar::new(grid.width, grid.height, 3, 3);
+        fog.update(&grid, &state.units, Side::Attacker, 0);
+        state.fog = Some(fog);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        // Hidden battery: the order registers and the log still records —
+        // anonymously, with no name and no aim hex.
+        let registered = apply_ai_action(
+            &AiAction::FireSupport {
+                attacker_id: 9,
+                target_hex: HexCoord::new(2, 2),
+            },
+            Side::Defender,
+            &mut game,
+            &mut state,
+            &loc,
+            true,
+        );
+        assert!(registered, "the mission still registers");
+        assert_eq!(state.attack_orders.len(), 1);
+        let log: String = game
+            .log
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!log.contains("Arty"), "no hidden name in the log: {log}");
+        assert!(
+            !log.contains("(2, 2)"),
+            "no aim hex for an unseen battery: {log}"
+        );
+        assert!(
+            log.contains("unobserved target"),
+            "the registration is still recorded, anonymously: {log}"
+        );
+
+        // A seen battery: the registration line names it as before.
+        let mut seen = BattalionUnit::new(
+            10,
+            "ArtyS",
+            UnitType::ArtilleryBrigade,
+            Side::Defender,
+            HexCoord::new(3, 2), // inside the spotter's sight
+        );
+        seen.is_emplaced = true;
+        state.units.push(seen);
+        apply_ai_action(
+            &AiAction::FireSupport {
+                attacker_id: 10,
+                target_hex: HexCoord::new(2, 2),
+            },
+            Side::Defender,
+            &mut game,
+            &mut state,
+            &loc,
+            true,
+        );
+        let log: String = game
+            .log
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(log.contains("ArtyS"), "a seen battery is named: {log}");
+    }
+
+    /// The on-disk battle-log mirror keeps ONLY the latest battle: a new
+    /// controller truncates the same file; every line carries its turn.
+    #[test]
+    fn combat_log_mirror_keeps_only_the_latest_battle() {
+        let path = std::env::temp_dir().join(format!("fc_combat_log_test_{}.log", std::process::id()));
+        let mut game =
+            GameController::with_combat_log(Side::Attacker, CombatTactic::Default, 7, path.clone());
+        game.log_line("first battle line");
+        drop(game);
+
+        let mut game =
+            GameController::with_combat_log(Side::Attacker, CombatTactic::Default, 7, path.clone());
+        let text = std::fs::read_to_string(&path).expect("mirror exists");
+        assert!(
+            !text.contains("first battle line"),
+            "a new battle truncates the mirror: {text}"
+        );
+        game.log_line("second battle line");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("[turn ") && text.contains("second battle line"),
+            "turn-prefixed append: {text}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A new battle sweeps the previous battles' pid-named mirrors so
+    /// nothing accumulates on the player's disk.
+    #[test]
+    fn combat_log_sweep_removes_other_pid_logs() {
+        let dir = std::env::temp_dir();
+        let stale = dir.join("fc_combat_999999.log");
+        std::fs::write(&stale, "old battle").unwrap();
+        let keep = dir.join(format!("fc_combat_log_test_sweep_{}.log", std::process::id()));
+        let _game =
+            GameController::with_combat_log(Side::Attacker, CombatTactic::Default, 7, keep.clone());
+        assert!(!stale.exists(), "the previous battle's mirror is swept");
+        let _ = std::fs::remove_file(&keep);
+    }
+
+    /// §6.8: the AI's precision gate matches the player's picker — a VISIBLE
+    /// RETREATING enemy makes the mission precise (`is_targetable`, not
+    /// `is_combat_effective`).
+    #[test]
+    fn ai_fire_mission_is_precise_on_a_visible_retreating_enemy() {
+        let (mut game, mut state) = tactical_fixture();
+        let mut spotter = inf(1, "1. Div", Side::Attacker);
+        spotter.position = HexCoord::new(2, 2);
+        let mut broken = inf(2, "2. Div", Side::Attacker);
+        broken.position = HexCoord::new(3, 2);
+        broken.state = UnitState::Retreating;
+        broken.org = 0.0;
+        let mut battery = BattalionUnit::new(
+            9,
+            "Arty",
+            UnitType::ArtilleryBrigade,
+            Side::Defender,
+            HexCoord::new(3, 3), // adjacent: inside its sight-1 and min range
+        );
+        battery.is_emplaced = true;
+        state.units = vec![spotter, broken, battery];
+        let grid = state.grid.clone().expect("fixture grid");
+        let mut fog = FogOfWar::new(grid.width, grid.height, 3, 3);
+        fog.update(&grid, &state.units, Side::Defender, 0);
+        state.ai_fog = Some(fog);
+        let loc = Locale::load(tactical_locale::Language::English);
+
+        let registered = apply_ai_action(
+            &AiAction::FireSupport {
+                attacker_id: 9,
+                target_hex: HexCoord::new(3, 2),
+            },
+            Side::Defender,
+            &mut game,
+            &mut state,
+            &loc,
+            false,
+        );
+        assert!(registered, "the mission registers");
+        assert!(
+            matches!(
+                state.attack_orders[0].target,
+                AttackTarget::FireMission { precise: true, .. }
+            ),
+            "a visible retreating enemy is precision-fired: {:?}",
+            state.attack_orders[0].target
         );
     }
 }

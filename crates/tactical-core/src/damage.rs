@@ -84,7 +84,6 @@ pub enum LinearFactor {
     MeleeElevation,
     IndirectCrest,
     Cover,
-    AreaWeight,
 }
 
 /// Why the precision factor is what it is (the §6.3 class table) — the
@@ -365,7 +364,11 @@ pub fn defense_value_explained(
             } else {
                 1.0
             },
-            1.0 + target.entrenchment as f32 * params.entrench_defense_per_layer,
+            // Engineer attachments multiply the per-layer contribution
+            // (§6.3).
+            1.0 + target.entrenchment as f32
+                * params.entrench_defense_per_layer
+                * target.support_entrenchment_mult(),
         )
     };
     let terrain_mult =
@@ -504,6 +507,9 @@ pub fn resolve_org(p: f32, defense: f32, linear: f32, params: &CombatParams) -> 
 /// optional jitter and the `org_cap_ratio` cap at delivery; with the
 /// default `random_spread` of 0 this value is exactly what is delivered).
 /// `form` selects the firepower regime: Aimed = q·g², Area = q·g.
+/// The target's support companies still shave the DELIVERED amount
+/// (`support_org_damage_mult`); callers that compare against the resolver
+/// apply that row themselves — see [`delivered_org_estimate`].
 pub fn strike_org_damage(
     attacker: &BattalionUnit,
     target: &BattalionUnit,
@@ -598,7 +604,9 @@ pub fn strike_org_damage_explained(
 /// (q·g × g = q·g²). Deliberate plan-side gaps mirror the solo estimate's:
 /// no command aura (planning has no links) and no jitter (expectation);
 /// assault pools are all-melee, so the direct-fire falloff row is 1.
-/// Uncapped pre-delivery value, same convention as [`strike_org_damage`].
+/// Uncapped pre-delivery, pre-support value, same convention as
+/// [`strike_org_damage`] — the trade gate wants the potential damage, not
+/// the delivered one (see [`group_delivered_org_estimate`]).
 pub fn strike_group_org_estimate(
     attackers: &[&BattalionUnit],
     target: &BattalionUnit,
@@ -639,6 +647,52 @@ pub fn strike_group_org_estimate(
     let linear =
         (melee_weighted / sum_qg) * (adj_weighted / sum_qg) * (1.0 - def_cover);
     resolve_org(p, defense, linear, params)
+}
+
+/// Pooled-assault estimate as the TARGET receives it: [`strike_group_org_estimate`]
+/// multiplied by the target's `support_org_damage_mult` — the delivery row
+/// tactical-combat applies after the cap (military police ×0.9,
+/// §6.3). Decision gates that compare an estimate against a real org pool
+/// must use this form or they over-state the volley by up to the support
+/// multiplier.
+pub fn group_delivered_org_estimate(
+    attackers: &[&BattalionUnit],
+    target: &BattalionUnit,
+    grid: &HexGrid,
+    params: &CombatParams,
+) -> f32 {
+    strike_group_org_estimate(attackers, target, grid, params) * target.support_org_damage_mult()
+}
+
+/// [`strike_org_damage`] as the target receives it — the pre-cap estimate
+/// with the target's support delivery rows applied: org ×
+/// `support_org_damage_mult`, strength × `support_str_damage_mult`. The
+/// counter estimate is an expectation of real losses, so it uses this form.
+#[allow(clippy::too_many_arguments)]
+pub fn delivered_estimate(
+    attacker: &BattalionUnit,
+    target: &BattalionUnit,
+    target_uses_breakthrough: bool,
+    distance: i32,
+    attacker_in_command: bool,
+    target_in_command: bool,
+    grid: &HexGrid,
+    params: &CombatParams,
+    form: FirepowerForm,
+) -> (f32, f32) {
+    let org = strike_org_damage(
+        attacker,
+        target,
+        target_uses_breakthrough,
+        distance,
+        attacker_in_command,
+        target_in_command,
+        grid,
+        params,
+        form,
+    );
+    let str_ratio = strength_damage(org, target, params) * target.support_str_damage_mult();
+    (org * target.support_org_damage_mult(), str_ratio)
 }
 
 /// org → strength conversion (§6.3 v3.2): a full break costs
@@ -685,7 +739,7 @@ pub fn strength_damage_explained(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HexCoord, Side, UnitType};
+    use crate::{HexCoord, Side, SupportAttachment, SupportKind, UnitType};
 
     fn attacker() -> BattalionUnit {
         let mut u = BattalionUnit::new(
@@ -730,6 +784,89 @@ mod tests {
         let expect = 10.0 * 0.22;
         let got = strike_org_damage(&a, &d, false, 1, false, false, &grid, &params, FirepowerForm::Aimed);
         assert!((got - expect).abs() < 1e-4, "got {got}, want {expect}");
+    }
+
+    #[test]
+    fn delivered_estimates_carry_the_targets_support_rows() {
+        // The resolver multiplies delivered org/strength by the TARGET's
+        // support multipliers (military police ×0.9 org, field hospital
+        // ×0.75 strength). Estimates feeding the trade gates must agree, or
+        // an MP-attached target is over-estimated by up to 10%.
+        let grid = HexGrid::new(3, 3, Terrain::Plains);
+        let params = CombatParams::default();
+        let a = attacker();
+        let mut d = target();
+        d.attach(SupportAttachment {
+            kind: SupportKind::MilitaryPolice,
+            name: "1. MP".to_string(),
+            token: "military_police".to_string(),
+        });
+        d.attach(SupportAttachment {
+            kind: SupportKind::FieldHospital,
+            name: "1. Hosp".to_string(),
+            token: "field_hospital".to_string(),
+        });
+        let raw = strike_org_damage(
+            &a,
+            &d,
+            false,
+            1,
+            false,
+            false,
+            &grid,
+            &params,
+            FirepowerForm::Aimed,
+        );
+        let (org, str_) = delivered_estimate(
+            &a,
+            &d,
+            false,
+            1,
+            false,
+            false,
+            &grid,
+            &params,
+            FirepowerForm::Aimed,
+        );
+        assert!(
+            (org - raw * 0.9).abs() < 1e-4,
+            "org {org} should be the raw {raw} × an MP's 0.9"
+        );
+        let expect_str = strength_damage(raw, &d, &params) * 0.75;
+        assert!(
+            (str_ - expect_str).abs() < 1e-4,
+            "str {str_} vs {expect_str}"
+        );
+        // Group form: the delivered pooled estimate matches the raw pooled
+        // estimate times the same org row.
+        let raw_pool = strike_group_org_estimate(&[&a], &d, &grid, &params);
+        let delivered = group_delivered_org_estimate(&[&a], &d, &grid, &params);
+        assert!((delivered - raw_pool * 0.9).abs() < 1e-6);
+        // A support-free target is unchanged: the rows multiply by 1.0.
+        let plain = target();
+        let (org, _) = delivered_estimate(
+            &a,
+            &plain,
+            false,
+            1,
+            false,
+            false,
+            &grid,
+            &params,
+            FirepowerForm::Aimed,
+        );
+        let expect = strike_org_damage(
+            &a,
+            &plain,
+            false,
+            1,
+            false,
+            false,
+            &grid,
+            &params,
+            FirepowerForm::Aimed,
+        );
+        assert!((org - expect).abs() < 1e-6);
     }
 
     #[test]
@@ -1019,6 +1156,30 @@ mod tests {
         assert!((got2 - d.breakthrough).abs() < 1e-4);
         assert!(bd2.uses_breakthrough);
         assert!((bd2.d_hold_mult - 1.0).abs() < 1e-6);
+        assert!((bd2.d_entrench_mult - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn engineer_fieldworks_amplify_the_entrenchment_row() {
+        // §6.3: engineer attachments multiply the per-layer entrenchment
+        // contribution ×1.5 — the D-row decomposition shows it.
+        let params = CombatParams::default();
+        let mut d = target();
+        d.entrenchment = 2;
+        d.attach(crate::unit::SupportAttachment {
+            kind: crate::unit::SupportKind::Engineer,
+            name: "Eng".to_string(),
+            token: "engineer".to_string(),
+        });
+        let mut bd = HitBreakdown::default();
+        let got = defense_value_explained(&d, false, Terrain::Plains, &params, &mut bd);
+        let entrench = 1.0 + 2.0 * params.entrench_defense_per_layer * 1.5;
+        let expect = 15.0 * entrench;
+        assert!((got - expect).abs() < 1e-4, "got {got}, want {expect}");
+        assert!((bd.d_entrench_mult - entrench).abs() < 1e-6);
+        // Caught mid-attack, the fieldworks still do not apply.
+        let mut bd2 = HitBreakdown::default();
+        defense_value_explained(&d, true, Terrain::Plains, &params, &mut bd2);
         assert!((bd2.d_entrench_mult - 1.0).abs() < 1e-6);
     }
 

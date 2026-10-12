@@ -116,10 +116,6 @@ fn drive(
     if drag_sim(&mut auto, game.session.phase, &mut q_cam) {
         return;
     }
-    // FC_DRAGSYNC: hold the Sync click until the pre-Sync drag finished.
-    if auto.drag_phase == 1 {
-        return;
-    }
     auto.timer -= time.delta_secs();
     if auto.timer > 0.0 {
         return;

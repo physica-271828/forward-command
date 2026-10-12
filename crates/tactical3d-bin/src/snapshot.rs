@@ -32,6 +32,12 @@ pub const SNAPSHOT_NAME: &str = "tac_snap";
 /// post-mortem reconciliation.
 pub const CHECK_NAME: &str = "tac_check";
 
+/// Pre-pick scan snapshot: the "Scan for Commandable Battles" decision logs
+/// `tac_scan`, and the external side snapshots fresh to publish the
+/// enterable states (DESIGN.md §10.7). Kept separate from `tac_snap` so a
+/// scan can never be mistaken for a pick-resolution snapshot.
+pub const SCAN_NAME: &str = "tac_scan";
+
 /// Generous upper bound for the save file to appear after injection
 /// (late-game saves take seconds; small ones typically land in ~1 s).
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -54,8 +60,18 @@ fn inject_and_wait(
 ) -> Result<PathBuf, String> {
     let path = saves_dir.join(format!("{name}.hoi4"));
     // Any pre-existing file is deleted first — a stale file must never
-    // pass as fresh (the `save` default-name trap family).
-    let _ = std::fs::remove_file(&path);
+    // pass as fresh (the `save` default-name trap family). A delete that
+    // FAILS (a scanner or a stale exe still holds the file) leaves that
+    // stale file in place, and the freshness wait below would accept it as
+    // the new save — abort instead of parsing the wrong battle.
+    if let Err(e) = std::fs::remove_file(&path) {
+        if path.exists() {
+            return Err(format!(
+                "cannot replace stale {} ({e}) — close whatever is using it and retry",
+                path.display()
+            ));
+        }
+    }
     injector
         .inject_commands(&[format!("savegame {name}")], None, dry)
         .map_err(|e| format!("snapshot injection failed: {e}"))?;
@@ -117,16 +133,33 @@ pub fn take_check_snapshot(
     Ok(path)
 }
 
+/// Inject `savegame tac_scan` and wait for a fresh, fully written file — the
+/// scan publisher parses this snapshot to derive the commandable battles.
+pub fn take_scan_snapshot(
+    injector: &Injector,
+    saves_dir: &Path,
+    dry: bool,
+) -> Result<PathBuf, String> {
+    let path = inject_and_wait(injector, saves_dir, SCAN_NAME, dry)?;
+    if !dry {
+        wait_stable(&path)?;
+    }
+    Ok(path)
+}
+
 /// Load and parse the snapshot file.
 pub fn parse_snapshot(saves_dir: &Path) -> Result<SaveGame, String> {
     let path = snapshot_path(saves_dir);
     SaveParser::parse_save(&path).map_err(|e| format!("snapshot parse failed: {e}"))
 }
 
-/// One candidate battle for the multi-battle picker: a player
-/// `land_combat` inside the picked state, flattened for display.
+/// One candidate battle for the multi-battle picker: a player battle
+/// (`land_combat` or `border_war_combat`) inside the picked state, flattened
+/// for display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BattleChoice {
+    /// Which vanilla record the battle was derived from.
+    pub kind: crate::enterable::BattleKind,
     /// The contested province (`land_combat.location`).
     pub province: u32,
     pub attacker_tags: Vec<String>,
@@ -162,8 +195,11 @@ pub enum PickResolution {
 }
 
 /// Pure pick matching (unit-testable): `tac_pick=1` states → the player
-/// land_combats whose locations map into one of them. One match hands its
-/// province straight over; several matches go to the player picker.
+/// battles whose state maps into one of them. The battle list comes from
+/// [`crate::enterable::enterable_battles`] — the same judgment the scan
+/// publisher uses, so the published states and the accepted picks can never
+/// disagree. One match hands its province straight over; several matches go
+/// to the player picker.
 pub fn pick_province(save: &SaveGame, p2s: &HashMap<u32, u32>) -> PickResolution {
     if save.picked_states.is_empty() {
         return PickResolution::NoPick;
@@ -172,40 +208,34 @@ pub fn pick_province(save: &SaveGame, p2s: &HashMap<u32, u32>) -> PickResolution
         return PickResolution::NoPick;
     };
     let picked: std::collections::HashSet<u32> = save.picked_states.iter().copied().collect();
-    let mut matches: Vec<&tactical_save::LandCombatData> = save
-        .land_combats
-        .iter()
-        .filter(|c| {
-            c.attacker.tags.iter().any(|t| t == &tag) || c.defender.tags.iter().any(|t| t == &tag)
-        })
-        .filter(|c| {
-            p2s.get(&c.location)
-                .map(|s| picked.contains(s))
-                .unwrap_or(false)
-        })
-        .collect();
+    let mut matches: Vec<crate::enterable::EnterableBattle> =
+        crate::enterable::enterable_battles(save, p2s, &tag)
+            .into_iter()
+            .filter(|b| picked.contains(&b.state))
+            .collect();
     // Deterministic order: largest battle first, province id as tiebreak.
     matches.sort_by(|a, b| {
-        (b.attacker.unit_ids.len() + b.defender.unit_ids.len())
-            .cmp(&(a.attacker.unit_ids.len() + a.defender.unit_ids.len()))
-            .then(a.location.cmp(&b.location))
+        (b.attacker_units + b.defender_units)
+            .cmp(&(a.attacker_units + a.defender_units))
+            .then(a.province.cmp(&b.province))
     });
     match matches.len() {
         0 => PickResolution::QuietNoBattle {
             state: save.picked_states[0],
         },
-        1 => PickResolution::Province(matches[0].location),
+        1 => PickResolution::Province(matches[0].province),
         _ => PickResolution::Multiple {
             state: save.picked_states[0],
             battles: matches
                 .iter()
-                .map(|c| BattleChoice {
-                    province: c.location,
-                    attacker_tags: c.attacker.tags.clone(),
-                    defender_tags: c.defender.tags.clone(),
-                    attacker_units: c.attacker.unit_ids.len(),
-                    defender_units: c.defender.unit_ids.len(),
-                    player_attacker: c.attacker.tags.iter().any(|t| t == &tag),
+                .map(|b| BattleChoice {
+                    kind: b.kind,
+                    province: b.province,
+                    attacker_tags: b.attacker_tags.clone(),
+                    defender_tags: b.defender_tags.clone(),
+                    attacker_units: b.attacker_units,
+                    defender_units: b.defender_units,
+                    player_attacker: b.player_attacker,
                 })
                 .collect(),
         },
@@ -245,10 +275,11 @@ pub fn load_p2s(hoi4_dir: &Path) -> HashMap<u32, u32> {
 
 /// VP display names (province id → name) for the multi-battle picker labels;
 /// non-VP provinces fall back to their id at display time.
-/// Empty on failure — names are cosmetic. `simp_chinese` reads the
-/// install's Chinese yml so the picker shows the player's own language.
-pub fn load_vp_names(hoi4_dir: &Path, simp_chinese: bool) -> HashMap<u32, String> {
-    tactical_map::load_vp_names(&tactical_map::vp_names_path(hoi4_dir, simp_chinese))
+/// Empty on failure — names are cosmetic. The player's own language yml is
+/// read when the install ships that localisation, so the picker shows the
+/// player's own language.
+pub fn load_vp_names(hoi4_dir: &Path, lang_code: &str) -> HashMap<u32, String> {
+    tactical_map::load_vp_names(&tactical_map::vp_names_path(hoi4_dir, lang_code))
 }
 
 #[cfg(test)]
